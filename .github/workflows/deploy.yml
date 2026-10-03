@@ -11,13 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Release tag or full commit SHA to deploy
+        description: Release tag or full commit SHA already merged into main
         required: true
         type: string
-      apply_ingress:
-        description: Also apply the Ingress and verify the public route split
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -39,9 +35,19 @@ jobs:
           persist-credentials: false
       - name: Pin the source commit
         id: source
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          if [ "$WORKFLOW_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this production workflow from main."
+            exit 1
+          fi
           revision="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$revision" origin/main; then
+            echo "::error::The deployment revision must already be merged into main."
+            exit 1
+          fi
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "Deploying \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
 
@@ -173,11 +179,13 @@ jobs:
       - uses: ./.github/actions/setup-kubectl
         with:
           kubeconfig: ${{ secrets.OAC_KUBECONFIG }}
+          expected-cluster-uid: ${{ vars.OAC_CLUSTER_UID }}
           server: ${{ vars.OAC_K8S_SERVER }}
           insecure-skip-tls-verify: ${{ vars.OAC_K8S_INSECURE || 'false' }}
 
       - name: Check the deployment settings
         env:
+          OAC_STORAGE_CLASS: ${{ vars.OAC_STORAGE_CLASS }}
           OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
           OAC_DATABASE_URL: ${{ vars.OAC_DATABASE_URL }}
           OAC_INSTALLATION_ID: ${{ vars.OAC_INSTALLATION_ID }}
@@ -191,7 +199,7 @@ jobs:
             exit 1
           fi
           missing=0
-          for name in OAC_PUBLIC_URL OAC_DATABASE_URL OAC_INSTALLATION_ID \
+          for name in OAC_STORAGE_CLASS OAC_PUBLIC_URL OAC_DATABASE_URL OAC_INSTALLATION_ID \
                       OAC_DATABASE_PASSWORD OAC_CREDENTIAL_KEY OAC_CORE_KEY; do
             if [ -z "${!name:-}" ]; then
               echo "::error::$name is not configured for the production environment."
@@ -199,16 +207,32 @@ jobs:
             fi
           done
           [ "$missing" -eq 0 ]
-          # Core derives the daemon WebSocket address, the sandbox core_url and the
-          # self-hosted remote_url from the public URL, and Web serves only its own
-          # origin. Both reject a path, a query or a fragment.
-          case "$OAC_PUBLIC_URL" in
-            https://*/ | https://*/* | *\?* | *\#*)
-              echo "::error::OAC_PUBLIC_URL must be an HTTPS origin without a path, such as https://core.example."
-              exit 1 ;;
-            https://*) ;;
-            *) echo "::error::OAC_PUBLIC_URL must use HTTPS."; exit 1 ;;
-          esac
+          python3 - "$OAC_PUBLIC_URL" <<'PYTHON'
+          import ipaddress, re, sys, urllib.parse
+          value = sys.argv[1]
+          try:
+              parsed = urllib.parse.urlsplit(value)
+              host, port = parsed.hostname, parsed.port
+              valid = (parsed.scheme == "https" and bool(host)
+                       and parsed.username is None and parsed.password is None
+                       and not parsed.path and not parsed.query and not parsed.fragment
+                       and parsed.netloc == parsed.netloc.lower()
+                       and not any(c in value for c in "\\% \t\r\n?#")
+                       and not parsed.netloc.endswith(":"))
+              if host:
+                  try:
+                      ipaddress.ip_address(host)
+                  except ValueError:
+                      valid = valid and len(host) <= 253 and all(
+                          re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                          for label in host.split("."))
+              if port is not None:
+                  valid = valid and 1 <= port <= 65535 and parsed.netloc.endswith(":" + str(port))
+          except ValueError:
+              valid = False
+          if not valid:
+              sys.exit("OAC_PUBLIC_URL must be a canonical HTTPS origin without credentials, path, query or fragment")
+          PYTHON
           # The password belongs only in OAC_DATABASE_PASSWORD; Core refuses a URL
           # that also carries one, and the URL must name the database user.
           python3 - "$OAC_DATABASE_URL" <<'PY'
@@ -237,6 +261,28 @@ jobs:
               | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
             echo "::error::OAC_INSTALLATION_ID must be a canonical lowercase UUID."
             exit 1
+          fi
+
+      - name: Check the existing state volume
+        env:
+          OAC_STORAGE_CLASS: ${{ vars.OAC_STORAGE_CLASS }}
+          OAC_STATE_SIZE: ${{ vars.OAC_STATE_SIZE || '10Gi' }}
+        run: |
+          set -euo pipefail
+          claim="$(mktemp)"
+          trap 'rm -f "$claim"' EXIT
+          kubectl get pvc oac-core-state -n "$NS" --ignore-not-found -o json > "$claim"
+          if [ -s "$claim" ]; then
+            python3 - "$claim" "$OAC_STORAGE_CLASS" "$OAC_STATE_SIZE" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as source:
+              claim = json.load(source)
+          if (claim['spec'].get('storageClassName') != sys.argv[2]
+                  or claim['spec']['resources']['requests']['storage'] != sys.argv[3]
+                  or claim['spec'].get('accessModes') != ['ReadWriteOnce']
+                  or claim.get('status', {}).get('phase') != 'Bound'):
+              sys.exit('The existing oac-core-state claim must be Bound with the configured class, size and ReadWriteOnce access')
+          PY
           fi
 
       - name: Ensure the namespace
@@ -322,18 +368,11 @@ jobs:
           OAC_CORE_MEMORY_LIMIT: ${{ vars.OAC_CORE_MEMORY_LIMIT || '4Gi' }}
         run: |
           set -euo pipefail
-          # Only an E2B deployment writes to the state root. Without a storage
-          # class the volume lives as long as the Pod, which is correct until
-          # then; with one, Core keeps its E2B receipts across rollouts.
-          if [ -n "$OAC_STORAGE_CLASS" ]; then
-            # shellcheck disable=SC2016 # envsubst takes the variable list literally
-            envsubst '$OAC_STORAGE_CLASS $OAC_STATE_SIZE' \
-              < deploy/kubernetes/prod/core-state.yaml.tpl | kubectl apply -n "$NS" -f -
-            OAC_STATE_VOLUME='persistentVolumeClaim: {claimName: oac-core-state}'
-          else
-            OAC_STATE_VOLUME='emptyDir: {}'
-            echo "::notice::No OAC_STORAGE_CLASS: the Core state root is a Pod-lifetime directory. Set one before an E2B deployment exists, or every rollout loses its receipts."
-          fi
+          # E2B receipts must survive every rollout.
+          # shellcheck disable=SC2016 # envsubst takes the variable list literally
+          envsubst '$OAC_STORAGE_CLASS $OAC_STATE_SIZE' \
+            < deploy/kubernetes/prod/core-state.yaml.tpl | kubectl apply -n "$NS" -f -
+          OAC_STATE_VOLUME='persistentVolumeClaim: {claimName: oac-core-state}'
           export OAC_STATE_VOLUME
           # shellcheck disable=SC2016 # envsubst takes the variable list literally
           envsubst '$OAC_CORE_IMAGE $OAC_CONFIGURATION_DIGEST $OAC_STATE_VOLUME $OAC_CORE_CPU_REQUEST $OAC_CORE_CPU_LIMIT $OAC_CORE_MEMORY_REQUEST $OAC_CORE_MEMORY_LIMIT' \
@@ -372,52 +411,6 @@ jobs:
             fi
             echo "$service: $addresses"
           done
-
-      - name: Apply the Ingress
-        if: inputs.apply_ingress
-        env:
-          OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
-          OAC_INGRESS_CLASS: ${{ vars.OAC_INGRESS_CLASS || 'nginx' }}
-          OAC_TLS_SECRET: ${{ vars.OAC_TLS_SECRET || 'oac-tls' }}
-        run: |
-          set -euo pipefail
-          # A missing class or certificate otherwise surfaces only as the route
-          # check timing out, which blames the path split instead.
-          if ! kubectl get ingressclass "$OAC_INGRESS_CLASS" >/dev/null 2>&1; then
-            echo "::error::No IngressClass named $OAC_INGRESS_CLASS; set OAC_INGRESS_CLASS to one of: $(kubectl get ingressclass -o jsonpath='{.items[*].metadata.name}')"
-            exit 1
-          fi
-          if ! kubectl get secret "$OAC_TLS_SECRET" -n "$NS" >/dev/null 2>&1; then
-            echo "::error::No TLS Secret named $OAC_TLS_SECRET in namespace $NS; create it from the public host's certificate, or set OAC_TLS_SECRET."
-            exit 1
-          fi
-          OAC_PUBLIC_HOST="${OAC_PUBLIC_URL#https://}"
-          export OAC_PUBLIC_HOST
-          # shellcheck disable=SC2016 # envsubst takes the variable list literally
-          envsubst '$OAC_PUBLIC_HOST $OAC_INGRESS_CLASS $OAC_TLS_SECRET' \
-            < deploy/kubernetes/prod/ingress.yaml.tpl | kubectl apply -n "$NS" -f -
-
-      - name: Verify the public route split
-        if: inputs.apply_ingress
-        env:
-          OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
-        run: |
-          set -euo pipefail
-          # 401 proves /v1 reached Core, which asks for a Project API key. 404 means
-          # it reached Web instead: every application call and node connection would
-          # then fail. A new Ingress needs a moment to program its load balancer.
-          for attempt in $(seq 1 30); do
-            code="$(curl --show-error --silent -o /dev/null -w '%{http_code}' \
-              -H 'OpenAI-Beta: agents=v1' "$OAC_PUBLIC_URL/v1/agents" || echo 000)"
-            if [ "$code" = "401" ]; then
-              echo "GET /v1/agents -> 401: /v1 reaches Core"
-              exit 0
-            fi
-            echo "attempt $attempt: GET /v1/agents -> $code"
-            sleep 10
-          done
-          echo "::error::/v1 does not reach Core; check the Ingress path split."
-          exit 1
 
       - name: Report the live state on failure
         if: failure()

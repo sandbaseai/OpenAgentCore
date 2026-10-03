@@ -1,12 +1,10 @@
 ---
 title: "安装选项与高级部署"
 source: docs/getting-started/install-options.md
-source_hash: 4e726974eaa85c8ec64c242ed4947faee0c08bb5fdcfa527e43c6284af96c851
+source_hash: 7178baf93a8d8b6e7f086d73033afe4ea14afcf41c88dbcc6031a3a6dd20ca17
 ---
 
 [默认安装](install.md)无需任何选项。使用本页可以在现有反向代理后运行，或者在无法访问互联网时进行安装。
-
-若要用自己的 PostgreSQL 在 Kubernetes 上运行 Core 和控制台，而不使用安装器，参见 [Kubernetes 部署](../../../deploy/kubernetes/README.md)。
 
 向下载的脚本传递选项：
 

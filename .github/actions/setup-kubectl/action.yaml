@@ -5,6 +5,9 @@ inputs:
   kubeconfig:
     description: Base64-encoded kubeconfig
     required: true
+  expected-cluster-uid:
+    description: UID of the target cluster kube-system namespace
+    required: true
   server:
     description: Override the cluster's API server URL; empty keeps the kubeconfig's own
     required: false
@@ -16,7 +19,7 @@ inputs:
   version:
     description: kubectl version to install when the runner has none
     required: false
-    default: v1.31.4
+    default: v1.34.1
 
 runs:
   using: composite
@@ -24,6 +27,7 @@ runs:
     - shell: bash
       env:
         KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}
+        EXPECTED_CLUSTER_UID: ${{ inputs.expected-cluster-uid }}
         SERVER: ${{ inputs.server }}
         INSECURE: ${{ inputs.insecure-skip-tls-verify }}
         VERSION: ${{ inputs.version }}
@@ -72,5 +76,10 @@ runs:
           escaped="${cluster//./\\.}"
           kubectl config unset "clusters.${escaped}.certificate-authority-data" >/dev/null
           kubectl config unset "clusters.${escaped}.certificate-authority" >/dev/null
+        fi
+        actual_uid="$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+        if [ -z "$EXPECTED_CLUSTER_UID" ] || [ "$actual_uid" != "$EXPECTED_CLUSTER_UID" ]; then
+          echo "::error::The kubeconfig does not identify the expected production cluster."
+          exit 1
         fi
         kubectl version --output=yaml

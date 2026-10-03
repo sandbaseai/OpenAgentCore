@@ -1,4 +1,4 @@
-# Core's adapter state volume, applied only when OAC_STORAGE_CLASS is set.
+# Core's persistent E2B adapter state volume.
 #
 # Only the E2B adapter uses this volume today: it holds the receipts Core writes
 # before each remote Create and needs afterwards to clean up, observe and verify

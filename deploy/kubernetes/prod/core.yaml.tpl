@@ -46,11 +46,8 @@ spec:
         - name: secrets
           emptyDir:
             medium: Memory
-        # The adapter state root. Only the E2B adapter uses it today, for the
-        # receipts that let Core clean up its remote sandboxes, and those must
-        # outlive the Pod. Without a claim it is a Pod-lifetime directory, which
-        # is correct until an E2B deployment exists. core-state.yaml.tpl owns the
-        # claim; deploy/kubernetes/README.md explains when to turn it on.
+        # E2B receipts must outlive this Pod. The deploy workflow always mounts
+        # the claim owned by core-state.yaml.tpl.
         - {name: state, ${OAC_STATE_VOLUME}}
         - name: tmp
           emptyDir: {}

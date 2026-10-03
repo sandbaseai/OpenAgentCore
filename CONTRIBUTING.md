@@ -34,7 +34,6 @@ This guide owns how to work in the repository: documentation ownership, the repo
 | Website: landing page, bilingual documentation maintenance, documentation site build and GitHub Pages publication | [Website guide](website/README.md) |
 | Self-hosted Runtime installation, recovery and local operation | [Self-hosted execution](docs/getting-started/self-hosted.md) |
 | Installer lifecycle, locking, generated state, managed HTTPS and downloads | [Installer design rules](deploy/install/README.md) |
-| Kubernetes control-plane deployment, its manifests and its workflow | [Kubernetes deployment](deploy/kubernetes/README.md) |
 | Operator installation and alternatives | [Installation](docs/getting-started/install.md), [installation options](docs/getting-started/install-options.md) |
 | Settings, defaults, files and installation layout | [Configuration](docs/configuration.md) |
 | Operator commands, keys, backup and version policy | [Operations](docs/getting-started/operations.md) |

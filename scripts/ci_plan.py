@@ -19,9 +19,6 @@ CI_INPUTS = {
     ".github/workflows/actionlint.yml": ("lint",),
     ".github/actionlint.yaml": ("lint",),
     ".github/workflows/ci-review.yml": ("lint",),
-    # Deployment inputs: no check builds or tests them, so only workflow syntax applies.
-    ".github/workflows/deploy.yml": ("lint",),
-    ".github/actions/setup-kubectl/action.yaml": ("lint",),
     ".github/workflows/website.yml": ("website", "lint"),
     ".github/actions/node/action.yml": (*NODE_JOBS, "lint"),
     "scripts/ci_plan.py": JOBS,
