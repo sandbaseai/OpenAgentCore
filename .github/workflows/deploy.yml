@@ -1,0 +1,423 @@
+name: core-deploy
+
+# Production deployment of the control plane: Core and the Web console, built from
+# one source commit into two images and rolled out to Kubernetes. Both always come
+# from the same commit, so the console never talks to a Core of another release.
+# PostgreSQL is an existing external database reached through OAC_DATABASE_URL.
+# Nodes, self-hosted machines and Runtime images are installed from a release, not
+# here. deploy/kubernetes/README.md holds the prerequisites and every setting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Release tag or full commit SHA already merged into main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-deploy-production
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ${{ vars.OAC_DEPLOY_RUNNER || 'ubuntu-22.04' }}
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Pin the source commit
+        id: source
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$WORKFLOW_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this production workflow from main."
+            exit 1
+          fi
+          revision="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$revision" origin/main; then
+            echo "::error::The deployment revision must already be merged into main."
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "Deploying \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: prepare
+    runs-on: ${{ vars.OAC_DEPLOY_RUNNER || 'ubuntu-22.04' }}
+    environment: production
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        component: [core, web]
+    env:
+      IMAGE: ${{ vars.OAC_REGISTRY }}/oac-${{ matrix.component }}:sha-${{ needs.prepare.outputs.revision }}
+      REVISION: ${{ needs.prepare.outputs.revision }}
+    steps:
+      - name: Prepare the build home
+        # The build scripts keep their caches and outputs under ~/.oac and refuse a
+        # directory elsewhere, so give the job a HOME it owns.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/home/.oac"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Check the registry setting
+        env:
+          REGISTRY: ${{ vars.OAC_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REGISTRY" ]; then
+            echo "::error::OAC_REGISTRY is not configured for the production environment."
+            exit 1
+          fi
+      - name: Select shared Go caches
+        run: |
+          set -euo pipefail
+          echo "GOCACHE=$HOME/.oac/cache/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$HOME/.oac/cache/go-mod" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/home/.oac/cache/go-build
+            ${{ runner.temp }}/home/.oac/cache/go-mod
+          key: core-deploy-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod', '**/go.sum') }}-${{ matrix.component }}
+          restore-keys: |
+            core-deploy-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.mod', '**/go.sum') }}-
+      - uses: actions/setup-node@v6
+        if: matrix.component == 'web'
+        with:
+          node-version: '22'
+      - name: Install the frontend package manager
+        if: matrix.component == 'web'
+        run: npm install --global pnpm@10.30.3
+      - name: Log in to the image registry
+        env:
+          REGISTRY_HOST: ${{ vars.OAC_REGISTRY_HOST || vars.OAC_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.OAC_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.OAC_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in REGISTRY_USERNAME REGISTRY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::OAC_$name is not configured for the production environment."
+              exit 1
+            fi
+          done
+          printf '%s' "$REGISTRY_PASSWORD" \
+            | docker login "${REGISTRY_HOST%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
+      - name: Build the Core image
+        if: matrix.component == 'core'
+        run: |
+          set -euo pipefail
+          context="$HOME/.oac/build/core-image-context"
+          rm -rf "$context"
+          mkdir -p "$context"
+          # Builds the Core commands for linux/amd64 and the E2B helper, then copies
+          # deploy/distribution/Dockerfile into the context.
+          ./scripts/build-core-image-context.sh "$context"
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --tag "$IMAGE" "$context"
+      - name: Build the Web image
+        if: matrix.component == 'web'
+        run: |
+          set -euo pipefail
+          context="$HOME/.oac/build/web-image-context"
+          rm -rf "$context"
+          mkdir -p "$context"
+          # build-web.sh compiles for the host unless told otherwise, and the image
+          # the cluster pulls is linux/amd64.
+          GOOS=linux GOARCH=amd64 OAC_DEV_WEB_BUILD_DIR="$context" ./scripts/build-web.sh
+          make web-deps
+          OAC_WEB_OPENAI_HOSTED_SESSIONS=1 OAC_WEB_ENVIRONMENT_FILES=1 pnpm build:web
+          cp -R apps/web/dist "$context/dist"
+          cp services/web/Dockerfile "$context/Dockerfile"
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --tag "$IMAGE" "$context"
+      - name: Push the image
+        run: docker push "$IMAGE"
+      - name: Discard the registry credential
+        if: always()
+        env:
+          REGISTRY_HOST: ${{ vars.OAC_REGISTRY_HOST || vars.OAC_REGISTRY }}
+        # A self-hosted runner keeps its home directory for the next job.
+        run: docker logout "${REGISTRY_HOST%%/*}" || true
+
+  deploy:
+    needs: [prepare, build]
+    runs-on: ${{ vars.OAC_DEPLOY_RUNNER || 'ubuntu-22.04' }}
+    environment: production
+    timeout-minutes: 60
+    env:
+      NS: ${{ vars.OAC_NAMESPACE || 'openagentcore' }}
+      OAC_CORE_IMAGE: ${{ vars.OAC_REGISTRY }}/oac-core:sha-${{ needs.prepare.outputs.revision }}
+      OAC_WEB_IMAGE: ${{ vars.OAC_REGISTRY }}/oac-web:sha-${{ needs.prepare.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-kubectl
+        with:
+          kubeconfig: ${{ secrets.OAC_KUBECONFIG }}
+          expected-cluster-uid: ${{ vars.OAC_CLUSTER_UID }}
+          server: ${{ vars.OAC_K8S_SERVER }}
+          insecure-skip-tls-verify: ${{ vars.OAC_K8S_INSECURE || 'false' }}
+
+      - name: Check the deployment settings
+        env:
+          OAC_STORAGE_CLASS: ${{ vars.OAC_STORAGE_CLASS }}
+          OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
+          OAC_DATABASE_URL: ${{ vars.OAC_DATABASE_URL }}
+          OAC_INSTALLATION_ID: ${{ vars.OAC_INSTALLATION_ID }}
+          OAC_DATABASE_PASSWORD: ${{ secrets.OAC_DATABASE_PASSWORD }}
+          OAC_CREDENTIAL_KEY: ${{ secrets.OAC_CREDENTIAL_KEY }}
+          OAC_CORE_KEY: ${{ secrets.OAC_CORE_KEY }}
+        run: |
+          set -euo pipefail
+          if ! command -v envsubst >/dev/null 2>&1; then
+            echo "::error::envsubst is missing on this runner; install the gettext-base package."
+            exit 1
+          fi
+          missing=0
+          for name in OAC_STORAGE_CLASS OAC_PUBLIC_URL OAC_DATABASE_URL OAC_INSTALLATION_ID \
+                      OAC_DATABASE_PASSWORD OAC_CREDENTIAL_KEY OAC_CORE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not configured for the production environment."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+          python3 - "$OAC_PUBLIC_URL" <<'PYTHON'
+          import ipaddress, re, sys, urllib.parse
+          value = sys.argv[1]
+          try:
+              parsed = urllib.parse.urlsplit(value)
+              host, port = parsed.hostname, parsed.port
+              valid = (parsed.scheme == "https" and bool(host)
+                       and parsed.username is None and parsed.password is None
+                       and not parsed.path and not parsed.query and not parsed.fragment
+                       and parsed.netloc == parsed.netloc.lower()
+                       and not any(c in value for c in "\\% \t\r\n?#")
+                       and not parsed.netloc.endswith(":"))
+              if host:
+                  try:
+                      ipaddress.ip_address(host)
+                  except ValueError:
+                      valid = valid and len(host) <= 253 and all(
+                          re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                          for label in host.split("."))
+              if port is not None:
+                  valid = valid and 1 <= port <= 65535 and parsed.netloc.endswith(":" + str(port))
+          except ValueError:
+              valid = False
+          if not valid:
+              sys.exit("OAC_PUBLIC_URL must be a canonical HTTPS origin without credentials, path, query or fragment")
+          PYTHON
+          # The password belongs only in OAC_DATABASE_PASSWORD; Core refuses a URL
+          # that also carries one, and the URL must name the database user.
+          python3 - "$OAC_DATABASE_URL" <<'PY'
+          import sys, urllib.parse
+          parsed = urllib.parse.urlsplit(sys.argv[1])
+          if parsed.scheme not in ("postgres", "postgresql") or not parsed.username:
+              sys.exit("OAC_DATABASE_URL must be postgres://USER@HOST:PORT/DATABASE")
+          # Go reports an empty password as present, and Core then refuses the URL.
+          if parsed.password is not None:
+              sys.exit("Set the database password only in the OAC_DATABASE_PASSWORD secret")
+          PY
+          bytes="$(printf '%s' "$OAC_CREDENTIAL_KEY" | base64 -d 2>/dev/null | wc -c | tr -d '[:space:]')" || bytes=0
+          if [ "$bytes" != "32" ]; then
+            echo "::error::OAC_CREDENTIAL_KEY must be the base64 encoding of exactly 32 random bytes."
+            exit 1
+          fi
+          if [ "${#OAC_CORE_KEY}" -lt 32 ]; then
+            echo "::error::OAC_CORE_KEY must have at least 32 characters."
+            exit 1
+          fi
+          if printf '%s' "$OAC_CORE_KEY" | grep -q '[[:space:]]'; then
+            echo "::error::OAC_CORE_KEY must contain no whitespace."
+            exit 1
+          fi
+          if ! printf '%s' "$OAC_INSTALLATION_ID" \
+              | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
+            echo "::error::OAC_INSTALLATION_ID must be a canonical lowercase UUID."
+            exit 1
+          fi
+
+      - name: Check the existing state volume
+        env:
+          OAC_STORAGE_CLASS: ${{ vars.OAC_STORAGE_CLASS }}
+          OAC_STATE_SIZE: ${{ vars.OAC_STATE_SIZE || '10Gi' }}
+        run: |
+          set -euo pipefail
+          claim="$(mktemp)"
+          trap 'rm -f "$claim"' EXIT
+          kubectl get pvc oac-core-state -n "$NS" -o json > "$claim"
+          python3 - "$claim" "$OAC_STORAGE_CLASS" "$OAC_STATE_SIZE" <<'PY'
+          import json, sys
+          with open(sys.argv[1]) as source:
+              claim = json.load(source)
+          if (claim['spec'].get('storageClassName') != sys.argv[2]
+                  or claim['spec']['resources']['requests']['storage'] != sys.argv[3]
+                  or claim['spec'].get('accessModes') != ['ReadWriteOnce']
+                  or claim.get('status', {}).get('phase') != 'Bound'):
+              sys.exit('The existing oac-core-state claim must be Bound with the configured class, size and ReadWriteOnce access')
+          PY
+
+      - name: Apply the registry pull secret
+        env:
+          REGISTRY_HOST: ${{ vars.OAC_REGISTRY_HOST || vars.OAC_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.OAC_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.OAC_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          kubectl create secret docker-registry oac-registry -n "$NS" \
+            --docker-server="${REGISTRY_HOST%%/*}" \
+            --docker-username="$REGISTRY_USERNAME" \
+            --docker-password="$REGISTRY_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply the secrets and the environment
+        id: configuration
+        env:
+          OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
+          OAC_DATABASE_URL: ${{ vars.OAC_DATABASE_URL }}
+          OAC_INSTALLATION_ID: ${{ vars.OAC_INSTALLATION_ID }}
+          # Process settings carry no default here; docs/configuration.md owns
+          # them and Core applies its own when a key is absent.
+          OAC_HARNESSES: ${{ vars.OAC_HARNESSES }}
+          OAC_DEFAULT_HARNESS: ${{ vars.OAC_DEFAULT_HARNESS }}
+          OAC_EXECUTION_CONCURRENCY: ${{ vars.OAC_EXECUTION_CONCURRENCY }}
+          OAC_WRITE_AUDIT_RETENTION: ${{ vars.OAC_WRITE_AUDIT_RETENTION }}
+          OAC_LOG_LEVEL: ${{ vars.OAC_LOG_LEVEL }}
+          OAC_DATABASE_PASSWORD: ${{ secrets.OAC_DATABASE_PASSWORD }}
+          OAC_CREDENTIAL_KEY: ${{ secrets.OAC_CREDENTIAL_KEY }}
+          OAC_CORE_KEY: ${{ secrets.OAC_CORE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+
+          # Core authenticates /core/v1 against the digest, never against the key.
+          digest="$(printf '%s' "$OAC_CORE_KEY" | sha256sum | cut -d' ' -f1)"
+          printf '%s' "$OAC_DATABASE_PASSWORD" > "$work/database.password"
+          printf '%s' "$OAC_CREDENTIAL_KEY" > "$work/credential.key"
+          printf '["%s"]\n' "$digest" > "$work/core-key-digests.json"
+          printf '%s' "$OAC_CORE_KEY" > "$work/core.key"
+
+          kubectl create secret generic oac-core-secrets -n "$NS" \
+            --from-file="database.password=$work/database.password" \
+            --from-file="credential.key=$work/credential.key" \
+            --from-file="core-key-digests.json=$work/core-key-digests.json" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic oac-web-core-key -n "$NS" \
+            --from-file="core.key=$work/core.key" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # shellcheck disable=SC2016 # envsubst takes the variable list literally
+          envsubst '$OAC_PUBLIC_URL $OAC_INSTALLATION_ID $OAC_DATABASE_URL' \
+            < deploy/kubernetes/prod/core-env.yaml.tpl > "$work/core-env.yaml"
+          for name in OAC_HARNESSES OAC_DEFAULT_HARNESS OAC_EXECUTION_CONCURRENCY \
+                      OAC_WRITE_AUDIT_RETENTION OAC_LOG_LEVEL; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then printf '  %s: "%s"\n' "$name" "$value" >> "$work/core-env.yaml"; fi
+          done
+          kubectl apply -n "$NS" -f "$work/core-env.yaml"
+
+          # Core and Web read their environment and secret files once at startup.
+          # This digest enters both Pod templates, so a settings or secret change
+          # replaces the Pods even when the images are unchanged.
+          digest_input="$(cat "$work/core-env.yaml"; printf '%s' "$digest$OAC_DATABASE_PASSWORD$OAC_CREDENTIAL_KEY")"
+          printf 'digest=%s\n' "$(printf '%s' "$digest_input" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out Core
+        env:
+          OAC_CONFIGURATION_DIGEST: ${{ steps.configuration.outputs.digest }}
+          OAC_STORAGE_CLASS: ${{ vars.OAC_STORAGE_CLASS }}
+          OAC_STATE_SIZE: ${{ vars.OAC_STATE_SIZE || '10Gi' }}
+          OAC_CORE_CPU_REQUEST: ${{ vars.OAC_CORE_CPU_REQUEST || '500m' }}
+          OAC_CORE_CPU_LIMIT: ${{ vars.OAC_CORE_CPU_LIMIT || '2' }}
+          OAC_CORE_MEMORY_REQUEST: ${{ vars.OAC_CORE_MEMORY_REQUEST || '1Gi' }}
+          OAC_CORE_MEMORY_LIMIT: ${{ vars.OAC_CORE_MEMORY_LIMIT || '4Gi' }}
+        run: |
+          set -euo pipefail
+          # E2B receipts must survive every rollout.
+          # shellcheck disable=SC2016 # envsubst takes the variable list literally
+          envsubst '$OAC_STORAGE_CLASS $OAC_STATE_SIZE' \
+            < deploy/kubernetes/prod/core-state.yaml.tpl | kubectl apply -n "$NS" -f -
+          OAC_STATE_VOLUME='persistentVolumeClaim: {claimName: oac-core-state}'
+          export OAC_STATE_VOLUME
+          # shellcheck disable=SC2016 # envsubst takes the variable list literally
+          envsubst '$OAC_CORE_IMAGE $OAC_CONFIGURATION_DIGEST $OAC_STATE_VOLUME $OAC_CORE_CPU_REQUEST $OAC_CORE_CPU_LIMIT $OAC_CORE_MEMORY_REQUEST $OAC_CORE_MEMORY_LIMIT' \
+            < deploy/kubernetes/prod/core.yaml.tpl | kubectl apply -n "$NS" -f -
+          # Recreate replaces the single Pod, so the rollout spans the old Pod's
+          # shutdown, the schema migration and Core's own startup.
+          kubectl rollout status deployment/oac-core -n "$NS" --timeout=15m
+          live="$(kubectl get deployment oac-core -n "$NS" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="core")].image}')"
+          test "$live" = "$OAC_CORE_IMAGE"
+
+      - name: Roll out Web
+        env:
+          OAC_CONFIGURATION_DIGEST: ${{ steps.configuration.outputs.digest }}
+          OAC_PUBLIC_URL: ${{ vars.OAC_PUBLIC_URL }}
+          OAC_LOG_LEVEL: ${{ vars.OAC_LOG_LEVEL || 'info' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # envsubst takes the variable list literally
+          envsubst '$OAC_WEB_IMAGE $OAC_CORE_IMAGE $OAC_CONFIGURATION_DIGEST $OAC_PUBLIC_URL $OAC_LOG_LEVEL' \
+            < deploy/kubernetes/prod/web.yaml.tpl | kubectl apply -n "$NS" -f -
+          kubectl rollout status deployment/oac-web -n "$NS" --timeout=10m
+          live="$(kubectl get deployment oac-web -n "$NS" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}')"
+          test "$live" = "$OAC_WEB_IMAGE"
+
+      - name: Verify the Services have ready endpoints
+        run: |
+          set -euo pipefail
+          for service in oac-core oac-web; do
+            addresses="$(kubectl get endpoints "$service" -n "$NS" \
+              -o jsonpath='{.subsets[*].addresses[*].ip}')"
+            if [ -z "$addresses" ]; then
+              echo "::error::Service $service has no ready endpoint."
+              exit 1
+            fi
+            echo "$service: $addresses"
+          done
+
+      - name: Report the live state on failure
+        if: failure()
+        run: |
+          set +e
+          for app in oac-core oac-web; do
+            echo "=== $app"
+            kubectl get pods -n "$NS" -l "app=$app" -o wide
+            kubectl describe pods -n "$NS" -l "app=$app" | tail -60
+            kubectl logs -n "$NS" -l "app=$app" --all-containers --tail=120
+          done
+          kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -40
+
+      - name: Discard the cluster credential
+        if: always()
+        # A self-hosted runner keeps its home directory for the next job.
+        run: rm -f "$HOME/.kube/config"

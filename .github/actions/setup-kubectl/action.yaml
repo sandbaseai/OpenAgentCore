@@ -1,0 +1,85 @@
+name: Setup kubectl
+description: Install kubectl and point it at the deployment cluster
+
+inputs:
+  kubeconfig:
+    description: Base64-encoded kubeconfig
+    required: true
+  expected-cluster-uid:
+    description: UID of the target cluster kube-system namespace
+    required: true
+  server:
+    description: Override the cluster's API server URL; empty keeps the kubeconfig's own
+    required: false
+    default: ''
+  insecure-skip-tls-verify:
+    description: Skip API server certificate verification; only for a server address the certificate does not name
+    required: false
+    default: 'false'
+  version:
+    description: kubectl version to install when the runner has none
+    required: false
+    default: v1.34.1
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}
+        EXPECTED_CLUSTER_UID: ${{ inputs.expected-cluster-uid }}
+        SERVER: ${{ inputs.server }}
+        INSECURE: ${{ inputs.insecure-skip-tls-verify }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -z "$KUBECONFIG_CONTENT" ]; then
+          echo "::error::The kubeconfig secret is not configured for this GitHub Environment."
+          exit 1
+        fi
+        if ! command -v kubectl >/dev/null 2>&1; then
+          curl --fail --show-error --silent --location \
+            -o "$RUNNER_TEMP/kubectl" \
+            "https://dl.k8s.io/release/${VERSION}/bin/linux/amd64/kubectl"
+          install -m 0755 "$RUNNER_TEMP/kubectl" /usr/local/bin/kubectl
+        fi
+
+        # The kubeconfig is a credential: write it privately and keep it out of the log.
+        install -d -m 0700 "$HOME/.kube"
+        umask 077
+        printf '%s' "$KUBECONFIG_CONTENT" | base64 -d > "$HOME/.kube/config"
+        chmod 600 "$HOME/.kube/config"
+
+        # Every later kubectl call uses the current context, so patch that
+        # context's cluster rather than whichever one comes first.
+        context="$(kubectl config current-context)"
+        cluster="$(kubectl config view -o jsonpath="{.contexts[?(@.name=='$context')].context.cluster}")"
+        if [ -z "$cluster" ]; then
+          echo "::error::The kubeconfig's current context names no cluster."
+          exit 1
+        fi
+        echo "Using context $context, cluster $cluster"
+        arguments=()
+        if [ -n "$SERVER" ]; then
+          arguments+=("--server=$SERVER")
+        fi
+        if [ "$INSECURE" = "true" ]; then
+          arguments+=(--insecure-skip-tls-verify=true)
+        fi
+        if [ "${#arguments[@]}" -gt 0 ]; then
+          kubectl config set-cluster "$cluster" "${arguments[@]}"
+        fi
+        if [ "$INSECURE" = "true" ]; then
+          # kubectl rejects a configuration that carries both a certificate authority
+          # and the insecure flag. A property path splits on dots, so a cluster name
+          # containing one has to escape them.
+          escaped="${cluster//./\\.}"
+          kubectl config unset "clusters.${escaped}.certificate-authority-data" >/dev/null
+          kubectl config unset "clusters.${escaped}.certificate-authority" >/dev/null
+        fi
+        actual_uid="$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+        if [ -z "$EXPECTED_CLUSTER_UID" ] || [ "$actual_uid" != "$EXPECTED_CLUSTER_UID" ]; then
+          echo "::error::The kubeconfig does not identify the expected production cluster."
+          exit 1
+        fi
+        kubectl version --output=yaml
