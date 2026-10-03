@@ -85,3 +85,15 @@ Keep the existing claim's class and size. This cluster's `cbs` StorageClass does
 - **No domain setup in Web.** There is no installer socket, so the public origin comes from `OAC_PUBLIC_URL` and your external ingress, not from the console.
 - **No `oac` command.** The maintenance commands ship in the Core image: `kubectl exec deploy/oac-core -- oac-core-device …`. [Operations](../../docs/getting-started/operations.md) covers keys and backup.
 - **A rollout signs operators out** of the console, because Web holds its sessions in memory.
+
+## Public routing on TKE
+
+The Services use NodePort for the existing qcloud CLB controller. Keep DNS, certificates and ingress separate from the image rollout workflow. `prod/ingress.yaml.tpl` adds one host to an existing CLB and routes `/v1` and `/api/v1` to Core and other paths to Web. It preserves the original request paths.
+
+Prepare an Opaque Secret in the deployment namespace with `qcloud_cert_id` referencing a Tencent Cloud certificate covering the hostname. Set `OAC_CLB_ID`, `OAC_PUBLIC_HOST` and `OAC_TLS_SECRET`, then apply the template:
+
+```sh
+envsubst '$OAC_CLB_ID $OAC_PUBLIC_HOST $OAC_TLS_SECRET' < deploy/kubernetes/prod/ingress.yaml.tpl | kubectl --context sandbase-prod -n openagentcore apply -f -
+```
+
+For this installation, the host is `agentcore.sandbase.ai`, the shared CLB is `lb-9cr62q4u` and the certificate reference Secret is `oac-tls-cert`. After the controller reports Ready, verify HTTPS `/healthz`, the Web home page, unauthenticated `/v1/agents` returning 401 and a Runtime WebSocket upgrade on `/api/v1/agent-daemon/ws`.
