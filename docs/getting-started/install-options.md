@@ -4,6 +4,8 @@ title: "Installation options and advanced deployments"
 
 The [default installation](./install.md) needs no options. Use this page to run behind an existing reverse proxy or install without internet access.
 
+To run Core and the console on Kubernetes with your own PostgreSQL instead of the installer, see the [Kubernetes deployment](../../deploy/kubernetes/README.md).
+
 Pass options to the downloaded script:
 
 ```sh
