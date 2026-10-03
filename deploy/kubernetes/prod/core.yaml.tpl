@@ -187,7 +187,7 @@ metadata:
     app.kubernetes.io/name: oac-core
     app.kubernetes.io/part-of: openagentcore
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: oac-core
   ports:
