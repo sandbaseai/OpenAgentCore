@@ -21,7 +21,7 @@ Both images always come from one commit, so the console never talks to a Core of
 ## Cluster prerequisites
 
 - A PostgreSQL database and an account of its own, reachable from the cluster. Core needs no extension and migrates the schema itself.
-- A StorageClass that provisions a ReadWriteOnce volume. See [the state volume](#the-state-volume).
+- An existing namespace and a Bound ReadWriteOnce `oac-core-state` claim. Prepare it once using `prod/core-state.yaml.tpl` with `OAC_STORAGE_CLASS` and `OAC_STATE_SIZE`; see [the state volume](#the-state-volume).
 - An image registry the cluster can pull from, with a user the workflow can push as.
 - Configure DNS, certificates and public ingress separately. Core and Web can start before the domain is configured; E2B execution needs the public address to reach Core.
 - The runner needs `docker`, `envsubst` and outbound access to the registry and the cluster's API server. Set `OAC_DEPLOY_RUNNER` to a self-hosted label when the API server is private.
@@ -57,7 +57,7 @@ Restrict the repository’s `production` GitHub Environment to deployments from 
 | `OAC_PUBLIC_URL` | The canonical HTTPS origin, such as `https://core.example`, with no path, query or fragment. Core derives the daemon WebSocket address, the sandbox `core_url` and the self-hosted `remote_url` from it, and Web serves only this origin. Without it Core executes no Session |
 | `OAC_DATABASE_URL` | `postgres://USER@HOST:PORT/DATABASE`, with `sslmode` and any `pool_*` parameter in the query and no password |
 | `OAC_INSTALLATION_ID` | A canonical lowercase UUID, generated once with `uuidgen \| tr 'A-Z' 'a-z'`. Core refuses an ID other than the one its database recorded, so it belongs to the database: keep the two together and restore them together |
-| `OAC_NAMESPACE` | Namespace; `openagentcore` by default. The workflow creates it if it is missing |
+| `OAC_NAMESPACE` | Existing namespace; `openagentcore` by default |
 | `OAC_STORAGE_CLASS`, `OAC_STATE_SIZE` | StorageClass and size of the required Core state volume. See [the state volume](#the-state-volume). `10Gi` by default |
 | `OAC_CLUSTER_UID` | UID of the target cluster’s `kube-system` namespace. The workflow verifies it before applying resources |
 | `OAC_K8S_SERVER` | API server URL that overrides the kubeconfig's. Optional |
@@ -72,7 +72,7 @@ A change to any of these takes effect on the next run: a digest of the environme
 
 `OAC_PROVIDER_STATE_ROOT` is the private root each Sandbox Provider adapter keeps its own state under, and today exactly one adapter uses it: E2B stores its receipts in `/state/e2b`. The helper writes a receipt before each remote `Create`, because a helper's exit never proves that the remote call settled, and Core needs the receipt afterwards to clean up, observe and verify ownership of a sandbox living in E2B's cloud. Each receipt is at most 64 KiB, they are never pruned, and losing them orphans sandboxes that E2B keeps billing and Core can no longer destroy. [The E2B helper](../../services/core/tools/e2b-provider/README.md#receipts-and-state-directory) owns these rules.
 
-This deployment requires the persistent claim. Set `OAC_STORAGE_CLASS` before deploying; an unset value stops the workflow before it applies resources. Every Core rollout mounts `oac-core-state`, preserving the E2B receipts.
+This deployment requires the persistent claim. Set `OAC_STORAGE_CLASS` before deploying; an unset value or missing claim stops the workflow before it applies resources. Every Core rollout mounts `oac-core-state`, preserving the E2B receipts.
 
 Size it for the claim's lifetime rather than for today, because a StorageClass without `allowVolumeExpansion` cannot grow and a `Delete` reclaim policy destroys the receipts with the claim. The default `10Gi` also clears the minimum that a block-storage provisioner may impose.
 

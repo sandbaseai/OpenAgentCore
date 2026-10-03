@@ -271,9 +271,8 @@ jobs:
           set -euo pipefail
           claim="$(mktemp)"
           trap 'rm -f "$claim"' EXIT
-          kubectl get pvc oac-core-state -n "$NS" --ignore-not-found -o json > "$claim"
-          if [ -s "$claim" ]; then
-            python3 - "$claim" "$OAC_STORAGE_CLASS" "$OAC_STATE_SIZE" <<'PY'
+          kubectl get pvc oac-core-state -n "$NS" -o json > "$claim"
+          python3 - "$claim" "$OAC_STORAGE_CLASS" "$OAC_STATE_SIZE" <<'PY'
           import json, sys
           with open(sys.argv[1]) as source:
               claim = json.load(source)
@@ -283,12 +282,6 @@ jobs:
                   or claim.get('status', {}).get('phase') != 'Bound'):
               sys.exit('The existing oac-core-state claim must be Bound with the configured class, size and ReadWriteOnce access')
           PY
-          fi
-
-      - name: Ensure the namespace
-        run: |
-          set -euo pipefail
-          kubectl get namespace "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS"
 
       - name: Apply the registry pull secret
         env:
