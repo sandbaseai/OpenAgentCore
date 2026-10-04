@@ -235,6 +235,7 @@ jobs:
               return result
           sdk.request_build = request
           builder = sys.argv[1]
+          sys.path.insert(0, str(pathlib.Path(builder).resolve().parent))
           sys.argv = sys.argv[1:]
           runpy.run_path(builder, run_name='__main__')
           PY
