@@ -10,8 +10,14 @@ name: core-deploy
 on:
   workflow_dispatch:
     inputs:
+      source_branch:
+        description: Source branch deployed to the existing production installation
+        required: true
+        default: main
+        type: choice
+        options: [main, beta]
       ref:
-        description: Release tag or full commit SHA already merged into main
+        description: Release tag or full commit SHA already merged into the selected source branch
         required: true
         type: string
 
@@ -37,19 +43,25 @@ jobs:
         id: source
         env:
           WORKFLOW_REF: ${{ github.ref }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
         run: |
           set -euo pipefail
           if [ "$WORKFLOW_REF" != "refs/heads/main" ]; then
             echo "::error::Run this production workflow from main."
             exit 1
           fi
+          case "$SOURCE_BRANCH" in
+            main|beta) ;;
+            *) echo "::error::Source branch must be main or beta."; exit 1 ;;
+          esac
+          git fetch --no-tags origin "refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
           revision="$(git rev-parse HEAD)"
-          if ! git merge-base --is-ancestor "$revision" origin/main; then
-            echo "::error::The deployment revision must already be merged into main."
+          if ! git merge-base --is-ancestor "$revision" "origin/$SOURCE_BRANCH"; then
+            echo "::error::The deployment revision must already be merged into the selected source branch."
             exit 1
           fi
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "Deploying \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deploying $SOURCE_BRANCH at \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: prepare
