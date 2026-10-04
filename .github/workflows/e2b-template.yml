@@ -1,0 +1,152 @@
+name: e2b-template-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Source branch for the combined Runtime
+        type: choice
+        options: [main, beta]
+        default: main
+        required: true
+      ref:
+        description: Full commit SHA in that branch; empty selects its current tip
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2b-template-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    environment: e2b-build
+    timeout-minutes: 120
+    steps:
+      - name: Check build settings
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          E2B_API_URL: ${{ vars.E2B_API_URL }}
+        run: |
+          set -euo pipefail
+          [ "$WORKFLOW_REF" = refs/heads/main ] || { echo '::error::Run this workflow from main.'; exit 1; }
+          [ -n "$E2B_API_KEY" ] || { echo '::error::Set the E2B_API_KEY secret in e2b-build.'; exit 1; }
+          python3 - <<'PY'
+          import os, urllib.parse
+          value = os.environ['E2B_API_URL']
+          try:
+              url = urllib.parse.urlsplit(value)
+              valid = (url.scheme == 'https' and bool(url.hostname)
+                       and url.username is None and url.password is None
+                       and not url.path and not url.query and not url.fragment
+                       and not any(c in value for c in '\\ \t\r\n?#%'))
+              if url.port is not None:
+                  valid = valid and 1 <= url.port <= 65535
+          except ValueError:
+              valid = False
+          if not valid:
+              raise SystemExit('Set E2B_API_URL to an HTTPS API origin without path or credentials.')
+          PY
+      - uses: actions/checkout@v7
+        with:
+          path: build-tools
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Pin source revision
+        id: source
+        working-directory: build-tools
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          case "$SOURCE_BRANCH" in main|beta) ;; *) exit 1 ;; esac
+          if [ -n "$REQUESTED_REF" ] && [[ ! "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::ref must be a full lowercase commit SHA.'
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/heads/$SOURCE_BRANCH:refs/remotes/origin/$SOURCE_BRANCH"
+          revision="$(git rev-parse "${REQUESTED_REF:-origin/$SOURCE_BRANCH}^{commit}")"
+          git merge-base --is-ancestor "$revision" "origin/$SOURCE_BRANCH" || {
+            echo '::error::ref must be in the selected source branch.'; exit 1;
+          }
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          path: source
+          ref: ${{ steps.source.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: source/go.mod
+          cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: ./build-tools/.github/actions/node
+        with:
+          lockfiles: source/packages/claude-sdk-adapter/pnpm-lock.yaml
+      - name: Enable Corepack for the pinned MiniMax source build
+        run: corepack enable
+      - name: Select shared Go caches
+        run: |
+          echo "GOCACHE=$HOME/.oac/cache/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$HOME/.oac/cache/go-mod" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.oac/cache/go-build
+            ~/.oac/cache/go-mod
+          key: e2b-runtime-go-${{ runner.os }}-${{ hashFiles('source/**/go.mod', 'source/**/go.sum') }}
+      - name: Install the selected revision's pinned E2B SDK
+        run: |
+          python3 -m venv "$RUNNER_TEMP/e2b-sdk"
+          "$RUNNER_TEMP/e2b-sdk/bin/pip" install -r source/services/core/deploy/e2b/requirements.txt
+      - name: Build the combined Runtime image
+        run: |
+          bash build-tools/deploy/e2b/build-runtime.sh "$GITHUB_WORKSPACE/source" "$HOME/.oac/build/e2b-runtime"
+      - name: Build one immutable E2B template
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          E2B_API_URL: ${{ vars.E2B_API_URL }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$(mktemp "$RUNNER_TEMP/e2b-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$E2B_API_KEY" > "$key"
+          unset E2B_API_KEY
+          mkdir -p "$RUNNER_TEMP/e2b-result"
+          "$RUNNER_TEMP/e2b-sdk/bin/python" source/services/core/deploy/e2b/build-template.py \
+            --image "$(cat "$HOME/.oac/build/e2b-runtime/runtime-image.id")" \
+            --name "sandbase-oac-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --api-key-file "$key" --output "$RUNNER_TEMP/e2b-result/template.json"
+      - name: Record the build identity
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.revision }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          E2B_API_URL: ${{ vars.E2B_API_URL }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          report = pathlib.Path(os.environ['RUNNER_TEMP']) / 'e2b-result/template.json'
+          value = json.loads(report.read_text())
+          value.update(source_commit=os.environ['SOURCE_COMMIT'], source_branch=os.environ['SOURCE_BRANCH'],
+                       api_url=os.environ['E2B_API_URL'], harnesses=['codex', 'claude_sdk', 'mcode'],
+                       qualification='image identity and native package checks; no live Session/Turn')
+          report.write_text(json.dumps(value, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f"Source: `{value['source_commit']}`\n\nTemplate: `{value['template']}`\n\nImage: `{value['image']}`\n\n")
+              out.write('One combined Runtime template built. No Core configuration or production deployment was changed.\n')
+          PY
+      - uses: actions/upload-artifact@v6
+        with:
+          name: e2b-template-${{ steps.source.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2b-result/template.json
+          if-no-files-found: error
+          retention-days: 90
