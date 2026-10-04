@@ -67,7 +67,7 @@ spec:
               chmod 700 /state/e2b
               chown 65532:65532 /run/oac
               chmod 700 /run/oac
-              for name in database.password credential.key core-key-digests.json; do
+              for name in database.password credential.key core-key-digests.json installation.id; do
                 install -o 65532 -g 65532 -m 0400 "/run/oac-source/$name" "/run/oac/$name"
               done
           securityContext:
