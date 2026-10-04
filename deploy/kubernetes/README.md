@@ -8,7 +8,7 @@ This directory deploys the control plane — Core and the Web console — to a K
 
 | Object | From | Notes |
 | --- | --- | --- |
-| Deployment and Service `oac-core` | `prod/core.yaml.tpl` | Core on port 8091. One replica: Core takes a PostgreSQL lease that gives one execution service per database, so a second replica exits at startup. An init container prepares the adapter state volume, then `oac-core-migrate` applies the schema |
+| Deployment and Service `oac-core` | `prod/core.yaml.tpl` | Core on port 8091. One replica: Core takes a PostgreSQL lease that gives one execution service per database, so a second replica exits at startup. An init container prepares the adapter state volume and secret files; Core applies the schema during startup before listening |
 | ConfigMap `oac-core-env` | `prod/core-env.yaml.tpl` | Core's process environment; no secret |
 | PersistentVolumeClaim `oac-core-state` | `prod/core-state.yaml.tpl` | `OAC_PROVIDER_STATE_ROOT`, required for E2B; see [the state volume](#the-state-volume). Back it up with the database and the credential key |
 | Deployment and Service `oac-web` | `prod/web.yaml.tpl` | The console on port 8080. One replica: Web holds sign-in sessions in process memory, so a cookie is valid only on the Pod that issued it |

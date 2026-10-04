@@ -93,36 +93,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-        # Core never migrates its own schema. The schema must match the image
-        # before Core opens the database.
-        - name: migrate
-          image: "${OAC_CORE_IMAGE}"
-          imagePullPolicy: IfNotPresent
-          command: ["/usr/local/bin/oac-core-migrate"]
-          envFrom:
-            - configMapRef:
-                name: oac-core-env
-          securityContext:
-            runAsUser: 65532
-            runAsGroup: 65532
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: secrets
-              mountPath: /run/oac
-              readOnly: true
-            - name: tmp
-              mountPath: /tmp
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: "1"
-              memory: 512Mi
       containers:
         - name: core
           image: "${OAC_CORE_IMAGE}"
