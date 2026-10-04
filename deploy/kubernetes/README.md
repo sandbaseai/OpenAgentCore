@@ -56,7 +56,7 @@ Restrict the repository’s `production` GitHub Environment to deployments from 
 | `OAC_REGISTRY_HOST` | Registry host for `docker login` and the pull Secret. Optional; the host of `OAC_REGISTRY` by default |
 | `OAC_PUBLIC_URL` | The canonical HTTPS origin, such as `https://core.example`, with no path, query or fragment. Core derives the daemon WebSocket address, the sandbox `core_url` and the self-hosted `remote_url` from it, and Web serves only this origin. Without it Core executes no Session |
 | `OAC_DATABASE_URL` | `postgres://USER@HOST:PORT/DATABASE`, with `sslmode` and any `pool_*` parameter in the query and no password |
-| `OAC_INSTALLATION_ID` | A canonical lowercase UUID, generated once with `uuidgen \| tr 'A-Z' 'a-z'`. Core refuses an ID other than the one its database recorded, so it belongs to the database: keep the two together and restore them together |
+| `OAC_INSTALLATION_ID` | A canonical lowercase UUID, generated once with `uuidgen \| tr 'A-Z' 'a-z'`. The workflow writes it to `installation.id` in the Core Secret; Core reads `/run/oac/installation.id` through `OAC_INSTALLATION_ID_FILE`. Core refuses an ID other than the one its database recorded, so it belongs to the database: keep the two together and restore them together |
 | `OAC_NAMESPACE` | Existing namespace; `openagentcore` by default |
 | `OAC_STORAGE_CLASS`, `OAC_STATE_SIZE` | StorageClass and size of the required Core state volume. See [the state volume](#the-state-volume). `10Gi` by default |
 | `OAC_CLUSTER_UID` | UID of the target cluster’s `kube-system` namespace. The workflow verifies it before applying resources |

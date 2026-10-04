@@ -13,7 +13,7 @@ metadata:
 data:
   OAC_ADDR: ":8091"
   OAC_PUBLIC_URL: "${OAC_PUBLIC_URL}"
-  OAC_INSTALLATION_ID: "${OAC_INSTALLATION_ID}"
+  OAC_INSTALLATION_ID_FILE: "/run/oac/installation.id"
 
   OAC_DATABASE_URL: "${OAC_DATABASE_URL}"
   OAC_DATABASE_PASSWORD_FILE: "/run/oac/database.password"
