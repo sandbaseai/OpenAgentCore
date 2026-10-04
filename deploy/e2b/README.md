@@ -17,8 +17,14 @@ Both are required. For the SandBase endpoint, set `E2B_API_URL` to `https://sand
 
 The E2B key is available only to the settings check and template-build steps. It is temporarily written to a private file, removed on exit, excluded from Runtime images and build reports, and never sent to a model provider. No model credentials are needed to build the template. A run creates a cloud template build and may incur the provider's build charges; do not trigger a run merely to validate workflow syntax.
 
+## Bounded archive uploads
+
+The workflow splits the Runtime archive into files of at most 32 MiB and uploads each through the SDK's standard template file-copy API. These are independent files, not a multipart upload extension. The template concatenates them in order, verifies the complete archive's SHA-256, then removes the parts before the maintained extraction step. It still produces one template with unchanged Runtime contents. Archives are bounded to 8 GiB.
+
+For an upload failure before build submission, inspect the original run's logs and use `resume_build` with its `templateID:build_UUID` and the same explicit source SHA in `ref`. Recovery checks that the authenticated build is still `waiting` with no logs before reusing its identifiers. Do not use recovery after build submission or an ambiguous request outcome. All other runs create a new template build.
+
 ## Output and qualification
 
-The run summary and the `e2b-template-*` artifact contain `template.json`: the immutable `templateID:build_UUID`, source commit and branch, image ID, packaged Runtime checksum, base image, endpoint and advertised Harnesses. Template names include the run ID and attempt so another run does not replace this build's name. There is no automatic retry of an uncertain cloud build; inspect the provider before starting another run after a failure.
+The successful run summary and the `e2b-template-*` artifact contain `template.json`: the immutable `templateID:build_UUID`, source commit and branch, image ID, packaged Runtime checksum, base image, endpoint and advertised Harnesses. Template names include the run ID and attempt so another run does not replace this build's name. The artifact also retains `upload.json` (chunk count and archive checksum) and `build-request.json` (cloud identifiers and source revision) when those stages are reached, including on failure. There is no automatic retry of an uncertain cloud build; inspect the provider before starting another run after a failure.
 
 The image checks verify committed daemon/adapter identity and native package loading/version checks. Template build completion establishes packaging readiness, not Core enrollment, real model execution or pause/resume qualification. The workflow changes no active Core selection, Kubernetes resource or production Session. [Sandbox deployment](../../contracts/agents-api/sandbox-deployment.md) owns later template selection and generation behavior.
