@@ -334,12 +334,14 @@ jobs:
           digest="$(printf '%s' "$OAC_CORE_KEY" | sha256sum | cut -d' ' -f1)"
           printf '%s' "$OAC_DATABASE_PASSWORD" > "$work/database.password"
           printf '%s' "$OAC_CREDENTIAL_KEY" > "$work/credential.key"
+          printf '%s' "$OAC_INSTALLATION_ID" > "$work/installation.id"
           printf '["%s"]\n' "$digest" > "$work/core-key-digests.json"
           printf '%s' "$OAC_CORE_KEY" > "$work/core.key"
 
           kubectl create secret generic oac-core-secrets -n "$NS" \
             --from-file="database.password=$work/database.password" \
             --from-file="credential.key=$work/credential.key" \
+            --from-file="installation.id=$work/installation.id" \
             --from-file="core-key-digests.json=$work/core-key-digests.json" \
             --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic oac-web-core-key -n "$NS" \
@@ -347,7 +349,7 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
           # shellcheck disable=SC2016 # envsubst takes the variable list literally
-          envsubst '$OAC_PUBLIC_URL $OAC_INSTALLATION_ID $OAC_DATABASE_URL' \
+          envsubst '$OAC_PUBLIC_URL $OAC_DATABASE_URL' \
             < deploy/kubernetes/prod/core-env.yaml.tpl > "$work/core-env.yaml"
           for name in OAC_HARNESSES OAC_DEFAULT_HARNESS OAC_EXECUTION_CONCURRENCY \
                       OAC_WRITE_AUDIT_RETENTION OAC_LOG_LEVEL; do
@@ -359,7 +361,7 @@ jobs:
           # Core and Web read their environment and secret files once at startup.
           # This digest enters both Pod templates, so a settings or secret change
           # replaces the Pods even when the images are unchanged.
-          digest_input="$(cat "$work/core-env.yaml"; printf '%s' "$digest$OAC_DATABASE_PASSWORD$OAC_CREDENTIAL_KEY")"
+          digest_input="$(cat "$work/core-env.yaml"; printf '%s' "$digest$OAC_DATABASE_PASSWORD$OAC_CREDENTIAL_KEY$OAC_INSTALLATION_ID")"
           printf 'digest=%s\n' "$(printf '%s' "$digest_input" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Roll out Core
