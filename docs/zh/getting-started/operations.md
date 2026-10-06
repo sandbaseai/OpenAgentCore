@@ -1,7 +1,7 @@
 ---
 title: "管理你的安装"
 source: docs/getting-started/operations.md
-source_hash: 263a48e467c9aeec1f8357f0e11b40c6f1b329dd6162f65eda3a1038acd4f551
+source_hash: ee5e9211cc09dbf5a4bfba412c2c97af0aefcb7f9d2d5ffd6c0666729fbe2809
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -204,3 +204,7 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 `execution stage` 记录 `stage`、`duration_ms` 与 `status`（`ok`、`error`、`cancelled`、`timeout`）。阶段覆盖输入验证/ownership、预留和等待 admission、执行配置与 admission 提升、生命周期 gate 等待、Runtime 观察和供给、provider create/resume、Environment 初始化。Runtime 连接日志记录已确认观察到的连接变化，不是 socket 建立的精确时间。通过 Environment、allocation、node ID 将后台 Runtime 记录与输入关联；缺少输入 Trace 的后台记录不能视为连续的请求 span。阶段耗时使用本进程单调时钟。`queue_age_ms` 则比较选择时间与数据库预留创建时间，可能受到时钟偏差影响，不能当作单独测量的调度等待。
 
 `control_ready_ms` 从调度、Runtime 就绪和配置组装完成后开始。`start_control_ms` 描述控制确认。`input_to_first_text_ms` 从执行投递前开始，包含 start-control 时间，不是纯模型 TTFT。admission、control、首字区间存在重叠，不要当作独立耗时相加。provider 调用成功表示该操作成功，不等于 daemon 连接完成或 Turn 完成。除非原生适配器提供相应观测，模型请求开始、响应 headers、模型首字、重试仍为不可观测。日志仅记录关联 ID 与有限状态分类，不记录输入内容、凭据或 provider 原始错误。
+
+`runtime transport registered` 记录认证后的 WebSocket 注册，`runtime capability snapshot observed` 记录合法能力声明变化及设备 ID、能力数量。连接注册本身不代表执行就绪。包含可用 Harness 的能力变化会发出合并后的调度提示；Worker 仍检查所有权、容量、生命周期和能力要求，轮询负责兜底。
+
+Daemon 启动日志记录 `runtime process starting` 和构建版本，`runtime startup stage` 记录各 Harness 探测、bootstrap 和每次连接尝试的本地单调时钟耗时，不输出凭据或原始错误。探测发生在连接注册之前。结合这些边界与已观察到的持久化连接时间，区分启动、周期观察和调度等待。Daemon 观测要求 Runtime 使用带有这些埋点的构建；仅升级 Core 不会升级现有 Runtime 模板。托管启动回执只确认进程已启动，不确认连接或能力就绪。
