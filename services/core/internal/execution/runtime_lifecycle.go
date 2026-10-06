@@ -210,6 +210,10 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	} else if err != nil {
 		return deployment.Allocation{}, err
 	}
+	session, err := r.store.GetSession(ctx, tenant, environmentValue.SessionID)
+	if err != nil {
+		return deployment.Allocation{}, err
+	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return deployment.Allocation{}, err
@@ -231,7 +235,7 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	createAt := time.Now()
 	info, err := provider.Create(ctx, sandbox.Bootstrap{
 		Reference: runtimeReference(owner), SessionID: owner.SessionID, DeviceID: owner.DeviceID,
-		CoreURL: r.config.CoreURL, Credential: token, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
+		CoreURL: r.config.CoreURL, Credential: token, Harness: session.Engine, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
 	})
 	observeExecutionStage(ctx, "provider_create", createAt, err, "allocation_id", owner.ID,
 		"session_id", owner.SessionID, "environment_id", environment, "device_id", owner.DeviceID, "node_id", r.nodeID)

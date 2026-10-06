@@ -1,7 +1,7 @@
 ---
 title: "添加 Sandbox Provider"
 source: docs/sandbox-provider.md
-source_hash: cf4d039692446d67d54c25e2d356c149b009862a1ca1d7fcb8f2b9fe1078e8c6
+source_hash: e8bfcdfb5e0c445036753a64561903a28378e601dd0f7908cf9b387f22f2beaa
 ---
 
 **Sandbox Provider** 为 Core 管理的 Environment 提供 Runtime daemon 运行所需的外层计算资源，以及启动 daemon 的有界引导流程。本指南说明如何添加 Provider，并作为 Core 驱动 Provider 的参考。接口为 [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go)。
@@ -161,6 +161,8 @@ launcher 从[派生进程环境](configuration.md)提供 `sandbox.ProcessPaths`�
 Node readiness 绑定到精确 generation、当前连接和 owner epoch。持久 serving pin 仅在部署串行化下为当时目标的 readiness 提升，因此已被替代目标的延迟报告不获得 pin。
 
 ### Allocation 生命周期 {#allocation-lifecycle}
+
+Core 在 `Bootstrap.Harness` 中传递所属会话固定选择的 Harness；所有提供商都将其投影到 [Runtime 启动输入](./runtime-bootstrap.md)，不自行选择实现。
 
 allocation、专用 daemon credential digest 和精确 Session binding 在 `Create` 前、execution lease 与 Session lock 下原子提交。只有新 allocation receipt 允许 `Create`；重试和 Core 重启观察同一 reference，不重放或轮换凭据。allocation 是私有计算资源所有权，与公开 Environment connection 和原生 readiness 独立；adapter 验证 bootstrap completion，Core 不从 engine 或 provider name 推断。
 
