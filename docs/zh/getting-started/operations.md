@@ -1,7 +1,7 @@
 ---
 title: "管理你的安装"
 source: docs/getting-started/operations.md
-source_hash: ee5e9211cc09dbf5a4bfba412c2c97af0aefcb7f9d2d5ffd6c0666729fbe2809
+source_hash: 06de77447d1647b7ab546bd41bc2c4c042abdb47053d20b0a4bdf25465bca2f7
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -208,3 +208,5 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 `runtime transport registered` 记录认证后的 WebSocket 注册，`runtime capability snapshot observed` 记录合法能力声明变化及设备 ID、能力数量。连接注册本身不代表执行就绪。包含可用 Harness 的能力变化会发出合并后的调度提示；Worker 仍检查所有权、容量、生命周期和能力要求，轮询负责兜底。
 
 Daemon 启动日志记录 `runtime process starting` 和构建版本，`runtime startup stage` 记录各 Harness 探测、bootstrap 和每次连接尝试的本地单调时钟耗时，不输出凭据或原始错误。探测发生在连接注册之前。结合这些边界与已观察到的持久化连接时间，区分启动、周期观察和调度等待。Daemon 观测要求 Runtime 使用带有这些埋点的构建；仅升级 Core 不会升级现有 Runtime 模板。托管启动回执只确认进程已启动，不确认连接或能力就绪。
+
+Codex CLI 可用性探测为 `process_spawn` 和 `process_wait` 输出 `runtime version probe` 记录，只包含耗时和结果。等待区间包含可执行文件加载和版本命令，两者都不是模型执行。
