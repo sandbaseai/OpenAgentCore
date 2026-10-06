@@ -43,3 +43,7 @@ Upstream [CI run 37126282818](https://github.com/MiniMax-AI/OpenAgentCore/action
 The release adds authenticated transport registration and confirmed capability observations, daemon startup stage timings, and coalesced capability-driven scheduler hints. [Execution latency](../../docs/getting-started/operations.md#execution-latency) owns the log boundaries and limitations. Existing allocations retain their immutable template generation; new allocations use the new template only after its selection is updated through the administrative deployment API.
 
 Validation passed focused gateway/execution/daemon regressions and race checks, isolated PostgreSQL scheduling and Worker admission/device-isolation fixtures, Runtime contract checks, static checks, the name guard, documentation checks and all translation checks. The source review found no blocking issues. Cloud build readiness and production health remain separate from real-model and suspension acceptance.
+
+## 2026-10-06 — Sandbox template change audit
+
+The administrative deployment update records authenticated administrator provenance before the execution owner changes the selection. This allows the template selection and its audit entry to commit together. The change adds no schema migration, SQL, Runtime wire or native dependency changes. The combined Runtime template built at `298957f7e6a2a707e2b01b75523764b4e1ff5ab5` remains compatible with this Core API correction.

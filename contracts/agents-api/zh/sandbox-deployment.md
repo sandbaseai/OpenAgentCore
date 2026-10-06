@@ -1,7 +1,7 @@
 ---
 title: "沙箱部署"
 source: contracts/agents-api/sandbox-deployment.md
-source_hash: 06a69e3d0ba245ab27c0b5d7390364a35d10fb8478e2d0f6867749b29368f980
+source_hash: 9d4559f7207943ece262ed626fbc233dd16b1bb1f271e6ea440b30d26f0a0bd3
 ---
 
 沙箱部署为 Core 管理的 `openai_hosted` 执行选择 Sandbox Provider、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness；部署可以保持未配置状态，既无节点，也不接受托管准入。
@@ -116,7 +116,7 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | `400 sandbox_configuration_invalid` | 候选构建无效或与资源不匹配 |
 | `503 sandbox_verification_unconfirmed` | 回执缺失或未结算，或读取未得到确认 |
 
-不会返回提供商文本或凭据。写入操作及其 `change` 或 `replace_credential` 审计条目共用一个事务。替换操作会短暂对提供商调用设置栅栏，即使调用方已取消，也会等待辅助进程实际退出，并在提交前再次验证；辅助进程退出并不能证明远程 Create 已结算。栅栏和读取均有时间边界，失败时会保留旧密钥和生命周期。成功响应后，所有保留代次管理都使用已提交的密钥；只有在清理完成后，才能在 E2B 中撤销旧密钥，绝不能提前撤销。模板和资源更改不会排空生命周期。
+不会返回提供商文本或凭据。写入操作及其 `change` 或 `replace_credential` 审计条目共用一个事务。Core 从已认证请求中派生管理员审计来源，并使用可选的 `X-Core-Console-Actor` 请求头作为操作者标签。替换操作会短暂对提供商调用设置栅栏，即使调用方已取消，也会等待辅助进程实际退出，并在提交前再次验证；辅助进程退出并不能证明远程 Create 已结算。栅栏和读取均有时间边界，失败时会保留旧密钥和生命周期。成功响应后，所有保留代次管理都使用已提交的密钥；只有在清理完成后，才能在 E2B 中撤销旧密钥，绝不能提前撤销。模板和资源更改不会排空生命周期。
 
 ## 代次所有权与推出 {#generation-ownership-and-rollout}
 

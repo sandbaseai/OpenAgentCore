@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/adminaudit"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment/placement"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
@@ -17,8 +18,12 @@ import (
 func TestSandboxDeploymentChangesAuthenticateAndDecode(t *testing.T) {
 	deps, fakes := sandboxFakes(t)
 	updates, resets := 0, 0
-	update := func(_ context.Context, in sandbox.Selection) (deployment.View, error) {
+	update := func(ctx context.Context, in sandbox.Selection) (deployment.View, error) {
 		updates++
+		source, ok := adminaudit.FromContext(ctx)
+		if !ok || source.ValidateDeploymentMutation("change", "sandbox_deployment", "fixture-installation") != nil || source.ActorLabel != "deployment-operator" || source.CredentialID == "administrator" {
+			t.Fatal("deployment change lost authenticated administrator provenance")
+		}
 		if in.Provider != "e2b" || in.ExpectedGeneration != 2 || in.Configuration == nil || in.Configuration.(*e2b.DeploymentConfiguration).APIKey != "synthetic-private-key" {
 			t.Fatal("write-only fields were lost")
 		}
@@ -62,6 +67,7 @@ func TestSandboxDeploymentChangesAuthenticateAndDecode(t *testing.T) {
 	} {
 		r := httptest.NewRequest(tc.method, "/core/v1/sandbox"+tc.path, strings.NewReader(tc.body))
 		r.Header.Set("Authorization", "Bearer "+tc.token)
+		r.Header.Set("X-Core-Console-Actor", "deployment-operator")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != tc.status || strings.Contains(w.Body.String(), "synthetic-private-key") {
