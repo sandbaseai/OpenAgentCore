@@ -298,6 +298,8 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 			rescanOnCompletion = false
 		case <-w.scheduleWake:
 			rescanOnCompletion = true
+		case <-w.dispatcher.Registry.CapabilityHints():
+			rescanOnCompletion = true
 		case <-ticker.C:
 			maintenance = true
 		}
@@ -327,10 +329,7 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 			w.observeSchedulerPoll(0, nil)
 			continue
 		}
-		if !maintenance {
-			schedule.nextEnvironmentScan = time.Time{}
-		}
-		work, err := schedule.selectWork(ctx, w, devices, active)
+		work, err := schedule.selectWork(ctx, w, devices, active, !maintenance)
 		w.observeSlots(len(active))
 		if err != nil {
 			w.observeSchedulerPoll(0, err)

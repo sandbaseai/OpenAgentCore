@@ -138,6 +138,7 @@ func runConnect(ctx *runContext, args []string) error {
 
 	// Self-check before pairing/loading credentials so a machine with
 	// no supported agent CLI fails before consuming a one-shot token.
+	initializeRuntimeObservations(ctx)
 	agentCLIs, err := preflightAgentCLIs(context.Background(), ctx, *profile)
 	if err != nil {
 		return err
@@ -308,6 +309,7 @@ func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof
 	rootCtx, cancel := daemonize.NotifyContext(parent)
 	defer cancel()
 
+	bootstrapStarted := time.Now()
 	bootCtx, bootCancel := context.WithTimeout(rootCtx, bootstrapTimeout)
 	var boot *transport.BootstrapResponse
 	var err error
@@ -317,6 +319,7 @@ func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof
 		boot, err = environmentBootstrap(bootCtx, prof, remote)
 	}
 	bootCancel()
+	observeRuntimeStartup(rootCtx, "bootstrap", bootstrapStarted, err)
 	if err != nil {
 		return fmt.Errorf("connect: bootstrap: %w", err)
 	}
@@ -337,6 +340,7 @@ func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof
 		defer control.Close()
 	}
 	dial := func(ctx context.Context) (*transport.Conn, error) {
+		dialStarted := time.Now()
 		conn, err := transport.Dial(ctx, transport.DialOptions{
 			WSURL:      wsURL,
 			DeviceID:   boot.DeviceID,
@@ -347,6 +351,7 @@ func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof
 			// in heartbeat's DaemonVersion field.
 			DaemonVersion: proto.Version,
 		})
+		observeRuntimeStartup(ctx, "transport_dial", dialStarted, err)
 		if remote != "" && err != nil {
 			if errors.Is(err, transport.ErrIncompatibleVersion) {
 				return nil, fmt.Errorf("Environment connection rejected: %w: %w", transport.ErrPermanent, transport.ErrIncompatibleVersion)
