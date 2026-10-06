@@ -256,7 +256,10 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Suspens
 	if state.Target == nil || state.Retained == nil || state.Rollback {
 		return sandbox.ErrOwnership
 	}
+	resumeAt := time.Now()
 	result, err := p.Resume(ctx, sandbox.ResumeRequest{Reference: runtimeReference(owner), OperationID: state.RestoreID, Retained: *state.Retained, Target: *state.Target, ReconcileOnly: observeOnly})
+	observeExecutionStage(ctx, "provider_resume", resumeAt, err, "allocation_id", owner.ID,
+		"session_id", owner.SessionID, "environment_id", owner.EnvironmentID, "node_id", r.nodeID, "reconcile_only", observeOnly)
 	if err != nil {
 		return err
 	}
