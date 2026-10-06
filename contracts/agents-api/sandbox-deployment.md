@@ -114,7 +114,7 @@ Initial setup requires the selected template to appear in the key's team-owned t
 | `400 sandbox_configuration_invalid` | The candidate build is invalid or does not match the resources |
 | `503 sandbox_verification_unconfirmed` | A receipt is missing or unsettled, or a read is unconfirmed |
 
-No provider text or credential is returned. The write and its `change` or `replace_credential` audit entry share one transaction. A replacement briefly fences provider calls, waits for helper processes to actually exit even after the caller cancelled, and verifies again before committing; a helper's exit does not prove that a remote Create settled. The fence and reads are bounded, and a failure keeps the old key and lifecycles. After the successful response, all retained-generation management uses the committed key; only then revoke the old key in E2B, never before cleanup. Template and resource changes do not drain lifecycles.
+No provider text or credential is returned. The write and its `change` or `replace_credential` audit entry share one transaction. Core derives administrator provenance from the authenticated request, with the optional `X-Core-Console-Actor` header as its actor label. A replacement briefly fences provider calls, waits for helper processes to actually exit even after the caller cancelled, and verifies again before committing; a helper's exit does not prove that a remote Create settled. The fence and reads are bounded, and a failure keeps the old key and lifecycles. After the successful response, all retained-generation management uses the committed key; only then revoke the old key in E2B, never before cleanup. Template and resource changes do not drain lifecycles.
 
 ## Generation ownership and rollout
 
