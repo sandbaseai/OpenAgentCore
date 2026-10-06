@@ -47,3 +47,20 @@ Validation passed focused gateway/execution/daemon regressions and race checks, 
 ## 2026-10-06 — Sandbox template change audit
 
 The administrative deployment update records authenticated administrator provenance before the execution owner changes the selection. This allows the template selection and its audit entry to commit together. The change adds no schema migration, SQL, Runtime wire or native dependency changes. The combined Runtime template built at `298957f7e6a2a707e2b01b75523764b4e1ff5ab5` remains compatible with this Core API correction.
+
+## 2026-10-06 — Session-selected Runtime Harness
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `f6125c99e712ba5156956025a0c68cfd284a9db5` |
+| Feature branch | `codex/selected-runtime-harness` |
+| Feature commit | `ee047f4dc946ab3ad6974e7ba29437c519641d05` |
+| Schema migrations / DDL / SQL changes | None |
+| Runtime bootstrap | Version 2, with the owning Session’s immutable `harness` |
+| Provider helper protocols | E2B and microsandbox version 3 |
+| Node wire protocol | Version 6 |
+| Core–Runtime wire / native dependency pins | Unchanged |
+
+A combined image retains all packaged Harnesses, while each managed Runtime discovers and registers only the Session-selected Harness. Unknown or unavailable selections fail without substituting another implementation. Self-hosted installations retain their installed Harness set. Codex version probes still validate the executable and expose secret-safe process spawn/wait timing.
+
+Publish matching Core, provider helpers and a newly built Runtime template together. Node deployments require matching protocol-version-6 nodes. Existing allocations retain their bootstrap and Runtime; qualification must use a fresh allocation. [Runtime bootstrap](../../docs/runtime-bootstrap.md) owns the startup contract.
