@@ -1,6 +1,8 @@
 package execution
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 )
@@ -31,5 +33,19 @@ func TestSchedulerWakeCoalescesConcurrentAdmissionsAndKeepsNextHint(t *testing.T
 	case <-worker.scheduleWake:
 		t.Fatal("coalesced submissions caused an extra scan")
 	default:
+	}
+}
+
+func TestWorkerCancelledWithoutGatewayPreservesShutdown(t *testing.T) {
+	worker := &Worker{dispatcher: &Dispatcher{}, lease: heldLease{}, stopped: make(chan struct{}), concurrency: 1}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := worker.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("gateway-free admission worker did not stop", err)
+	}
+	select {
+	case <-worker.stopped:
+	default:
+		t.Fatal("worker did not publish shutdown")
 	}
 }

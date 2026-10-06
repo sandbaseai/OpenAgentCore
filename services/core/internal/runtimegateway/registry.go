@@ -348,7 +348,12 @@ func (r *Registry) removeWaiter(deviceID string, ch chan *Session) {
 
 // CapabilityHints coalesces capability changes for the single execution Worker.
 // A hint grants no execution authority; the Worker rechecks its normal gates.
-func (r *Registry) CapabilityHints() <-chan struct{} { return r.capabilityHints }
+func (r *Registry) CapabilityHints() <-chan struct{} {
+	if r == nil {
+		return nil
+	}
+	return r.capabilityHints
+}
 
 func (r *Registry) observeCapabilitySnapshot(sess *Session, kinds []runtimedevice.SupportedAgentKind) bool {
 	r.mu.RLock()
