@@ -28,3 +28,18 @@ The integration adds a typed suspension lifecycle, E2B pause/resume with durable
 ### Verification
 
 Upstream [CI run 37126282818](https://github.com/MiniMax-AI/OpenAgentCore/actions/runs/37126282818) passed its selected checks at the integrated source commit. Local validation passed the Go sandbox, process configuration and Runtime bootstrap tests, focused deployment/execution/server tests, 188 E2B helper tests, 11 E2B template tests, the generated helper contract check and SQL generation freshness check. Database lifecycle integration and fresh cloud execution remain separate qualification gates. This ledger records source integration; it does not establish production activation or fresh E2B Session/Turn acceptance.
+
+## 2026-10-06 — Runtime readiness observations
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `8f6ab3cd3272c156249360d2640383e3aee36a97` |
+| Feature source commit | `b19ad377d357621c1fc48f24c575327cf24297c5` |
+| Feature branch | `codex/runtime-readiness-observations` |
+| Schema migrations / DDL / SQL changes | None |
+| Runtime wire, helper protocol, native dependency pins | Unchanged |
+| Required release assets | Matching Core/Web release and a newly built combined E2B Runtime template |
+
+The release adds authenticated transport registration and confirmed capability observations, daemon startup stage timings, and coalesced capability-driven scheduler hints. [Execution latency](../../docs/getting-started/operations.md#execution-latency) owns the log boundaries and limitations. Existing allocations retain their immutable template generation; new allocations use the new template only after its selection is updated through the administrative deployment API.
+
+Validation passed focused gateway/execution/daemon regressions and race checks, isolated PostgreSQL scheduling and Worker admission/device-isolation fixtures, Runtime contract checks, static checks, the name guard, documentation checks and all translation checks. The source review found no blocking issues. Cloud build readiness and production health remain separate from real-model and suspension acceptance.
