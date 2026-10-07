@@ -1,7 +1,7 @@
 ---
 title: "管理你的安装"
 source: docs/getting-started/operations.md
-source_hash: e60a6e96cd61692b6adc7664874ba0ed2ce489982e7da2fe2347631ee2a94c0a
+source_hash: 9c4b5a1bdcdecb5dd3c0b73886d1befb58c6725df0f35873559eab0fecd3e7cd
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -46,6 +46,14 @@ docker compose -f "$HOME/.oac/core/compose.yaml" logs --tail 200 core
 ```
 
 不要将 `docker compose config`、`docker inspect` 或原始日志粘贴到公开问题报告。
+
+### Environment 文件拒绝日志 {#environment-file-rejection-logs}
+
+Environment 文件创建 handler 写出HTTP状态码为400或以上的响应时，会发出一条 `api_request_rejected` 事件。用其中的 `request_id` 关联响应的 `X-Request-Id`；该ID由Core生成，不一定与调用方的请求ID相同。既有日志上下文还会注入 `trace_id` 和 `span_id`；无论请求携带有效的入站trace，还是由Core生成新trace，这两个字段均与响应的 `traceparent` 一致。事件覆盖 `operation=environment_file_create`，路由固定为模板 `/v1/agents/environments/{environment_id}/files`。进入该handler之前被拒绝的请求不在其覆盖范围内。
+
+事件包含 `operation`、`route`、`status`、白名单内的 `code`（未识别的code记为 `unknown`）以及静态 `reason`。reason取值为 `unknown`、`invalid_payload`、`unknown_field`、`invalid_path`、`invalid_base64`、`inline_too_large`、`hosted_environment_provisioning`、`destination_directory` 和 `destination_unsafe`。`unknown` 表示拒绝原因尚未分类；仅凭400不能判定Environment仍在准备中。
+
+事件不记录请求或响应正文、查询字符串、原始URL路径、资源ID、用户文件路径、字段值、任意错误文案或凭据，也不改变HTTP响应和执行行为。使用前应核实已部署的Core版本包含此诊断；缺少事件不能证明成功，诊断信息本身也不能证明文件上传可用。
 
 ## 停止与重启 {#stop-and-restart}
 

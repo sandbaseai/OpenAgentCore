@@ -45,6 +45,14 @@ docker compose -f "$HOME/.oac/core/compose.yaml" logs --tail 200 core
 
 Don't paste `docker compose config`, `docker inspect` or raw logs into public issue reports.
 
+### Environment file rejection logs
+
+The Environment file creation handler emits one `api_request_rejected` event when it writes a response with HTTP status 400 or higher. Match its `request_id` to the response's `X-Request-Id`; Core generates this ID, so it need not match a caller's request ID. The existing log context also supplies `trace_id` and `span_id`, matching the response's `traceparent` whether the request carries a valid incoming trace or Core generates a new trace. This event covers `operation=environment_file_create` and the fixed route template `/v1/agents/environments/{environment_id}/files`. Requests rejected before this handler are outside its coverage.
+
+The event contains `operation`, `route`, `status`, an allowlisted `code` (unrecognized codes become `unknown`), and a static `reason`. Reasons are `unknown`, `invalid_payload`, `unknown_field`, `invalid_path`, `invalid_base64`, `inline_too_large`, `hosted_environment_provisioning`, `destination_directory`, and `destination_unsafe`. `unknown` means the rejection has no classified reason; a 400 alone does not establish that an Environment is still provisioning.
+
+The event does not record request or response bodies, query strings, raw URL paths, resource IDs, user file paths, field values, arbitrary error messages or credentials. It does not change the HTTP response or execution behavior. Check that the deployed Core version includes this diagnostic before relying on it; missing events do not establish success, and diagnostics alone do not show that file uploads work.
+
 ## Stop and restart
 
 Let active work settle before a planned restart:
