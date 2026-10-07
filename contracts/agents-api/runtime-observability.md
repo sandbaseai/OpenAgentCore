@@ -128,3 +128,9 @@ With an OTLP endpoint configured, Core exports every record, both `on_read` and 
 CPU and memory points are exported only when the sample has `started_at`; a missing measurement produces no point. Attributes are `agents.tenant.id`, `agents.session.id`, `agents.environment.id`, `agents.runtime.allocation.id`, `agents.runtime.mode`, `agents.runtime.provider.type`, `agents.runtime.status`, `agents.runtime.reason`, `agents.runtime.collection.source` and nanosecond `agents.runtime.resolved_at_unix_nano`, `agents.runtime.observed_at_unix_nano` and `agents.runtime.compute.started_at_unix_nano`. The nanosecond times keep records joinable when a backend stores event time at lower precision. Provider keys, receipts, native identifiers, raw errors, paths and credentials are never attributes.
 
 Web reads history only through Core; neither a Collector nor another metrics store is needed for its charts.
+
+## Sampling ownership
+
+Periodic history sampling reads the execution Worker's observed ownership state. Its short source deadlines and sweep cancellation never run database operations on the connection holding the execution lease. The Worker retains its authoritative database ownership checks before execution and invalidates the observed state when it stops or loses ownership. An unknown, failed or stopped ownership observation prevents sampling; it never grants execution authority.
+
+Failed leased operations log their operation category, gate or connection phase, error class and type, caller and operation cancellation state, connection-closed state when observed under the gate, duration and PostgreSQL SQLSTATE when present. These diagnostics omit error text, SQL, credentials and model data. Worker failure logs identify the exiting stage. A lost execution lease remains fatal; no query or external execution is automatically replayed.

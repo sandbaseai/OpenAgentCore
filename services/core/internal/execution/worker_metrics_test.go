@@ -107,3 +107,18 @@ func TestWorkerMetricsConcurrentSnapshots(t *testing.T) {
 	}
 	running.Wait()
 }
+
+func TestWorkerStopInvalidatesOwnershipBeforeLeaseDrain(t *testing.T) {
+	worker := &Worker{}
+	worker.observeOwnership(nil)
+	worker.observeWorkerStop(context.Canceled, context.Canceled)
+	worker.observeOwnership(nil)
+	snapshot := worker.MetricsSnapshot()
+	if snapshot.ExecutionOwner != nil || snapshot.Scheduler.Status != "stopped" {
+		t.Fatal("late check revived ownership while draining")
+	}
+	worker.observeWorkerClosed(nil)
+	if owner := worker.MetricsSnapshot().ExecutionOwner; owner == nil || *owner {
+		t.Fatal("confirmed release was not recorded")
+	}
+}

@@ -55,7 +55,7 @@ func AcquireLease(ctx context.Context, pool *pgxpool.Pool) (*Lease, error) {
 // connection and commits only when apply returns nil. apply receives the
 // context carrying the execution deadline.
 func (l *Lease) Transaction(ctx context.Context, apply func(context.Context, pgx.Tx) error) error {
-	return l.withConn(ctx, func(ctx context.Context, conn *pgxpool.Conn) error {
+	return l.withConn(ctx, "transaction", func(ctx context.Context, conn *pgxpool.Conn) error {
 		return run(ctx, conn, readWrite, apply)
 	})
 }
@@ -63,7 +63,7 @@ func (l *Lease) Transaction(ctx context.Context, apply func(context.Context, pgx
 // CheckOwnership pings the leased connection, confirming that this service
 // still owns the database before external work.
 func (l *Lease) CheckOwnership(ctx context.Context) error {
-	return l.withConn(ctx, func(ctx context.Context, conn *pgxpool.Conn) error { return conn.Ping(ctx) })
+	return l.withConn(ctx, "ownership_check", func(ctx context.Context, conn *pgxpool.Conn) error { return conn.Ping(ctx) })
 }
 
 // CancelOperations cancels coordinator-owned contexts between leased
@@ -76,7 +76,7 @@ func (l *Lease) CancelOperations(ctx context.Context, cancel context.CancelFunc)
 	if cancel == nil {
 		return errors.New("execution lease cancellation requires a cancel function")
 	}
-	return l.withConn(ctx, func(ctx context.Context, conn *pgxpool.Conn) error {
+	return l.withConn(ctx, "cancellation_fence", func(ctx context.Context, conn *pgxpool.Conn) error {
 		if err := conn.Ping(ctx); err != nil {
 			return err
 		}
@@ -114,13 +114,20 @@ func (l *Lease) Close(ctx context.Context) error {
 }
 
 // withConn applies the execution deadline to the gate wait and the operation.
-func (l *Lease) withConn(ctx context.Context, apply func(context.Context, *pgxpool.Conn) error) error {
-	ctx, cancel := context.WithTimeout(ctx, ExecutionTimeout)
+func (l *Lease) withConn(caller context.Context, operation string, apply func(context.Context, *pgxpool.Conn) error) (err error) {
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(caller, ExecutionTimeout)
 	defer cancel()
-	if err := l.lock(ctx); err != nil {
+	if err = l.lock(ctx); err != nil {
+		observeLeaseFailure(caller, ctx, operation, "gate", started, err, nil)
 		return err
 	}
 	defer l.unlock()
+	defer func() {
+		if err != nil {
+			observeLeaseFailure(caller, ctx, operation, "connection", started, err, l.conn)
+		}
+	}()
 	if l.conn == nil {
 		return ErrLeaseClosed
 	}
