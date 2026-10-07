@@ -1,7 +1,7 @@
 ---
 title: "运行时可观测性"
 source: contracts/agents-api/runtime-observability.md
-source_hash: 5da1279a81a6dcb3a85661dbba942c8937f871ae351ed80550db65b2a59156db
+source_hash: "9d5cfbb9046979ec8e1e9d730ce35618e968698769571242c0aea0596abd9858"
 ---
 
 这是面向贡献者的契约，规定 Core 如何观测 Runtime 并保留其历史。路由和响应字段见 [Runtime telemetry API](runtime-observability-api.md)。代码位于 `services/core/internal/runtimeobs`（解析、源、采样器和导出）、`internal/runtimehistory`（历史查询和 PostgreSQL 存储）以及 `internal/runtimeobs/otlpexporter`。
@@ -130,3 +130,9 @@ PostgreSQL 存储仅保留周期性的 `openai_hosted` 记录，因此 API 读�
 仅当采样包含 `started_at` 时才导出 CPU 和内存数据点；缺少测量值不会产生数据点。属性包括 `agents.tenant.id`、`agents.session.id`、`agents.environment.id`、`agents.runtime.allocation.id`、`agents.runtime.mode`、`agents.runtime.provider.type`、`agents.runtime.status`、`agents.runtime.reason`、`agents.runtime.collection.source`，以及以纳秒为单位的 `agents.runtime.resolved_at_unix_nano`、`agents.runtime.observed_at_unix_nano` 和 `agents.runtime.compute.started_at_unix_nano`。这些纳秒时间使记录在后端以较低精度存储事件时间时仍可关联。Provider key、回执、原生标识符、原始错误、路径和凭据绝不会作为属性。
 
 Web 仅通过 Core 读取历史记录；其图表不需要 Collector 或其他指标存储。
+
+## 采样所有权
+
+周期历史采样读取执行 Worker 已观测到的所有权状态。采样的短来源超时和整轮取消不会在持有执行租约的连接上执行数据库操作。Worker 在执行前保留权威的数据库所有权检查，按检查顺序发布观测结果，并在停止或失去所有权时将观测状态标为不可用。等待所有权检查和执行检查共用一个有界期限；调用方在等待时取消，不会启动数据库操作。未知、失败或已停止的所有权观测会阻止采样，永远不授予执行权限。
+
+失败的租约操作记录操作类别、等待连接闸门或使用连接的阶段、错误类别和类型、调用方与操作的取消状态、在持有闸门时观测到的连接关闭状态、耗时，以及存在时的 PostgreSQL SQLSTATE。诊断不记录错误原文、SQL、凭据或模型数据。Worker 失败日志标识退出阶段。失去执行租约仍会终止执行；不会自动重放查询或外部执行。
