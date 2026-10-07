@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,5 +121,63 @@ func TestWorkerStopInvalidatesOwnershipBeforeLeaseDrain(t *testing.T) {
 	worker.observeWorkerClosed(nil)
 	if owner := worker.MetricsSnapshot().ExecutionOwner; owner == nil || *owner {
 		t.Fatal("confirmed release was not recorded")
+	}
+}
+
+type orderedOwnershipLease struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (l *orderedOwnershipLease) CheckOwnership(context.Context) error {
+	if l.calls.Add(1) == 1 {
+		close(l.entered)
+		<-l.release
+		return nil
+	}
+	return pgunit.ErrLeaseClosed
+}
+func (*orderedOwnershipLease) CancelOperations(context.Context, context.CancelFunc) error { return nil }
+func (*orderedOwnershipLease) Close(context.Context) error                                { return nil }
+
+func TestWorkerOwnershipChecksPublishInOrderAndRespectWaitingDeadline(t *testing.T) {
+	release := make(chan struct{})
+	var unblock sync.Once
+	lease := &orderedOwnershipLease{entered: make(chan struct{}), release: release}
+	worker := &Worker{lease: lease}
+	first := make(chan error, 1)
+	go func() { first <- worker.CheckOwnership(t.Context()) }()
+	t.Cleanup(func() {
+		unblock.Do(func() { close(release) })
+		select {
+		case <-first:
+		case <-time.After(time.Second):
+			t.Error("first ownership check did not stop")
+		}
+	})
+	<-lease.entered
+	waiting, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancel()
+	if err := worker.CheckOwnership(waiting); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("waiting check ran ahead of the authoritative result", err)
+	}
+	if lease.calls.Load() != 1 {
+		t.Fatal("waiting check reached the lease out of order")
+	}
+	unblock.Do(func() { close(release) })
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	// Leave a result for cleanup after the successful first caller has settled.
+	first <- nil
+	if owner := worker.MetricsSnapshot().ExecutionOwner; owner == nil || !*owner {
+		t.Fatal("successful check was not observed")
+	}
+	if err := worker.CheckOwnership(t.Context()); !errors.Is(err, pgunit.ErrLeaseClosed) {
+		t.Fatal(err)
+	}
+	if worker.MetricsSnapshot().ExecutionOwner != nil {
+		t.Fatal("older success revived a failed ownership observation")
 	}
 }

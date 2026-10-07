@@ -17,6 +17,8 @@ import (
 
 const DefaultExecutionConcurrency = 4
 
+const ownershipCheckTimeout = 5 * time.Second
+
 // Worker owns queued work; the database lease excludes a second execution service.
 type Worker struct {
 	concurrency         int
@@ -24,6 +26,8 @@ type Worker struct {
 	dispatcher          *Dispatcher
 	admission           *store.Store
 	lease               Ownership
+	ownershipCheckOnce  sync.Once
+	ownershipChecks     chan struct{}
 	directoryReads      chan directoryReadRequest
 	fileWrites          chan fileWriteRequest
 	scheduleWake        chan struct{}
@@ -120,6 +124,20 @@ func StartWorker(ctx context.Context, dispatcher *Dispatcher, owner Owner) (_ *W
 
 // CheckOwnership checks the same database lease used for execution writes.
 func (w *Worker) CheckOwnership(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, ownershipCheckTimeout)
+	defer cancel()
+	w.ownershipCheckOnce.Do(func() { w.ownershipChecks = make(chan struct{}, 1) })
+	select {
+	case w.ownershipChecks <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-w.ownershipChecks }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Keep the authoritative result and its observation in the same order.
+	// A delayed success must not overwrite a later failed ownership check.
 	err := w.lease.CheckOwnership(ctx)
 	w.observeOwnership(err)
 	return err
@@ -310,7 +328,7 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 		case <-ticker.C:
 			maintenance = true
 		}
-		check, stop := context.WithTimeout(ctx, 5*time.Second)
+		check, stop := context.WithTimeout(ctx, ownershipCheckTimeout)
 		err := w.CheckOwnership(check)
 		stop()
 		if err != nil {

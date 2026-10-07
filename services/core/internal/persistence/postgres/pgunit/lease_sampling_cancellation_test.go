@@ -46,7 +46,6 @@ func TestCancelledOwnershipPingClosesExecutionLease(t *testing.T) {
 	deadline := make(chan struct{})
 	var signal, unblock sync.Once
 	releaseRead := func() { unblock.Do(func() { close(release) }) }
-	t.Cleanup(releaseRead)
 	pool := pgtest.OpenIsolated(t, func(cfg *pgxpool.Config) {
 		dial := cfg.ConnConfig.DialFunc
 		cfg.ConnConfig.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -58,6 +57,7 @@ func TestCancelledOwnershipPingClosesExecutionLease(t *testing.T) {
 		}
 	})
 	lease := acquireLease(t, pool)
+	t.Cleanup(releaseRead)
 	armed.Store(true)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
