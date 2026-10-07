@@ -44,7 +44,7 @@ Core uses its own PostgreSQL database and account and shares no tables with an a
 
 ## Tests
 
-`make check-core` builds Core and runs the Go tests of `services/core` and `packages/agents-client`. Point `OAC_TEST_DATABASE_URL` at a dedicated database named `oac_*_tests` that holds no other tables; the tests apply only Core's migrations and use fresh tenants without truncating anything. Without it, database tests skip locally; CI provides its own PostgreSQL. Set `OAC_TEST_OFFICIAL_SDK_PYTHON` to the interpreter with the pinned SDK for the store's client fixtures. [Validate a change](../../docs/development.md#validate-a-change) lists the focused checks for other areas.
+`make check-core` builds Core and runs the Go tests of `services/core` and `packages/agents-client`. Point `OAC_TEST_DATABASE_URL` at a dedicated database named `oac_*_tests` that holds no other tables; the tests apply only Core's migrations and use fresh tenants without truncating anything. Without it, database tests skip locally; CI provides its own PostgreSQL. Set `OAC_TEST_OFFICIAL_SDK_PYTHON` to the interpreter with the pinned SDK for the official-client tests in `tests/integration`. [Validate a change](../../docs/development.md#validate-a-change) lists the focused checks for other areas.
 
 ### Official client verification
 
@@ -62,4 +62,4 @@ It checks the upstream and generated response schemas, retries, ordering, tenant
 
 ## Generated contracts
 
-Handler annotations generate the OpenAPI documents. Run `make openapi` after changing them: it runs the pinned swaggo generator and splits the result by namespace into [`openapi.yaml`](../../contracts/agents-api/openapi.yaml) (`/v1`), [`core.openapi.yaml`](../../contracts/agents-api/core.openapi.yaml) (`/core/v1`) and [`runtime.openapi.yaml`](../../contracts/agents-api/runtime.openapi.yaml) (`/api/v1`), each with only the security schemes its operations use. Review and commit the three diffs. Contract tests hold `openapi.yaml` to the pinned routes and fields, and hold all three to exactly the routes the server registers.
+Run `make openapi` after changing the pinned public schema, Go bindings, Core extensions or internal handler annotations. The [contract generation guide](../../contracts/agents-api/index.md#pinned-baseline) owns the inputs, generated files and checks. Review and commit the generated diffs. `make check-openapi` verifies freshness; contract tests check all three documents against registered routes.

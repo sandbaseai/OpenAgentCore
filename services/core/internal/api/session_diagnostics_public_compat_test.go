@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/db/sqlc"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/identity"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgunit"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/sessionpg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/migrations"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,12 +26,13 @@ func TestDiagnosticPublicCompatibility(t *testing.T) {
 	key := callerBinding()
 	deps, fakes := testDependencies(t)
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
-	databaseSessionReads(s, pool)(&deps, fakes)
+	databaseSessionReads(pool)(&deps, fakes)
 	h := newTestHandler(t, deps)
-	session, err := s.CreateSession(t.Context(), key.TenantID, sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "compat-test"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"id":"agent_root","model":"test"},"environment":{"type":"none"}}`)})
+	created, err := s.CreateSession(t.Context(), key.TenantID, sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "compat-test"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"id":"agent_root","model":"test"},"environment":{"type":"none"}}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	session := created.Session
 	turn := uuid.NewString()
 	item := uuid.NewString()
 	if _, err = pool.Exec(t.Context(), "UPDATE sessions SET created_at='2026-09-28T00:00:00Z' WHERE id=$1", session.ID); err != nil {
@@ -62,16 +64,53 @@ func diagnosticRequest(handler http.Handler, path, token string) *httptest.Respo
 	return w
 }
 
-// databaseSessionReads serves Session, Turn and diagnostic reads from s, and
-// Item reads from the Session adapter on pool.
-func databaseSessionReads(s *store.Store, pool *pgxpool.Pool) func(*Dependencies, *testFakes) {
+// databaseSessionReads serves Session, Turn, diagnostic and Item reads from
+// the Session adapter on pool.
+func databaseSessionReads(pool *pgxpool.Pool) func(*Dependencies, *testFakes) {
 	return func(d *Dependencies, _ *testFakes) {
-		d.Sessions, d.Turns, d.SessionAdmin = s, s, s
-		d.Items = sessionpg.New(pgunit.NewPool(pool), nil)
+		reader := sessionpg.New(pgunit.NewPool(pool), nil)
+		d.SessionsReader, d.SessionAdmin, d.Items, d.Turns = reader, reader, reader, reader
 	}
 }
 
-func diagnosticDatabase(t *testing.T) (*store.Store, *pgxpool.Pool) {
+// submitMessage admits one message input through the Session service on pool.
+func submitMessage(t *testing.T, pool *pgxpool.Pool, tenant, session, key string, payload json.RawMessage) sessions.InputReceipt {
+	t.Helper()
+	service, err := sessions.NewService(sessionpg.New(pgunit.NewPool(pool), nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipts, err := service.SubmitInputs(t.Context(), tenant, session, key, []sessions.Input{{Kind: "message", Payload: payload}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipts[0]
+}
+
+// transitionTurn moves the Turn as the execution owner does, over a pooled
+// Session transaction.
+func transitionTurn(t *testing.T, pool *pgxpool.Pool, tenant, session, turn string, transition sessions.TurnTransition) {
+	t.Helper()
+	tenantID, err := pgunit.ParseID(tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := pgunit.ParseID(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sessionpg.WithSession(t.Context(), pgunit.NewPool(pool), tenantID, sessionID, func(ctx context.Context, q *sqlc.Queries, _ sessions.LockedSession) error {
+		_, err := sessions.TransitionTurn(ctx, sessionpg.BindSession(q, tenantID, sessionID), turn, transition)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// diagnosticDatabase opens the dedicated test database and the Session
+// service on it.
+func diagnosticDatabase(t *testing.T) (*sessions.Service, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("OAC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -96,5 +135,9 @@ func diagnosticDatabase(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	if err = migrations.Apply(t.Context(), dsn); err != nil {
 		t.Fatal(err)
 	}
-	return store.New(pool), pool
+	service, err := sessions.NewService(sessionpg.New(pgunit.NewPool(pool), nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, pool
 }

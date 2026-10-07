@@ -74,7 +74,7 @@ func (h *Handler) adminRuntimeObservations(w http.ResponseWriter, r *http.Reques
 	}
 	page, err := h.Admin.ListAdminRuntimeTargets(ctx, tenants, options.after, options.limit, options.ascending)
 	if err != nil {
-		writeStoreError(w, r, err)
+		writeSessionsError(w, r, err)
 		return
 	}
 	sessions := make([]runtimeobs.SessionIdentity, len(page.Data))
@@ -87,14 +87,14 @@ func (h *Handler) adminRuntimeObservations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := firstRuntimeObservationError(errs); err != nil {
-		writeStoreError(w, r, err)
+		writeOperationError(w, r, err)
 		return
 	}
 	response := AdminRuntimeObservationList{Object: "list", Data: make([]AdminRuntimeObservation, len(page.Data)), HasMore: page.HasMore}
 	for index, observation := range observations {
 		detail, err := adminRuntimeObservationResponse(observation)
 		if err != nil {
-			writeStoreError(w, r, err)
+			writeOperationError(w, r, err)
 			return
 		}
 		response.Data[index] = AdminRuntimeObservation{ProjectID: projectByTenant[page.Data[index].TenantID], Observation: detail}

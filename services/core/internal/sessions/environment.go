@@ -38,10 +38,10 @@ type EnvironmentReader interface {
 	ReadInitialEnvironmentFile(ctx context.Context, tenant, session string, position int) (environmentconfig.InitialFileMetadata, []byte, error)
 }
 
-// CreatesEnvironment reports whether a Session created with the configuration
+// createsEnvironment reports whether a Session created with the configuration
 // snapshot has an Environment: a self_hosted or openai_hosted one does, and
 // none or no Environment does not. Any other snapshot is ErrInvalidInput.
-func CreatesEnvironment(configuration json.RawMessage) (bool, error) {
+func createsEnvironment(configuration json.RawMessage) (bool, error) {
 	var snapshot struct {
 		Environment *struct {
 			Type string `json:"type"`
@@ -98,6 +98,8 @@ const (
 type EnvironmentInputReservation struct {
 	ID        string
 	SessionID string
+	// Key is the idempotency key the reservation's batch is admitted under.
+	Key       string
 	State     string
 	IsInitial bool
 	Inputs    []Input

@@ -45,6 +45,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/nativeinstaller"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/agentpg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/auditpg"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/coremetricspg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/deploymentpg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/filepg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/modelconfigurationpg"
@@ -60,13 +61,10 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeenrollment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimehistory"
-	historystoreresolver "github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimehistory/storeresolver"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs"
-	observationstoreresolver "github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs/storeresolver"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/providers"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/skills"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/vaults"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -141,7 +139,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	executionStore := store.NewWithCredentialCipher(pool, credentialKey)
 	units := pgunit.NewPool(pool)
 	auditStore := auditpg.New(units)
 	agentStore := agentpg.New(units, credentialKey)
@@ -181,16 +178,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Session creation in store still decides admission and placement until
-	// it moves to sessions.
-	executionStore.SetPlacement(placementRules)
 	deploymentStore := deploymentpg.New(units, credentialKey)
 	deploymentService, err := deployment.NewService(deploymentStore, deploymentStore, sandboxProviders, placementRules)
 	if err != nil {
 		return err
 	}
 	sessionStore := sessionpg.New(units, credentialKey)
-	sessionService, err := sessions.NewService(sessionStore)
+	sessionService, err := sessions.NewService(sessionStore, placementRules)
 	if err != nil {
 		return err
 	}
@@ -198,7 +192,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	metricsSource := &coreMetricsSource{store: executionStore, pool: pool}
+	metricsSource := &coreMetricsSource{store: coremetricspg.New(units), pool: pool}
 	metrics := coremetrics.New(processStartedAt, buildRevision, metricsSource)
 	auditRetention, err := writeAuditRetention()
 	if err != nil {
@@ -229,11 +223,11 @@ func run() error {
 		managed = managedNodes.runtime
 		observationSources[managed.InstallationID] = managedNodes.setup
 	}
-	observationResolver, err := observationstoreresolver.NewResolver(executionStore, deploymentStore)
+	observationResolver, err := deployment.NewObservationResolver(sessionStore, deploymentStore)
 	if err != nil {
 		return err
 	}
-	history, err := runtimeHistory(ctx, executionStore, public != "")
+	history, err := runtimeHistory(ctx, units, public != "")
 	if err != nil {
 		return err
 	}
@@ -273,11 +267,7 @@ func run() error {
 	if err := api.ValidateCredentialSeparation(ctx, keyAdmin, projectStore); err != nil {
 		return err
 	}
-	historyResolver, err := historystoreresolver.NewResolver(sessionStore)
-	if err != nil {
-		return err
-	}
-	historyService, err := runtimehistory.NewService(historyResolver, history.Reader)
+	historyService, err := runtimehistory.NewService(sessionStore, history.Reader)
 	if err != nil {
 		return err
 	}
@@ -290,7 +280,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		daemonHandler, registry, err = runtime.NewGateway(sessionStore, sessionService, executionStore, executorURL)
+		daemonHandler, registry, err = runtime.NewGateway(sessionStore, sessionService, sessionStore, executorURL)
 		if err != nil {
 			return err
 		}
@@ -306,8 +296,9 @@ func run() error {
 			nativeInstaller = &api.NativeInstaller{Version: buildRevision, Catalog: catalog}
 		}
 	}
+	var deploymentExecution *deployment.ExecutionOperations
 	if registry != nil {
-		dispatcher := &execution.Dispatcher{Store: executionStore, Registry: registry,
+		dispatcher := &execution.Dispatcher{Registry: registry,
 			Credentials: vaultService, Observer: modelConfigurationStore, Deployment: deploymentService, DeploymentReader: deploymentStore,
 			Sessions:        sessionService,
 			SessionsReader:  sessionStore,
@@ -316,7 +307,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		deploymentExecution, err := deployment.NewExecutionOperations(deploymentService, deploymentpg.NewExecution(lease, credentialKey))
+		deploymentExecution, err = deployment.NewExecutionOperations(deploymentService, deploymentpg.NewExecution(lease, credentialKey))
 		if err != nil {
 			return errors.Join(err, lease.Close(ctx))
 		}
@@ -327,7 +318,6 @@ func run() error {
 		// From this call on the Worker closes the lease, even when it fails to start.
 		worker, err = execution.StartWorker(ctx, dispatcher, execution.Owner{
 			Lease:      lease,
-			Store:      store.NewExecution(executionStore, lease),
 			Deployment: deploymentExecution,
 			Sessions:   sessionExecution,
 		})
@@ -402,17 +392,18 @@ func run() error {
 		EnvironmentTemplates: environmentTemplates, EnvironmentTemplatesReader: templateStore,
 		Files: fileService, FilesReader: fileStore,
 		Agents: agentService, AgentsReader: agentStore,
-		Sessions:        executionStore,
-		SessionCreation: executionStore,
-		SessionEvents:   executionStore,
-		Turns:           executionStore,
+		Sessions:        sessionService,
+		SessionsReader:  sessionStore,
+		SessionCreation: sessionService,
+		SessionEvents:   sessionStore,
+		Turns:           sessionStore,
 		Items:           sessionStore,
 		Subagents:       sessionStore,
 		Artifacts:       sessionService,
 		ArtifactsReader: sessionStore,
-		SessionAdmin:    executionStore,
+		SessionAdmin:    sessionStore,
 		Environments:    sessionService, EnvironmentsReader: sessionStore, ExecutorConnections: executorConnections{sessions: sessionStore, registry: registry},
-		Admin: executionStore, AdminAudit: auditStore, WriteAudit: auditStore, Metrics: metrics,
+		Admin: sessionStore, AdminAudit: auditStore, WriteAudit: auditStore, Metrics: metrics,
 		RuntimeObservations: observationService, RuntimeHistory: historyService,
 	}
 	if worker != nil {
@@ -420,7 +411,7 @@ func run() error {
 			ExecutorURL:      executorURL,
 			SessionAdmission: worker,
 			InputAdmission:   worker,
-			SessionArchive:   worker,
+			SessionArchive:   deploymentExecution,
 			Workspaces:       worker,
 			NativeInstaller:  nativeInstaller,
 		}

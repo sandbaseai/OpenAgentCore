@@ -8,7 +8,13 @@ OpenAgentCore is protocol-first and modular. Core orchestrates operations that p
 
 OpenAgentCore is infrastructure. Change a boundary only when the existing protocol cannot express the behavior, and make that the smallest change that leaves the design intact. Hold the code to the standard of a careful, widely used open-source service.
 
-Keep it concise. Write elegant code that reuses existing code and standard SDKs as far as possible, and avoid redundant code. Expose nothing that does not need to be exposed: no port, route, command or setting without a caller.
+### Simplicity and performance
+
+Do not multiply entities without necessity. The long-term goal is minimal code, dependencies and runtime overhead while preserving protocol correctness, isolation and clear ownership.
+
+- Before adding an abstraction, package, dependency, service, execution path or setting, show why existing code and maintained standard SDKs cannot meet a current requirement cleanly. Prefer reuse, simplification and deletion; do not build extension points for hypothetical needs. Expose no port, route, command or setting without a caller.
+- Keep cohesive responsibilities together and remove redundant layers and indirection. Split code at a real responsibility or protocol boundary, not to meet a file-size target. Fewer files or packages alone do not establish simplicity.
+- Justify performance optimizations with reproducible measurements against a baseline under representative workloads. Compare the relevant latency, throughput, allocations, memory use, startup time or distribution size, and account for added complexity and resource costs. Keep the simplest implementation that meets the measured requirement.
 
 ### Protocols at every boundary
 
@@ -19,7 +25,7 @@ Keep it concise. Write elegant code that reuses existing code and standard SDKs 
 
 | Boundary | Protocol code | Protocol doc |
 | --- | --- | --- |
-| Application–Core (`/v1`) | Types in `contracts/agents-api/v1/` and route annotations in `services/core/internal/api/`; `make openapi` generates `contracts/agents-api/openapi.yaml` | [Agents API guide](docs/api/public-agent-api.md) |
+| Application–Core (`/v1`) | Official schema pinned by `contracts/agents-api/upstream.json` plus Go-owned `x_agents_core` extensions; `make openapi` generates public Go types and `contracts/agents-api/openapi.yaml` | [Agents API guide](docs/api/public-agent-api.md) |
 | Web and operators–Core (`/core/v1`) | Route annotations in `services/core/internal/api/`; `make openapi` generates `contracts/agents-api/core.openapi.yaml` | [Core administration API](contracts/agents-api/admin-api.md) |
 | Nodes and daemons–Core (`/api/v1` HTTP routes; the node and daemon wire protocols are separate rows) | Route annotations in `services/core/internal/api/`; `make openapi` generates `contracts/agents-api/runtime.openapi.yaml` | [Machine connection API](contracts/agents-api/machine-api.md) |
 | Core–Sandbox Provider | `services/core/internal/sandbox/sandbox_provider.go` | [Sandbox Provider guide](docs/sandbox-provider.md) |

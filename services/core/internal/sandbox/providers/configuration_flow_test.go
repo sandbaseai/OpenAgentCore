@@ -18,7 +18,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/providers"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -89,7 +88,6 @@ func TestAdditionalConfigurationProviderUsesCommonAPIAndStore(t *testing.T) {
 	}
 	adapter.Configuration = regionalCodec{}
 	registry := providers.FixtureRegistry(t, kind, adapter)
-	s := store.New(pool)
 	// The deployment reaches the registered configuration only through the
 	// registry it is built with.
 	deployments := func() *deployment.Service {
@@ -122,8 +120,8 @@ func TestAdditionalConfigurationProviderUsesCommonAPIAndStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The flow reaches only the store areas and the deployment setup; every
-	// other dependency panics if called.
+	// The flow reaches only the deployment setup; every other dependency
+	// panics if called.
 	h, err := api.NewHandler(api.Dependencies{
 		Engine: "codex", CoreKeys: auth, InstallationBindings: service,
 		Projects: struct{ api.Projects }{}, ProjectsReader: struct{ api.ProjectsReader }{},
@@ -133,23 +131,24 @@ func TestAdditionalConfigurationProviderUsesCommonAPIAndStore(t *testing.T) {
 		EnvironmentTemplates: struct{ api.EnvironmentTemplates }{}, EnvironmentTemplatesReader: struct{ api.EnvironmentTemplatesReader }{},
 		Skills: struct{ api.Skills }{}, SkillsReader: struct{ api.SkillsReader }{},
 		Agents: struct{ api.Agents }{}, AgentsReader: struct{ api.AgentsReader }{},
-		Sessions:        s,
-		SessionCreation: s,
-		SessionEvents:   s,
-		Turns:           s,
+		Sessions:        struct{ api.Sessions }{},
+		SessionsReader:  struct{ api.SessionsReader }{},
+		SessionCreation: struct{ api.SessionCreation }{},
+		SessionEvents:   struct{ api.SessionEvents }{},
+		Turns:           struct{ api.Turns }{},
 		Items:           struct{ api.Items }{},
 		Subagents:       struct{ api.Subagents }{},
 		Artifacts:       struct{ api.Artifacts }{},
 		ArtifactsReader: struct{ api.ArtifactsReader }{},
-		SessionAdmin:    s,
-		Environments:    struct{ api.Environments }{}, EnvironmentsReader: struct{ api.EnvironmentsReader }{}, Admin: s, AdminAudit: struct{ api.AdminAudit }{}, WriteAudit: struct{ api.WriteAudit }{},
+		SessionAdmin:    struct{ api.SessionAdmin }{},
+		Environments:    struct{ api.Environments }{}, EnvironmentsReader: struct{ api.EnvironmentsReader }{}, Admin: struct{ api.Admin }{}, AdminAudit: struct{ api.AdminAudit }{}, WriteAudit: struct{ api.WriteAudit }{},
 		ExecutorConnections: struct{ api.ExecutorConnections }{},
 		Metrics:             struct{ api.Metrics }{}, RuntimeObservations: struct{ api.RuntimeObservations }{}, RuntimeHistory: struct{ api.RuntimeHistory }{},
 		Execution: &api.Execution{
 			ExecutorURL:      "wss://core.example/api/v1/agent-daemon/ws",
-			SessionAdmission: s,
-			InputAdmission:   s,
-			SessionArchive:   s,
+			SessionAdmission: struct{ api.SessionAdmission }{},
+			InputAdmission:   struct{ api.InputAdmission }{},
+			SessionArchive:   struct{ api.SessionArchive }{},
 			Workspaces:       struct{ api.EnvironmentWorkspaces }{},
 		},
 		Sandboxes: &api.Sandboxes{Deployment: service, NodeAllocations: deploymentpg.New(pgunit.NewPool(pool), nil), DeploymentChanges: leaseSetup{t: t, changes: changes, installation: installation},

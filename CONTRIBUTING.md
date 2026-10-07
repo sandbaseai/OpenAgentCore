@@ -52,7 +52,6 @@ Core must build, deploy and run independently of product services, frontends and
 - Parsar owns users, workspaces, business authorization, Agent/Team definitions, capabilities, product conversations, IM/sharing, approval decisions and billing. It uses Core for execution.
 - A product conversation may reference several execution Sessions. Core owns native engine session identities; an execution Session has its own lifetime, separate from a daemon connection, process or sandbox.
 - Build application orchestration on the [public Session and event contract](docs/api/public-agent-api.md). Product cursor replay must be an explicit product extension. Business Team orchestration belongs to the application; Core's pinned `multi_agent` and Subagent resources remain part of the public contract.
-- Daemon Skill/SP authoring is a product operation: forward it through a scoped product callback that checks the original requester and workspace. A Runtime credential alone must not authorize business writes.
 
 ### Optional application example
 
@@ -78,6 +77,7 @@ Record unrelated findings without starting them. Scope compatibility claims to t
 
 ### Implementation conventions
 
+- Apply the [simplicity and performance principles](AGENTS.md#simplicity-and-performance) when adding structure or optimizing execution.
 - Keep one formatter, parser, validator and error mapper per job, and one error mapper per API surface.
 - Share frontend formatting and labels in `apps/web/src/lib/`.
 - Use `internal/obs/log` for logs. Keep credentials out of source and logs. Harness profiles must not copy Runtime tool environment values; see the [environment contract](contracts/agents-api/environments.md#explicit-local-tool-environment).
@@ -142,7 +142,7 @@ Native adapter changes require their build/check targets and live provider accep
 | Provider ownership labels | `io.oac.*` |
 | E2B metadata | `oac_*` |
 
-Provider bootstrap, Runtime images and Harness adapters must agree on these names. The separate Parsar product integration settings keep their own names.
+Provider bootstrap, Runtime images and Harness adapters must agree on these names.
 
 The [installation version policy](docs/getting-started/operations.md#installation-version-policy) owns release changes and preservation of installed data and resources.
 
