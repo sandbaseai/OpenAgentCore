@@ -102,6 +102,7 @@ func environmentFilesAccessible(w http.ResponseWriter, environment sessions.Envi
 		Type string `json:"type"`
 	}
 	if environment.Status == "pending" && json.Unmarshal(environment.Configuration, &configuration) == nil && configuration.Type == "openai_hosted" {
+		environmentFileDiagnostic(w, nil, rejectionHostedEnvironmentProvisioning)
 		writeFieldError(w, errHostedEnvironmentProvisioning)
 		return false
 	}

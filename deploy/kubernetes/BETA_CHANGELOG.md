@@ -76,3 +76,22 @@ Publish matching Core, provider helpers and a newly built Runtime template toget
 | Required release assets | Matching Core/Web release; retain the selected Runtime template |
 
 History sampling observes Worker ownership without using its short-lived contexts on the execution lease connection. Execution retains authoritative lease checks and fails closed on ownership loss. Worker shutdown immediately invalidates the sampling observation. Lease failure logs identify cancellation, timeout and connection state without SQL or error text, and Worker failure logs identify the exiting stage. [Runtime observability](../../contracts/agents-api/runtime-observability.md#sampling-ownership) owns these rules.
+
+
+## 2026-10-07 — Environment file rejection diagnostics
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `8aebb6c8bf531b90828bc7efd369f4e49535c67a` |
+| Feature branch | `codex/core-safe-http-rejection-diagnostics` |
+| Integrated source commit | `914e1d359b0bc0e3dd6f6913313481a5abb7e509` |
+| Integration | Cherry-pick; translated operations source hash recomputed against the merged English document |
+| Schema migrations / DDL / SQL changes | None |
+| Runtime bootstrap / provider helpers / node wire / native pins | Unchanged |
+| Required release assets | Core and Web built from the same integrated beta commit; retain the selected Runtime template |
+
+The Environment file creation handler adds request- and trace-correlated static rejection diagnostics without changing API responses or execution. [Operations](../../docs/getting-started/operations.md#environment-file-rejection-logs) owns the event fields and coverage. Existing beta readiness and runtime behavior remain in place.
+
+Deploy through **core-deploy** from workflow branch `main`, selecting `source_branch=beta` and the full integrated commit already merged into beta, as described in the [Kubernetes guide](README.md#deploy). This replaces the existing production Core and Web; it does not create a separate beta environment. No Runtime template build or activation is required by this diagnostic change.
+
+Verify both rollout revisions and ready Service endpoints, then check public health and authenticated API behavior. A safe rejected Environment file request can establish that the new event is correlated with its response IDs; it does not prove a successful upload or identify the cause of earlier 400 responses. This entry records integration requirements, not deployment success. Do not replay uncertain uploads or create paid execution solely to produce diagnostic evidence.
