@@ -64,3 +64,15 @@ The administrative deployment update records authenticated administrator provena
 A combined image retains all packaged Harnesses, while each managed Runtime discovers and registers only the Session-selected Harness. Unknown or unavailable selections fail without substituting another implementation. Self-hosted installations retain their installed Harness set. Codex version probes still validate the executable and expose secret-safe process spawn/wait timing.
 
 Publish matching Core, provider helpers and a newly built Runtime template together. Node deployments require matching protocol-version-6 nodes. Existing allocations retain their bootstrap and Runtime; qualification must use a fresh allocation. [Runtime bootstrap](../../docs/runtime-bootstrap.md) owns the startup contract.
+
+## 2026-10-07 — Isolate history sampling from execution ownership
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `c68a68443d1856fcde3f64130b559b331de12184` |
+| Feature branch | `codex/core-lease-failure-diagnostics` |
+| Schema migrations / DDL / SQL changes | None |
+| Runtime bootstrap / provider helpers / node wire / native pins | Unchanged |
+| Required release assets | Matching Core/Web release; retain the selected Runtime template |
+
+History sampling observes Worker ownership without using its short-lived contexts on the execution lease connection. Execution retains authoritative lease checks and fails closed on ownership loss. Worker shutdown immediately invalidates the sampling observation. Lease failure logs identify cancellation, timeout and connection state without SQL or error text, and Worker failure logs identify the exiting stage. [Runtime observability](../../contracts/agents-api/runtime-observability.md#sampling-ownership) owns these rules.

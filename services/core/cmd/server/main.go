@@ -81,7 +81,7 @@ func main() {
 		return
 	}
 	if err := run(); err != nil {
-		log.Bg().Error("oac-core startup failed", "error", err)
+		log.Bg().Error("oac-core failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -350,11 +350,12 @@ func run() error {
 		if worker == nil {
 			return errors.New("Runtime history periodic sampling requires the execution worker")
 		}
-		sampler, err := runtimeobs.NewSampler(observationResolver, observationService, worker, runtimeobs.SamplerOptions{
+		historyOwner := runtimeHistoryOwnership{snapshot: worker.MetricsSnapshot}
+		sampler, err := runtimeobs.NewSampler(observationResolver, observationService, historyOwner, runtimeobs.SamplerOptions{
 			Interval: history.SampleInterval,
 			Report: func(result runtimeobs.SweepResult) {
 				sampleCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				sampleErr := worker.CheckOwnership(sampleCtx)
+				sampleErr := historyOwner.CheckOwnership(sampleCtx)
 				if sampleErr == nil {
 					_, sampleErr = deploymentStore.SampleHostHistory(sampleCtx)
 				}

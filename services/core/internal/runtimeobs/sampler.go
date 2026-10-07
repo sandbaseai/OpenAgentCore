@@ -33,6 +33,8 @@ type HistoryObserver interface {
 	ObserveSessionsForHistory(context.Context, []SessionIdentity, OwnershipChecker, PageOptions) ([]Observation, []error)
 }
 
+// OwnershipChecker observes permission to sample, never execution authority.
+// Its short-lived contexts must not operate on the execution lease connection.
 type OwnershipChecker interface {
 	CheckOwnership(context.Context) error
 }
