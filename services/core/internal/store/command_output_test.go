@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -148,5 +151,88 @@ func TestExecutionJournalsCommandOutputBeforeCancellation(t *testing.T) {
 	page, err := sessionReads(h.db.pool).ListItems(ctx, h.tenant, h.session.ID, "", 100, true)
 	if err != nil || len(page.Items) != 2 || page.Items[1].Status != "incomplete" || page.Items[1].Output != "partial" {
 		t.Fatalf("journal/cancellation lost partial output: %+v %v", page, err)
+	}
+}
+
+func TestExecutionSecondTurnCommandSnapshotAndStorageFailure(t *testing.T) {
+	for _, failStorage := range []bool{false, true} {
+		t.Run(fmt.Sprint(failStorage), func(t *testing.T) {
+			h := newDispatchHarness(t)
+			ctx := t.Context()
+			first := h.message("first", "first input")
+			result := h.run(ctx, first.TurnID)
+			h.read(testExecutionRequest)
+			h.write(first.TurnID, proto.TypeDone, proto.DonePayload{Content: "retained first reply"})
+			h.finished(result, sessions.TurnCompleted)
+			history, err := sessionReads(h.db.pool).ListItems(ctx, h.tenant, h.session.ID, "", 100, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			second := h.message("second", "second input")
+			result = h.run(ctx, second.TurnID)
+			h.read(testExecutionRequest)
+			h.write(second.TurnID, proto.TypeToolCall, proto.ToolCallPayload{ID: "cmd", Stage: "before", Observation: &proto.ToolObservation{Kind: "command", Command: "fixture", Status: "in_progress"}})
+			h.write(second.TurnID, proto.TypeCommandOutput, proto.CommandOutputPayload{ID: "cmd", Delta: "retained stream"})
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				events, err := h.s.ListTurnEvents(ctx, h.tenant, h.session.ID, second.TurnID, 0, 100)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(events) >= 2 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("stream not persisted")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// A full snapshot exceeds the old journal limit. A NUL is instead a
+			// deterministic PostgreSQL JSONB failure, not a native engine failure.
+			output := strings.Repeat("x", 2*1024*1024)
+			expectedStatus, expectedOutput := "completed", output
+			turnStatus := sessions.TurnCompleted
+			if failStorage {
+				output = "\x00"
+				expectedStatus, expectedOutput = "incomplete", "retained stream"
+				turnStatus = sessions.TurnFailed
+			}
+			raw, _ := json.Marshal(output)
+			h.write(second.TurnID, proto.TypeToolCall, proto.ToolCallPayload{ID: "cmd", Stage: "after", Observation: &proto.ToolObservation{Kind: "command", Command: "fixture", Status: "completed", Output: raw}})
+			h.write(second.TurnID, proto.TypeDone, proto.DonePayload{Content: "second reply"})
+			turn := h.finished(result, turnStatus)
+			if failStorage {
+				var outcome struct {
+					ErrorCode string `json:"error_code"`
+				}
+				if json.Unmarshal(turn.Outcome, &outcome) != nil || outcome.ErrorCode != "event_persistence_failed" {
+					t.Fatal("wrong failure outcome")
+				}
+			}
+			page, err := sessionReads(h.db.pool).ListItems(ctx, h.tenant, h.session.ID, "", 100, true)
+			if err != nil || len(page.Items) < len(history.Items)+2 {
+				t.Fatal("missing Items", err)
+			}
+			if !reflect.DeepEqual(page.Items[:len(history.Items)], history.Items) {
+				t.Fatal("prior Turn Items changed")
+			}
+			found := false
+			for _, item := range page.Items {
+				if item.TurnID == second.TurnID && item.Type == "command_execution" {
+					found = true
+					if item.Status != expectedStatus || item.Output != expectedOutput {
+						t.Fatal("command snapshot/terminal state mismatch")
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing command Item")
+			}
+			events, err := h.s.ListTurnEvents(ctx, h.tenant, h.session.ID, second.TurnID, 0, 100)
+			if err != nil || len(events) == 0 || events[len(events)-1].Kind != "execution_"+turnStatus {
+				t.Fatal("journal terminal mismatch", err)
+			}
+		})
 	}
 }

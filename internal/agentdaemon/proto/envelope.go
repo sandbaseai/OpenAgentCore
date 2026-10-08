@@ -27,6 +27,9 @@ import (
 	"fmt"
 )
 
+// MaxFrameBytes bounds a complete JSON frame on the Core–Runtime connection.
+const MaxFrameBytes = 4 * 1024 * 1024
+
 // Envelope is the outer JSON frame. Payload is held as raw JSON so the
 // routing layer can dispatch by Type before paying a per-event decode.
 type Envelope struct {

@@ -159,3 +159,61 @@ func TestCancellationReceiptContinuitySurvivesFlushFailure(t *testing.T) {
 		t.Fatal("receipt or partial text lost")
 	}
 }
+
+// Transport-valid terminal snapshots must survive the same journal as their
+// streamed output. The final snapshot is authoritative, not another delta.
+func TestJournalAcceptsTransportSizedCommandSnapshot(t *testing.T) {
+	for _, size := range []int{528382, 2 * 1024 * 1024} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			writer := &validatingWriter{}
+			j := journal{writer: writer, next: 1, turn: "c8b7fc8b-23e1-49f5-aaec-6d81398d218a"}
+			for _, p := range []proto.ToolCallPayload{
+				{ID: "cmd", Stage: "before", Observation: &proto.ToolObservation{Kind: "command", Command: "fixture", Status: "in_progress"}},
+				{ID: "cmd", Stage: "after", Observation: &proto.ToolObservation{Kind: "command", Command: "fixture", Status: "completed", Output: []byte(`"` + strings.Repeat("x", size) + `"`)}},
+			} {
+				env, err := proto.NewEnvelope(proto.TypeToolCall, j.turn, p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = j.observe(t.Context(), env); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := j.flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(writer.events) != 2 || j.next != 3 {
+				t.Fatal("lost terminal snapshot")
+			}
+		})
+	}
+}
+
+type validatingWriter struct{ events []sessions.ExecutionEvent }
+
+func (w *validatingWriter) AppendTurnEvents(_ context.Context, _, _, turn string, first int32, events []sessions.ExecutionEvent) error {
+	if _, err := sessions.NewJournalBatch(turn, first, events); err != nil {
+		return err
+	}
+	w.events = append(w.events, events...)
+	return nil
+}
+
+func TestJournalRejectsOversizedEventAndRetainsHistory(t *testing.T) {
+	writer := &validatingWriter{}
+	j := journal{writer: writer, next: 1, turn: "c8b7fc8b-23e1-49f5-aaec-6d81398d218a"}
+	before, _ := proto.NewEnvelope(proto.TypeDelta, j.turn, proto.DeltaPayload{Delta: "retained"})
+	if err := j.observe(t.Context(), before); err != nil {
+		t.Fatal(err)
+	}
+	oversized, _ := proto.NewEnvelope(proto.TypeDelta, j.turn, proto.DeltaPayload{Delta: strings.Repeat("x", proto.MaxFrameBytes)})
+	if err := j.observe(t.Context(), oversized); !errors.Is(err, sessions.ErrEventLimit) {
+		t.Fatal(err)
+	}
+	if err := j.flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 1 || string(writer.events[0].Payload) != string(before.Payload) {
+		t.Fatal("history changed after rejection")
+	}
+}

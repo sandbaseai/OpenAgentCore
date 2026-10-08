@@ -6,6 +6,8 @@ This protocol connects Core to a Runtime daemon after the daemon has its machine
 
 Hosted and self-hosted Runtimes use the same protocol. A Harness joins through the [Harness adapter contract](../contracts/agents-api/harness-onboarding.md), which owns the Executor and Turn lifecycle obligations behind the Runtime registry.
 
+Connection frames are limited to 4 MiB by `proto.MaxFrameBytes`. Core journals a transport-valid observation without truncating its payload. Ordinary journal batches hold up to 64 observations and 1 MiB; a larger observation is stored alone. Each Turn remains limited to 65,536 observations and 32 MiB, with one reserved terminal outcome beyond those limits. Journal failures fail the Turn and retain committed Items. The `execution journal failed` log records Project, Session and Turn IDs, trace context, stage, event kind, byte count, journal position and a bounded failure category or SQLSTATE; it never records event payloads or raw error text.
+
 ## Ownership and connection
 
 Core owns durable Session, Turn, input and Environment records, scheduling and reconciliation. Runtime owns native Executors, active Turns, transfer state and cleanup until settlement. A Sandbox Provider owns placement and the surrounding compute. Releasing an execution admission or closing an Executor never deletes, suspends or reclaims a sandbox. The daemon is not an isolation boundary; see [Runtime and outer isolation](./concepts.md#runtime-and-outer-isolation).

@@ -163,3 +163,25 @@ func TestExecutionOperationsValidationOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestJournalSingleLargeObservationKeepsBatchAndTurnBudgets(t *testing.T) {
+	payload := json.RawMessage(`{"text":"` + strings.Repeat("x", journalPayloadBytes-len(`{"text":""}`)) + `"}`)
+	large := ExecutionEvent{Kind: "delta", Payload: payload}
+	batch, err := NewJournalBatch(testTurn, 1, []ExecutionEvent{large})
+	if err != nil || batch.bytes != journalPayloadBytes {
+		t.Fatalf("maximum event: bytes=%d err=%v", batch.bytes, err)
+	}
+	if err := batch.admit(JournalTurn{Status: TurnInProgress, EventBytes: journalTurnBytes - batch.bytes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.admit(JournalTurn{Status: TurnInProgress, EventBytes: journalTurnBytes - batch.bytes + 1}); !errors.Is(err, ErrEventLimit) {
+		t.Fatal("turn budget bypass", err)
+	}
+	if _, err := NewJournalBatch(testTurn, 1, []ExecutionEvent{large, event()}); !errors.Is(err, ErrEventLimit) {
+		t.Fatal("oversized multi-event batch accepted", err)
+	}
+	large.Payload = append([]byte(" "), payload...)
+	if _, err := NewJournalBatch(testTurn, 1, []ExecutionEvent{large}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal("oversized event accepted", err)
+	}
+}

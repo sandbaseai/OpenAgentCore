@@ -1,12 +1,14 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: cbc3c6419e2d4991df82d5bbfe3b556d35cccb57d1e4e7437facca7487caabcc
+source_hash: 01a9c4ddb5066c7f1aef74f5fc2a6833b389cdc16168d179221b95134dae1978
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
 
 托管和自托管 Runtime 使用同一协议。Harness 通过 [Harness adapter 契约](../../contracts/agents-api/zh/harness-onboarding.md)接入，该契约负责 Runtime registry 后的 Executor 和 Turn 生命周期义务。
+
+连接帧受 `proto.MaxFrameBytes` 的 4 MiB 上限约束。Core 会完整记录传输范围内的事件，不截断 payload。普通 journal 批次最多包含 64 个事件、合计 1 MiB；更大的单个事件独立存储。每个 Turn 仍限制为 65,536 个事件和 32 MiB，并在限制之外预留一条终态记录。journal 失败会使 Turn 失败并保留已提交的 Items。`execution journal failed` 日志记录 Project、Session、Turn ID、追踪上下文、阶段、事件类型、字节数、journal 位置以及有限的失败分类或 SQLSTATE；不记录事件 payload 或原始错误文本。
 
 ## 所有权与连接 {#ownership-and-connection}
 

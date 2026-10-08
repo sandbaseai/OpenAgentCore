@@ -10,6 +10,7 @@ import (
 )
 
 type journal struct {
+	ctx                   context.Context
 	writer                eventWriter
 	tenant, session, turn string
 	next                  int32
@@ -45,6 +46,7 @@ func recordCancellation(ctx context.Context, journal *journal, reply cancellatio
 
 func (j *journal) observe(ctx context.Context, env proto.Envelope) error {
 	if err := j.enqueue(env); err != nil {
+		j.reportFailure("enqueue", env.Type, len(env.Payload), err)
 		return err
 	}
 	if j.bytes > 768*1024 || len(j.batch) >= 64 {
@@ -63,7 +65,7 @@ func (j *journal) enqueue(env proto.Envelope) error {
 	default:
 		return nil
 	}
-	if len(env.Payload) > 512*1024 {
+	if len(env.Payload) > proto.MaxFrameBytes {
 		return sessions.ErrEventLimit
 	}
 	j.batch = append(j.batch, sessions.ExecutionEvent{Kind: env.Type, Payload: env.Payload})
@@ -94,6 +96,7 @@ func (j *journal) flush(ctx context.Context) error {
 		// An uncertain commit must retry the same batch even after more frames arrive.
 		j.pendingCount = count
 		if err := j.writer.AppendTurnEvents(ctx, j.tenant, j.session, j.turn, j.next, j.batch[:count]); err != nil {
+			j.reportFailure("flush", j.batch[0].Kind, size, err)
 			return err
 		}
 		j.pendingCount = 0
@@ -115,6 +118,7 @@ func (j *journal) drain(upstream <-chan proto.Envelope, result *Result) error {
 				return observedErr
 			}
 			if err := j.enqueue(env); err != nil {
+				j.reportFailure("drain", env.Type, len(env.Payload), err)
 				observedErr = err
 			}
 			if err := result.mergeObservation(env); err != nil {

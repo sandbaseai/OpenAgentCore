@@ -41,7 +41,7 @@ var (
 	// ReadLimit caps a single inbound frame at 4 MiB. tool_call
 	// results can be large but anything past this is almost certainly
 	// a misbehaving daemon (or hostile input).
-	ReadLimit int64 = 4 * 1024 * 1024
+	ReadLimit int64 = proto.MaxFrameBytes
 
 	// CloseRuntimeDeleted is a custom WS close code (4001) sent when
 	// a heartbeat discovers the runtime has been deleted. The daemon
