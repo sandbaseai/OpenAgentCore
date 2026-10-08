@@ -1,7 +1,7 @@
 ---
 title: "管理你的安装"
 source: docs/getting-started/operations.md
-source_hash: 9012f887f10171fb2abe27dc49770d429485673559c0d9661bd2100a34adce5f
+source_hash: 7e90cbe03d7b6ac8edeb5ea24177b0cb2abc5e79958157e6ed51d8b38b69a8a4
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -25,6 +25,17 @@ docker compose -f ~/.oac/core/compose.yaml ps
 | `docker compose down` | 移除容器。数据保留；要删除数据，请[卸载](#uninstall) |
 
 第二个安装使用自己的目录，例如 `~/.oac/second`。
+
+## Runtime 启动延迟 {#runtime-startup-latency}
+
+内联配对在消耗一次性 token 前验证 Harness，并复用发现结果。
+
+本地凭据解析和注册绑定完成后，Runtime 的 Harness 探测与带认证的 bootstrap HTTP 请求并行执行。两项都成功后，Runtime 才建立连接并公布能力；任一失败都会取消另一项并等待其清理完成。重连和挂起继续使用原有生命周期，并行执行不会跳过可执行程序或凭据校验。
+
+daemon 通过 `executor preparation stage` 记录 `stage=workspace`、executor 和 Session ID、毫秒耗时及 `success`。Codex 通过 `codex preparation stage` 记录 `session_plan`、`model_catalog`、`process_spawn`、`rpc_initialize` 和 `verification`，携带所属请求的 trace、耗时及 `success`。这些记录不包含原生错误文本、凭据、配置、模型目录内容或命令输出。未执行的条件阶段表示未观测，不能按零计算。`session_plan` 包含 `model_catalog`；executor 就绪耗时包含工作区准备、adapter 各阶段和传输开销，不应重复相加。失败的 `rpc_initialize` 包含必要的子进程清理。
+
+app-server 初始化前仍会校验并固定模型目录。阶段计时用于区分目录准备与原生进程初始化，本身不证明提速。应在相同 Runtime 模板、模型和 Provider 下对比全新及复用 Session，并同时验证持久化回复、用量和首字延迟。Runtime 启动逻辑变更需要重新构建和验收 Runtime 模板；仅替换 Core 不会更新既有沙箱。
+
 
 ## 服务健康状态 {#service-health}
 

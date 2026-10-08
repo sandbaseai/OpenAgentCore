@@ -121,3 +121,17 @@ Validation includes database-backed ordinary/stream creation and input recovery 
 Create validates the managed entry point through SDK file information and a streaming open instead of starting a probe process. The initialization command returns its bounded durable receipt, removing the separate ready-file read on the successful path. Ownership and configuration checks remain mandatory; uncertain responses recover through inspection without replaying initialization. The [helper guide](../../services/core/tools/e2b-provider/README.md#create) owns these behaviors.
 
 Validation includes generated-contract checks, 11 template tests, 261 helper tests, SDK transport fixtures, real local subprocess failure/recovery checks and independent review. These checks do not establish production latency savings; compare Create stages and the full cold Session path after rollout.
+
+## 2026-10-08 — Concurrent Runtime startup and preparation timings
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `d5ea46f1e7f931e6f92d91ebb25b37b52e5c5d86` |
+| Source PR | [Runtime startup optimization #19](https://github.com/sandbaseai/OpenAgentCore/pull/19) |
+| Integration branch | `codex/runtime-startup-beta-qa` |
+| Schema migrations / SQL / public protocol / native package pins | None |
+| Deployment requirements | Build and qualify a new combined Runtime template; activate its immutable build and deploy Core/Web from the integrated beta revision |
+
+Harness discovery and authenticated bootstrap overlap while registration requires both to succeed. Failure cancels and joins the sibling. Inline pairing retains validation before consuming its one-shot token and reuses the discovery result. The selected-Harness filter, suspension/wake behavior, native process groups and PR18 E2B receipts remain unchanged. [Operations](../../docs/getting-started/operations.md#runtime-startup-latency) owns the new preparation timings and interpretation.
+
+The beta adapter retains its existing build-script layout; the main-only builder-path correction is not included. Local race, Runtime contract, translation and Linux compilation checks passed, with independent review. Synthetic wait overlap is not production acceptance. Retain the previous Core/Web images and immutable template selection for rollback; existing sandboxes retain their Runtime until their normal lifecycle ends.
