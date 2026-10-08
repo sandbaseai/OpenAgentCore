@@ -122,7 +122,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
-	wsConn.SetReadLimit(4 * 1024 * 1024)
+	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
 		ws:       wsConn,
