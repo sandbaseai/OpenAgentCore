@@ -108,3 +108,16 @@ Verify both rollout revisions and ready Service endpoints, then check public hea
 Committed hosted Environments and pending inputs notify their existing lifecycle owner. Hints preserve the lease, placement, capacity and one-shot allocation checks, with periodic recovery and one extra scan per maintenance period. The E2B helper adds bounded Create stage timings, and subprocess output collection enforces its byte limit through both copy paths. The [Sandbox Provider guide](../../docs/sandbox-provider.md#per-node-lifecycle-workers) and [E2B helper guide](../../services/core/tools/e2b-provider/README.md#observations) own the behavior and timing limitations.
 
 Validation includes database-backed ordinary/stream creation and input recovery without advancing the maintenance clock, concurrent retry and lifecycle regressions, Go race checks, Python helper tests and independent review. Production timing must be verified after rollout; these checks do not establish an end-to-end latency guarantee.
+
+## 2026-10-08 — E2B initialization round trips
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `89f01a50a729d2a0d024aafc193215dd9c2a31cc` |
+| Integration branch | `codex/e2b-create-roundtrips` |
+| Schema migrations / SQL / protocol changes | None |
+| Deployment requirements | Rebuild Core with its packaged E2B helper; existing Runtime template remains compatible |
+
+Create validates the managed entry point through SDK file information and a streaming open instead of starting a probe process. The initialization command returns its bounded durable receipt, removing the separate ready-file read on the successful path. Ownership and configuration checks remain mandatory; uncertain responses recover through inspection without replaying initialization. The [helper guide](../../services/core/tools/e2b-provider/README.md#create) owns these behaviors.
+
+Validation includes generated-contract checks, 11 template tests, 261 helper tests, SDK transport fixtures, real local subprocess failure/recovery checks and independent review. These checks do not establish production latency savings; compare Create stages and the full cold Session path after rollout.
