@@ -48,6 +48,14 @@ The `init` service exits after initialization. Its step logs are described in [D
 
 Don't paste `docker compose config`, `docker inspect` or raw logs into public issue reports.
 
+## Runtime startup latency
+
+After local credentials and enrollment are resolved, Runtime Harness discovery and the authenticated bootstrap HTTP request run concurrently. Both must succeed before the Runtime opens its connection or publishes capabilities. Failure cancels the sibling operation and waits for its cleanup. Reconnect and suspension retain their existing lifecycle; concurrency does not skip executable or credential validation.
+
+The daemon logs `executor preparation stage` with `stage=workspace`, the executor and Session IDs, duration in milliseconds and `success`. Codex logs `codex preparation stage` for `session_plan`, `model_catalog`, `process_spawn`, `rpc_initialize` and `verification`, with the owner trace, duration and `success`. These records contain no native error text, credentials, configuration, catalog contents or command output. An omitted conditional stage is unobserved, not zero. `session_plan` contains `model_catalog`; the executor readiness interval contains workspace preparation, the adapter stages and transport overhead. Do not add nested intervals together. A failed `rpc_initialize` includes its required child cleanup.
+
+The model catalog remains validated and pinned before app-server initialization. These timings distinguish catalog preparation from native process initialization; they do not establish a latency improvement. Compare fresh and reused Sessions on the same Runtime template, model and provider, and verify persisted replies and usage in addition to first-text latency. A Runtime startup change needs a rebuilt, qualified Runtime template; replacing Core alone does not update existing sandboxes.
+
 ## Stop and restart
 
 Let active work settle before a planned restart:
