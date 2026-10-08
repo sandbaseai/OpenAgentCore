@@ -1,8 +1,10 @@
 """Five bounded SDK operations for an already authorized Core allocation, plus
 read-only deployment validation and batch observation."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import math
+import sys
 import time
 from datetime import datetime, timezone
 from uuid import UUID
@@ -18,6 +20,24 @@ from helper_contract_generated import (PROTOCOL_VERSION, OPERATIONS, REQUEST_FIE
 
 PREFIX = 'oac_'
 FIELDS = ('InstallationID', *REFERENCE_FIELDS)
+
+
+@contextmanager
+def create_stage(stage):
+    """Emit bounded numeric diagnostics, never SDK output or request contents."""
+    started = time.monotonic_ns()
+    completed = False
+    try:
+        yield
+        completed = True
+    finally:
+        try:
+            sys.stderr.write(json.dumps({'event': 'e2b_create_stage', 'stage': stage,
+                                         'duration_us': (time.monotonic_ns() - started) // 1000,
+                                         'completed': completed}) + '\n')
+        except Exception:
+            # Observation must not change allocation or bootstrap outcomes.
+            pass
 
 
 def valid_id(value):
@@ -213,14 +233,15 @@ class Provider:
         identity = dict(self.reference, InstallationID=self.config['InstallationID'],
                         SessionID=bootstrap['SessionID'], DeviceID=bootstrap['DeviceID'])
         self.receipt.save(status='create_pending', bootstrap_identity=identity)
-        try:
-            cloud = Sandbox.create(template=self.config['Template'], timeout=self.config['TimeoutSeconds'],
-                                   metadata=self.metadata, lifecycle={'on_timeout': 'kill', 'auto_resume': False},
-                                   **self.options())
-        except Exception as error:
-            if definitely_rejected(error):
-                self.receipt.save(status='rejected', settled=True)
-            raise Failure('unconfirmed') from None
+        with create_stage('sandbox_create'):
+            try:
+                cloud = Sandbox.create(template=self.config['Template'], timeout=self.config['TimeoutSeconds'],
+                                       metadata=self.metadata, lifecycle={'on_timeout': 'kill', 'auto_resume': False},
+                                       **self.options())
+            except Exception as error:
+                if definitely_rejected(error):
+                    self.receipt.save(status='rejected', settled=True)
+                raise Failure('unconfirmed') from None
         self.receipt.save(status='created', ids=[cloud.sandbox_id], connection=connection_material(cloud),
                           compute={'Generation': 0, 'Name': self.reference['AllocationID'],
                                    'ID': cloud.sandbox_id, 'RestoredFrom': None})
@@ -229,34 +250,39 @@ class Provider:
         # SDK Create returns connection material, but no metadata or resources.
         # Read its exact ID before writing credentials, even when Core adopts the
         # template's resources and does not supply explicit limits.
-        try:
-            detail = self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options()))
-            self.qualified(detail)
-        except Failure:
-            self.receipt.save(status='configuration_rejected', settled=True)
-            raise
+        with create_stage('ownership_check'):
+            try:
+                detail = self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options()))
+                self.qualified(detail)
+            except Failure:
+                self.receipt.save(status='configuration_rejected', settled=True)
+                raise
         # Validate the current template entry point before writing any credential.
-        check = run(cloud, {'Args': ['/usr/bin/python3', '-I', '-c',
-                    "import os,sys; sys.exit(78 if not os.path.isfile('/opt/oac-e2b/managed_init.py') or not os.access('/opt/oac-e2b/managed_init.py', os.R_OK) else 0)"]},
-                    self.remaining, user='root')
-        if check['ExitCode'] != 0:
-            self.receipt.save(status='bootstrap_failed', settled=True)
-            raise Failure('template_invalid' if check['ExitCode'] == 78 else 'unconfirmed')
+        with create_stage('template_check'):
+            check = run(cloud, {'Args': ['/usr/bin/python3', '-I', '-c',
+                        "import os,sys; sys.exit(78 if not os.path.isfile('/opt/oac-e2b/managed_init.py') or not os.access('/opt/oac-e2b/managed_init.py', os.R_OK) else 0)"]},
+                        self.remaining, user='root')
+            if check['ExitCode'] != 0:
+                self.receipt.save(status='bootstrap_failed', settled=True)
+                raise Failure('template_invalid' if check['ExitCode'] == 78 else 'unconfirmed')
         payload = dict(bootstrap, InstallationID=self.config['InstallationID'],
                        RuntimeBootstrap=self.q['RuntimeBootstrap'])
         del payload['CoreURL'], payload['Credential'], payload['Harness']
         if set(payload) != set(MANAGED_BOOTSTRAP_FIELDS):
             raise Failure('invalid')
-        cloud.files.write('/root/.oac/e2b/managed-bootstrap.json', json.dumps(payload),
-                          user='root', request_timeout=self.remaining())
+        with create_stage('bootstrap_write'):
+            cloud.files.write('/root/.oac/e2b/managed-bootstrap.json', json.dumps(payload),
+                              user='root', request_timeout=self.remaining())
         self.receipt.save(status='bootstrap_pending')
-        result = run(cloud, {'Args': ['/usr/bin/python3', '-I', '/opt/oac-e2b/managed_init.py']},
-                     self.remaining, user='root')
-        if result['ExitCode'] != 0:
-            self.receipt.save(status='bootstrap_failed', settled=True)
-            raise Failure('unconfirmed')
+        with create_stage('bootstrap_run'):
+            result = run(cloud, {'Args': ['/usr/bin/python3', '-I', '/opt/oac-e2b/managed_init.py']},
+                         self.remaining, user='root')
+            if result['ExitCode'] != 0:
+                self.receipt.save(status='bootstrap_failed', settled=True)
+                raise Failure('unconfirmed')
         self.receipt.save(status='bootstrap_exited', settled=True)
-        return self.inspect()
+        with create_stage('ready_inspect'):
+            return self.inspect()
 
     def renew(self):
         cloud = self.inspect()

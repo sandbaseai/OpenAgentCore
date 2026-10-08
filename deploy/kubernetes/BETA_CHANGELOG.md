@@ -95,3 +95,16 @@ The Environment file creation handler adds request- and trace-correlated static 
 Deploy through **core-deploy** from workflow branch `main`, selecting `source_branch=beta` and the full integrated commit already merged into beta, as described in the [Kubernetes guide](README.md#deploy). This replaces the existing production Core and Web; it does not create a separate beta environment. No Runtime template build or activation is required by this diagnostic change.
 
 Verify both rollout revisions and ready Service endpoints, then check public health and authenticated API behavior. A safe rejected Environment file request can establish that the new event is correlated with its response IDs; it does not prove a successful upload or identify the cause of earlier 400 responses. This entry records integration requirements, not deployment success. Do not replay uncertain uploads or create paid execution solely to produce diagnostic evidence.
+
+## 2026-10-08 — Fresh Environment provisioning hints and Create timings
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `ccd9071b93008739d7ddc18c5b24eb45525a005c` |
+| Integration branch | `codex/fresh-runtime-provision-hints` |
+| Schema migrations / SQL changes | None |
+| Deployment requirements | Rebuild and deploy Core with its packaged E2B helper; no Runtime template change |
+
+Committed hosted Environments and pending inputs notify their existing lifecycle owner. Hints preserve the lease, placement, capacity and one-shot allocation checks, with periodic recovery and one extra scan per maintenance period. The E2B helper adds bounded Create stage timings, and subprocess output collection enforces its byte limit through both copy paths. The [Sandbox Provider guide](../../docs/sandbox-provider.md#per-node-lifecycle-workers) and [E2B helper guide](../../services/core/tools/e2b-provider/README.md#observations) own the behavior and timing limitations.
+
+Validation includes database-backed ordinary/stream creation and input recovery without advancing the maintenance clock, concurrent retry and lifecycle regressions, Go race checks, Python helper tests and independent review. Production timing must be verified after rollout; these checks do not establish an end-to-end latency guarantee.

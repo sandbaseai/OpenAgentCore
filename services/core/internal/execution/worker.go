@@ -166,6 +166,9 @@ func (w *Worker) CreateSession(ctx context.Context, tenant string, input session
 		return sessions.Session{}, err
 	}
 	session, err := w.admission.CreateSession(ctx, tenant, input)
+	if err == nil {
+		w.hintRuntimeWake(ctx, session)
+	}
 	if err == nil && len(input.InitialInputs) > 0 {
 		recordInitialInputOrigin(ctx, session.ID)
 		w.wakeScheduler()
@@ -179,6 +182,9 @@ func (w *Worker) CreateSessionStream(ctx context.Context, tenant string, input s
 		return sessions.Creation{}, err
 	}
 	creation, err := w.admission.CreateSessionStream(ctx, tenant, input)
+	if err == nil {
+		w.hintRuntimeWake(ctx, creation.Session)
+	}
 	if err == nil && len(input.InitialInputs) > 0 {
 		recordInitialInputOrigin(ctx, creation.Session.ID)
 		w.wakeScheduler()

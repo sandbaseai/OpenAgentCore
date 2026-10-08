@@ -1,7 +1,7 @@
 ---
 title: "添加 Sandbox Provider"
 source: docs/sandbox-provider.md
-source_hash: e8bfcdfb5e0c445036753a64561903a28378e601dd0f7908cf9b387f22f2beaa
+source_hash: 2597ae4c793c4607f8ffd3d264ad6c2dcabb13e473f9f7e595ac91319e16837c
 ---
 
 **Sandbox Provider** 为 Core 管理的 Environment 提供 Runtime daemon 运行所需的外层计算资源，以及启动 daemon 的有界引导流程。本指南说明如何添加 Provider，并作为 Core 驱动 Provider 的参考。接口为 [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go)。
@@ -173,6 +173,8 @@ allocation、专用 daemon credential digest 和精确 Session binding 在 `Crea
 终结清理原子撤销 device authority、记录 Environment 失败或到期、结算 pending input 并请求取消，然后才调用 `Kill`；原 input deadline 与 retry outcome 保留。临时 provider outage、未知 Create result 和停止的计算资源不证明永久失败。公开 Session 删除后 Core 保留 allocation，仅在所属 compute 与 volume 清理完成且原 Create 已结算的证明成立后标记 released；未知创建即使观察到不存在也保留 cleanup ownership，有界 scan 继续捕捉延迟资源，不再调用 `Create`。
 
 ### 每节点生命周期 worker {#per-node-lifecycle-workers}
+
+托管 Environment 提交后，Core 会向其放置节点的生命周期 worker 发送有界提示。已提交的待处理输入也会发送提示，以恢复遗漏的创建通知。提示复用现有串行门控、执行租约、容量检查和一次性分配凭据，不会在准入处理器内直接创建沙箱。每个正常维护周期最多允许一次额外提示扫描；周期扫描负责恢复遗漏或合并的提示。已有分配的观察仍先于待创建资源处理，因此同一节点上的慢观察仍可能延迟新 Environment。
 
 每个注册 node 有一个串行 lifecycle worker，负责 gate、allocation 与 pending cursor、connection 和 wake hint；E2B allocation 共享一个没有 node 的串行 lifecycle。薄 coordinator 发现 node 并关闭 worker，数据库、provider 或等待操作期间不持有 map mutex。worker 独立推进，因此一个在线 node 的 provider 卡住不会阻塞其他 node：lifecycle 并发为每 node 一项操作，随 node 数量增长。离线 worker 保留，因此其保留资源在重连后仍可观察。
 
