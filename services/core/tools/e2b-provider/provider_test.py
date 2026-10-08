@@ -1,5 +1,6 @@
 """Controlled SDK boundary failures; live qualification remains separate."""
 import copy
+import io
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ from uuid import uuid4
 from e2b import SandboxState
 from e2b.exceptions import AuthenticationException, SandboxNotFoundException
 
-from provider import Provider
+from provider import Provider, create_stage
 from helper_contract_generated import PROTOCOL_VERSION
 from sdk import restore, run
 from state import Failure, Receipt
@@ -61,6 +62,46 @@ class ProviderTest(unittest.TestCase):
 
     def record(self):
         return json.loads(next(Path(self.temporary.name).glob('*.json')).read_text())
+
+    def test_create_stages_preserve_order_and_exclude_secrets(self):
+        stream = io.StringIO()
+        with patch('provider.sys.stderr', stream):
+            result = self.call('create')
+        self.assertEqual(result['ErrorCode'], '')
+        rows = [json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertEqual([row['stage'] for row in rows], [
+            'sandbox_create', 'ownership_check', 'template_check',
+            'bootstrap_write', 'bootstrap_run', 'ready_inspect'])
+        for row in rows:
+            self.assertEqual(set(row), {'event', 'stage', 'duration_us', 'completed'})
+            self.assertTrue(row['completed'])
+            self.assertGreaterEqual(row['duration_us'], 0)
+        self.assertNotIn('private', stream.getvalue())
+
+    def test_failed_create_stage_does_not_expose_exception_or_replay(self):
+        stream = io.StringIO()
+        self.api.create.side_effect = TimeoutError('private SDK secret')
+        with patch('provider.sys.stderr', stream):
+            self.assertEqual(self.call('create')['ErrorCode'], 'unconfirmed')
+            self.assertEqual(self.call('create')['ErrorCode'], 'exists')
+        rows = [json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['stage'], 'sandbox_create')
+        self.assertFalse(rows[0]['completed'])
+        self.assertNotIn('private', stream.getvalue())
+        self.api.create.assert_called_once()
+
+    def test_broken_diagnostic_sink_does_not_change_create(self):
+        with patch('provider.sys.stderr') as stream:
+            stream.write.side_effect = OSError('sink closed')
+            self.assertEqual(self.call('create')['ErrorCode'], '')
+
+    def test_stage_uses_monotonic_duration(self):
+        stream = io.StringIO()
+        with patch('provider.sys.stderr', stream), patch('provider.time.monotonic_ns', side_effect=[1000, 2501000]):
+            with create_stage('sandbox_create'):
+                pass
+        self.assertEqual(json.loads(stream.getvalue())['duration_us'], 2500)
 
     def test_create_recover_and_never_replay(self):
         result = self.call('create')
