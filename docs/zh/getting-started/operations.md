@@ -50,8 +50,7 @@ docker compose -f "$HOME/.oac/core/compose.yaml" logs --timestamps init
 
 不要将 `docker compose config`、`docker inspect` 或原始日志粘贴到公开问题报告。
 
-<a id="runtime-startup-latency"></a>
-## Runtime 启动延迟
+## Runtime 启动延迟 {#runtime-startup-latency}
 
 本地凭据解析和注册绑定完成后，Runtime 的 Harness 探测与带认证的 bootstrap HTTP 请求并行执行。两项都成功后，Runtime 才建立连接并公布能力；任一失败都会取消另一项并等待其清理完成。重连和挂起继续使用原有生命周期，并行执行不会跳过可执行程序或凭据校验。
 

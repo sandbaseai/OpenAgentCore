@@ -135,7 +135,6 @@ jobs:
           revision="$(git rev-parse HEAD)"
           for harness in codex claude mcode; do
             builder="scripts/build-$harness-runtime.sh"
-            if [[ "$harness" == codex ]]; then builder=scripts/build-agents-runtime.sh; fi
             AGENTS_RUNTIME_BUILD_DIR="$output_root/$harness" bash "$builder"
             docker build --platform linux/amd64 --tag "oac-e2b-$harness:$revision" "$output_root/$harness"
             image="$(docker image inspect --format '{{.Id}}' "oac-e2b-$harness:$revision")"
