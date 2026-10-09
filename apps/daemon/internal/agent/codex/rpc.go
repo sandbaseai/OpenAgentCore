@@ -127,10 +127,11 @@ type deferReplySentinel struct{}
 var DeferReply = deferReplySentinel{}
 
 type pendingRequest struct {
-	method   string
-	resp     chan rpcResponse
-	timer    *time.Timer
-	onResult func(json.RawMessage) error
+	method     string
+	resp       chan rpcResponse
+	timer      *time.Timer
+	onResult   func(json.RawMessage) error
+	onResponse func(bool)
 }
 
 type rpcResponse struct {
@@ -373,6 +374,9 @@ func (c *JSONRPCClient) handleResponse(rawID, rawResult, rawError json.RawMessag
 	}
 	if p.timer != nil {
 		p.timer.Stop()
+	}
+	if p.onResponse != nil {
+		p.onResponse(len(rawError) == 0 || string(rawError) == "null")
 	}
 	if len(rawError) > 0 && string(rawError) != "null" {
 		var errBody JsonRpcError

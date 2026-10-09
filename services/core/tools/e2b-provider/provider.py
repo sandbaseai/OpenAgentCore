@@ -54,6 +54,32 @@ def create_stage(stage):
             pass
 
 
+def observe_bootstrap(raw):
+    """Forward only bounded guest timings; never expose guest stderr itself."""
+    if not isinstance(raw, str) or len(raw) > 8192:
+        return
+    seen = set()
+    for line in raw.splitlines():
+        if len(line) > 256:
+            continue
+        try:
+            value = json.loads(line)
+            if (not isinstance(value, dict) or
+                    set(value) != {'event', 'stage', 'duration_us', 'completed'} or
+                    value['event'] != 'e2b_bootstrap_stage' or
+                    value['stage'] not in ('bootstrap_claim', 'bootstrap_protection', 'bootstrap_layout',
+                                           'bootstrap_credentials', 'bootstrap_spawn', 'bootstrap_receipt') or
+                    value['stage'] in seen or type(value['duration_us']) is not int or
+                    not 0 <= value['duration_us'] <= 1_800_000_000 or type(value['completed']) is not bool):
+                continue
+            seen.add(value['stage'])
+            value['event'] = 'e2b_create_stage'
+            sys.stderr.write(json.dumps(value) + '\n')
+        except Exception:
+            # A malformed record or unavailable sink never changes startup.
+            pass
+
+
 def valid_id(value):
     try:
         return isinstance(value, str) and str(UUID(value)) == value and UUID(value).int != 0
@@ -302,7 +328,8 @@ class Provider:
         self.receipt.save(status='bootstrap_pending')
         with create_stage('bootstrap_run'):
             result = run(cloud, {'Args': ['/usr/bin/python3', '-I', '-c', BOOTSTRAP_SCRIPT]},
-                         self.remaining, user='root')
+                         self.remaining, user='root', observe_stage=create_stage)
+            observe_bootstrap(result.get('Stderr'))
             if result['ExitCode'] != 0:
                 self.receipt.save(status='bootstrap_failed', settled=True)
                 raise Failure('unconfirmed')
