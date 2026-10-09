@@ -1,7 +1,7 @@
 ---
 title: "管理你的安装"
 source: docs/getting-started/operations.md
-source_hash: 7e90cbe03d7b6ac8edeb5ea24177b0cb2abc5e79958157e6ed51d8b38b69a8a4
+source_hash: b7970bd1466f067d14f369e984eff4906a201e490ad0c7a712be36d297db92eb
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -33,6 +33,10 @@ docker compose -f ~/.oac/core/compose.yaml ps
 本地凭据解析和注册绑定完成后，Runtime 的 Harness 探测与带认证的 bootstrap HTTP 请求并行执行。两项都成功后，Runtime 才建立连接并公布能力；任一失败都会取消另一项并等待其清理完成。重连和挂起继续使用原有生命周期，并行执行不会跳过可执行程序或凭据校验。
 
 daemon 通过 `executor preparation stage` 记录 `stage=workspace`、executor 和 Session ID、毫秒耗时及 `success`。Codex 通过 `codex preparation stage` 记录 `session_plan`、`model_catalog`、`process_spawn`、`rpc_initialize` 和 `verification`，携带所属请求的 trace、耗时及 `success`。这些记录不包含原生错误文本、凭据、配置、模型目录内容或命令输出。未执行的条件阶段表示未观测，不能按零计算。`session_plan` 包含 `model_catalog`；executor 就绪耗时包含工作区准备、adapter 各阶段和传输开销，不应重复相加。失败的 `rpc_initialize` 包含必要的子进程清理。
+
+`model_catalog` 内，`model_catalog_command` 包含原生命令执行、退出和管道排空；只有进程已启动才输出 `model_catalog_cleanup`，它仅测量既有尽力发送的进程组信号。其 `success` 是信号调用的返回结果，进程组已退出也可能为 false；不证明后代已回收，也不改变命令结果。`model_catalog_validation` 包含 JSON、模型、verbosity 及托管 home 校验；`model_catalog_snapshot` 包含快照创建、写入、关闭及绑定 Session plan。失败保持原有拒绝和清理行为。
+
+`rpc_initialize_write`、`rpc_initialize_response` 从同一请求起点累计计时，不能相加，也不是 Core 网络 RTT。仅在匹配响应 ID 时、原生结果解码前记录响应时刻；其 `success` 只表示帧中无原生错误，不代表握手有效。原有 `rpc_initialize` 父阶段记录完整解码握手及失败所需清理。没有匹配响应时不输出响应项。读取协程只捕获时间，不写日志；请求结束后才导出记录，因此日志时间是导出时刻。initialize 的 10 秒期限及 Session 持有的进程生命周期保持不变。
 
 app-server 初始化前仍会校验并固定模型目录。阶段计时用于区分目录准备与原生进程初始化，本身不证明提速。应在相同 Runtime 模板、模型和 Provider 下对比全新及复用 Session，并同时验证持久化回复、用量和首字延迟。Runtime 启动逻辑变更需要重新构建和验收 Runtime 模板；仅替换 Core 不会更新既有沙箱。
 
@@ -228,4 +232,4 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 
 Daemon 启动日志记录 `runtime process starting` 和构建版本，`runtime startup stage` 记录各 Harness 探测、bootstrap 和每次连接尝试的本地单调时钟耗时，不输出凭据或原始错误。探测发生在连接注册之前。结合这些边界与已观察到的持久化连接时间，区分启动、周期观察和调度等待。Daemon 观测要求 Runtime 使用带有这些埋点的构建；仅升级 Core 不会升级现有 Runtime 模板。托管启动回执只确认进程已启动，不确认连接或能力就绪。
 
-Codex CLI 可用性探测为 `process_spawn` 和 `process_wait` 输出 `runtime version probe` 记录，只包含耗时和结果。等待区间包含可执行文件加载和版本命令，两者都不是模型执行。
+Codex CLI 可用性探测输出 `process_spawn`、`process_wait` 的 `runtime version probe` 记录。`first_stdout` 从启动尝试开始，计时到 Go 复制协程观察到第一块非空 stdout；`stdout_to_completion` 从该时刻计时到 `Wait` 返回，包含剩余执行和管道排空。无 stdout 时不输出这两项。记录在完成后导出，不允许提前成功：仍以进程退出和输出校验决定可用性。`runtime version probe resources` 使用 `ProcessState` 返回的 OS 进程统计，输出 `user_cpu_ms`、`system_cpu_ms`；平台可能包含已回收后代，无法取得进程统计时省略。缺页和存储字节计数未采集，缺失表示不可观测，不能按零计算，也不能据此认定存储或网络根因。这些区间均不是模型执行。

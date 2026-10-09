@@ -36,7 +36,9 @@ func parseCreateObservations(raw []byte) []createObservation {
 			continue
 		}
 		switch value.Stage {
-		case "sandbox_create", "ownership_check", "template_check", "bootstrap_write", "bootstrap_run", "ready_inspect":
+		case "sandbox_create", "ownership_check", "template_check", "bootstrap_write", "bootstrap_run", "ready_inspect",
+			"bootstrap_stream_open", "bootstrap_stream_completion",
+			"bootstrap_claim", "bootstrap_protection", "bootstrap_layout", "bootstrap_credentials", "bootstrap_spawn", "bootstrap_receipt":
 			seen[value.Stage] = true
 			out = append(out, value)
 		}
