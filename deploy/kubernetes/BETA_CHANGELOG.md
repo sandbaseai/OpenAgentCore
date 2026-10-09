@@ -135,3 +135,16 @@ Validation includes generated-contract checks, 11 template tests, 261 helper tes
 Harness discovery and authenticated bootstrap overlap while registration requires both to succeed. Failure cancels and joins the sibling. Inline pairing retains validation before consuming its one-shot token and reuses the discovery result. The selected-Harness filter, suspension/wake behavior, native process groups and PR18 E2B receipts remain unchanged. [Operations](../../docs/getting-started/operations.md#runtime-startup-latency) owns the new preparation timings and interpretation.
 
 The beta adapter retains its existing build-script layout; the main-only builder-path correction is not included. Local race, Runtime contract, translation and Linux compilation checks passed, with independent review. Synthetic wait overlap is not production acceptance. Retain the previous Core/Web images and immutable template selection for rollback; existing sandboxes retain their Runtime until their normal lifecycle ends.
+
+## 2026-10-09 — Native startup and bootstrap wait boundaries
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `1eb43f1fb24cb49d6a18ae2eab5174aafa0d5273` |
+| Source PR | [Startup wait observations #21](https://github.com/sandbaseai/OpenAgentCore/pull/21) |
+| Feature branch / implementation commit | `codex/measure-runtime-startup-waits` / `f49e8b43abdbafa635b91e10851829b300b8b20a` |
+| Schema migrations / SQL / public protocol / native package pins | None |
+| Core/Web release | Rebuild matching images with the packaged E2B helper; the selected Runtime template remains compatible |
+| Runtime/guest observations | Require a separately built, qualified and activated template containing this revision |
+
+The [operator guide](../../docs/getting-started/operations.md#runtime-startup-latency) defines native version, catalog and initialize boundaries; the [E2B helper guide](../../services/core/tools/e2b-provider/README.md#observations) defines helper and guest stages. Core/Web deployment alone enables helper-side stream timing and guest record filtering, but cannot add new instrumentation to existing Runtime images. No remote calls or mandatory checks are removed, and this change does not establish a production latency improvement. Preserve the previous images and template selection for rollback.
