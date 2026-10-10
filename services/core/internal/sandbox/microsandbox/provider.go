@@ -6,19 +6,19 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspacefs"
 )
 
 var ErrUnconfirmed = sandbox.ErrComputeUnconfirmed
 
 type Provider struct {
-	config Config
-	caller Caller
+	workspace workspacefs.Resolver
+	config    Config
+	caller    Caller
 }
 
 var _ sandbox.SandboxProvider = (*Provider)(nil)
-var _ sandbox.SuspensionProvider = (*Provider)(nil)
 
-func New(c Config) (*Provider, error) { return NewWithCaller(c, &ProcessCaller{}) }
 func NewWithCaller(c Config, caller Caller) (*Provider, error) {
 	if c.Validate() != nil || caller == nil {
 		return nil, sandbox.ErrInvalid
@@ -76,6 +76,11 @@ func (p *Provider) call(ctx context.Context, q Request) (Response, error) {
 func (p *Provider) state(ctx context.Context, q Request) (State, error) {
 	out, e := p.call(ctx, q)
 	if e != nil {
+		if q.Operation == "resume" {
+			if partial, valid := p.responseState(ctx, q, out); valid == nil {
+				return partial, e
+			}
+		}
 		return State{}, e
 	}
 	return p.responseState(ctx, q, out)
@@ -121,7 +126,26 @@ func info(r sandbox.Reference, s State) sandbox.Info {
 	return sandbox.Info{Reference: r, ProviderID: s.Compute.ID, State: s.Status, BootstrapComplete: s.BootstrapComplete}
 }
 func (p *Provider) Create(ctx context.Context, b sandbox.Bootstrap) (sandbox.Info, error) {
-	q := Request{Operation: "create", Reference: b.Reference, Bootstrap: &b}
+	// Before dispatch, this one-shot attempt cannot have created native compute.
+	absent := sandbox.Info{Reference: b.Reference, State: "absent", CreateSettled: true}
+	if err := ctx.Err(); err != nil {
+		return absent, err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return absent, sandbox.ErrInvalid
+	}
+	if err := ValidateBootstrap(b); err != nil {
+		return absent, err
+	}
+	if p.config.ExternalWorkspace != (b.Workspace != nil) {
+		return absent, sandbox.ErrInvalid
+	}
+	workspace, err := p.resolveWorkspace(ctx, b.Reference, b.Workspace)
+	if err != nil {
+		return absent, err
+	}
+	b.Workspace = nil
+	q := Request{Operation: "create", Reference: b.Reference, Bootstrap: &b, Workspace: workspace}
 	out, err := p.call(ctx, q)
 	settledRejection := errors.Is(err, sandbox.ErrInvalid) && !errors.Is(err, ErrUnconfirmed) && out.CreateSettled
 	if err != nil && !settledRejection {
@@ -146,8 +170,16 @@ func (p *Provider) GetInfo(ctx context.Context, r sandbox.Reference) (sandbox.In
 	if e != nil {
 		return sandbox.Info{}, e
 	}
-	s, e := p.nativeGetCompute(ctx, r, c)
-	return info(r, s), e
+	q := Request{Operation: "initial_info", Reference: r, Compute: c}
+	out, err := p.call(ctx, q)
+	if err != nil {
+		return sandbox.Info{Reference: r}, err
+	}
+	if out.CreateSettled && out.State != nil && *out.State == (State{Compute: c, Status: "absent"}) {
+		return sandbox.Info{Reference: r, State: "absent", CreateSettled: true}, nil
+	}
+	s, err := p.responseState(ctx, q, out)
+	return info(r, s), err
 }
 func (p *Provider) Renew(ctx context.Context, r sandbox.Reference) (sandbox.Info, error) {
 	return p.GetInfo(ctx, r)
@@ -181,7 +213,15 @@ func (p *Provider) nativeSuspend(ctx context.Context, q SuspendRequest) (State, 
 	return p.state(ctx, Request{Operation: "suspend", Reference: q.Reference, Suspend: &q})
 }
 func (p *Provider) nativeResume(ctx context.Context, q ResumeRequest) (State, error) {
-	return p.state(ctx, Request{Operation: "resume", Reference: q.Reference, Resume: &q})
+	if p.config.ExternalWorkspace != (q.Workspace != nil) {
+		return State{}, sandbox.ErrInvalid
+	}
+	workspace, err := p.resolveWorkspace(ctx, q.Reference, q.Workspace)
+	if err != nil {
+		return State{}, err
+	}
+	q.Workspace = nil
+	return p.state(ctx, Request{Operation: "resume", Reference: q.Reference, Resume: &q, Workspace: workspace})
 }
 func (p *Provider) nativeRunCommandCompute(ctx context.Context, r sandbox.Reference, c Compute, command sandbox.Command) (sandbox.CommandResult, error) {
 	out, e := p.call(ctx, Request{Operation: "command", Reference: r, Compute: c, Command: &command})
@@ -215,8 +255,22 @@ func (p *Provider) nativeNewCompute(ctx context.Context, r sandbox.Reference, ge
 	return c, nil
 }
 
-// Quiescent includes a helper that outlived the caller's canceled context.
-func (p *Provider) Quiescent() bool {
-	v, ok := p.caller.(interface{ Quiescent() bool })
-	return ok && v.Quiescent()
+func (p *Provider) resolveWorkspace(ctx context.Context, reference sandbox.Reference, binding *workspacefs.Binding) (*WorkspaceDirectory, error) {
+	if binding == nil {
+		return nil, nil
+	}
+	if err := sandbox.ValidateWorkspaceBinding(reference, binding); err != nil {
+		return nil, err
+	}
+	if p.workspace == nil {
+		return nil, workspacefs.ErrUnsupported
+	}
+	directory, err := p.workspace.Resolve(ctx, *binding)
+	if err != nil {
+		return nil, err
+	}
+	if err := directory.Validate(); err != nil {
+		return nil, err
+	}
+	return &WorkspaceDirectory{Path: directory.Path, ObjectID: binding.Attachment.Reference.ObjectID}, nil
 }

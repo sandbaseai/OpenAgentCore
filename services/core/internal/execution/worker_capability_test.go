@@ -11,7 +11,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgtest"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -29,7 +28,8 @@ func (*candidateQueryObserver) TraceQueryEnd(context.Context, *pgx.Conn, pgx.Tra
 func TestSchedulingHintScansBeforeDeadlineAndRestoresPollingDelay(t *testing.T) {
 	observer := &candidateQueryObserver{}
 	pool := pgtest.OpenIsolated(t, func(cfg *pgxpool.Config) { cfg.ConnConfig.Tracer = observer })
-	worker := &Worker{dispatcher: &Dispatcher{Store: store.New(pool)}, concurrency: 1}
+	reader, _ := testSessions(t, pool, pgtest.CredentialKey(t))
+	worker := &Worker{dispatcher: &Dispatcher{SessionsReader: reader}, concurrency: 1}
 	schedule := workerSchedule{nextEnvironmentScan: time.Now().Add(time.Hour)}
 	for _, hinted := range []bool{false, true, false} {
 		if _, err := schedule.selectWork(t.Context(), worker, nil, map[string]bool{}, hinted); err != nil {

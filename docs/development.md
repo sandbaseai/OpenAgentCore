@@ -66,7 +66,8 @@ For frontend development, run `pnpm dev:web` using the fixture or Core connectio
 | Location | Responsibility | Read next |
 | --- | --- | --- |
 | `services/core/internal/api` | Public, administrator and machine HTTP boundaries | [API index](./api/index.md) |
-| `services/core/internal/store` and `services/core/internal/db` | Core persistence, transactions, queries and migrations | [Service guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md#database) |
+| `services/core/internal/persistence`, `services/core/internal/db` and `services/core/migrations` | Core's PostgreSQL adapters, transactions, queries and migrations | [Service guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md#database) |
+| `services/core/tests/integration` | Tests that drive the HTTP boundaries, the execution Worker and the PostgreSQL adapters together | [Service guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md#tests) |
 | `services/core/internal/execution` | Durable Turn dispatch and scheduling | [Runtime protocol](./runtime-protocol.md) |
 | `services/core/internal/engine` | Pure qualification of harness operations and placements | [Harness onboarding](../contracts/agents-api/harness-onboarding.md) |
 | `internal/agentdaemon/proto` | Core–Runtime wire types and validators | [Runtime protocol](./runtime-protocol.md) |
@@ -91,7 +92,7 @@ Choose focused checks for the current diff and its directly affected behavior us
 | --- | --- |
 | Core handlers, persistence or clients | `make check-core` |
 | SQL queries | `make sqlc-generate`, inspect generated files, then `make check-sqlc` |
-| Handler annotations or API contract | `make openapi`, inspect all three namespace schemas |
+| Public schema, Core extensions or internal handler annotations | `make openapi`, `make check-openapi`; inspect generated types and all three namespace schemas |
 | Shared Runtime protocol | `make check-runtime-contract` |
 | Provider integration | `make check-sandbox-provider-contract` and the provider's native checks |
 | Claude SDK bridge and artifact | `make check-claude-sdk` |

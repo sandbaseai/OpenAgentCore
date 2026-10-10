@@ -35,6 +35,19 @@ class SuspensionTest(unittest.TestCase):
         return {'Reference': self.reference, 'OperationID': str(uuid4()), 'Target': target,
                 'Retained': retained, 'ReconcileOnly': False}
 
+    def test_resume_rejects_external_workspace_before_sdk(self):
+        from state import Failure
+        with self.assertRaises(Failure) as raised:
+            Provider(dict(self.request, Operation='resume', Resume={'Workspace': {}}))
+        self.assertEqual(raised.exception.code, 'invalid')
+        self.api.connect.assert_not_called()
+
+    def test_resume_accepts_null_workspace(self):
+        current = self.prepare()
+        _, paused = self.pause(current)
+        request = dict(self.resume_request(paused['State']['Retained']), Workspace=None)
+        self.assertEqual(self.invoke('resume', Resume=request)['ErrorCode'], '')
+
     def test_two_cycles_keep_native_id_and_fence_old_generation(self):
         current = self.prepare()
         for generation in range(2):

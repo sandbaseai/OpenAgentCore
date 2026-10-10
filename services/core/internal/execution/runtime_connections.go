@@ -64,7 +64,7 @@ func observeRuntimeConnection(ctx context.Context, operations *sessions.Executio
 		return err
 	}
 	current.connected = connected
-	obslog.Info(ctx, "runtime connection observed", "environment_id", environment, "connected", connected,
+	obslog.Ctx(ctx).Info("runtime connection observed", "environment_id", environment, "connected", connected,
 		"connection_generation", current.generation, "connection_revision", current.revision)
 	return nil
 }

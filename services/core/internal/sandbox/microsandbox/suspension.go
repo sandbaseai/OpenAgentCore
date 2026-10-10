@@ -112,7 +112,7 @@ func (p *Provider) Resume(ctx context.Context, q sandbox.ResumeRequest) (sandbox
 	if e != nil {
 		return sandbox.ComputeState{}, e
 	}
-	v, e := p.nativeResume(ctx, ResumeRequest{Reference: q.Reference, OperationID: q.OperationID, Snapshot: s, Target: c, ObserveOnly: q.ReconcileOnly})
+	v, e := p.nativeResume(ctx, ResumeRequest{Workspace: q.Workspace, Reference: q.Reference, OperationID: q.OperationID, Snapshot: s, Target: c, ObserveOnly: q.ReconcileOnly})
 	return state(v), e
 }
 func (p *Provider) KillCompute(ctx context.Context, r sandbox.Reference, c sandbox.Compute) error {

@@ -51,7 +51,7 @@ func observeHelperCreate(ctx context.Context, q Request, raw []byte) {
 		return
 	}
 	for _, value := range parseCreateObservations(raw) {
-		obslog.Info(ctx, "e2b create stage", "stage", value.Stage,
+		obslog.Ctx(ctx).Info("e2b create stage", "stage", value.Stage,
 			"duration_ms", float64(*value.DurationUS)/1000, "completed", *value.Completed,
 			"environment_id", q.Reference.EnvironmentID, "allocation_id", q.Reference.AllocationID)
 	}

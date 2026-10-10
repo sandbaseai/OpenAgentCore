@@ -2,6 +2,7 @@ package e2b
 
 import (
 	"context"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
@@ -69,6 +70,9 @@ func (p *Provider) Suspend(ctx context.Context, q sandbox.SuspendRequest) (sandb
 	return *out.State, nil
 }
 func (p *Provider) Resume(ctx context.Context, q sandbox.ResumeRequest) (sandbox.ComputeState, error) {
+	if q.Workspace != nil {
+		return sandbox.ComputeState{}, &providercontract.UnsupportedError{Operation: "Resume", Reason: "external_workspace_unsupported"}
+	}
 	planned, err := p.NewCompute(ctx, q.Reference, q.Target.Generation, &q.Retained)
 	if err != nil || sandbox.ValidateComputeResult(planned, q.Target) != nil || !validID(q.OperationID) {
 		return sandbox.ComputeState{}, sandbox.ErrInvalid

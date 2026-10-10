@@ -29,13 +29,13 @@ func SandboxCapacity() (SandboxLimits, error) {
 		if raw := os.Getenv(setting.name); raw != "" {
 			value, err := strconv.Atoi(raw)
 			if err != nil || value < 1 || value > 100000 {
-				return SandboxLimits{}, configErr(setting.name + " must be an integer between 1 and 100000")
+				return SandboxLimits{}, configError(setting.name + " must be an integer between 1 and 100000")
 			}
 			*setting.target = value
 		}
 	}
 	if capacity.MaxRetained < capacity.MaxActive {
-		return SandboxLimits{}, configErr("OAC_SANDBOX_MAX_RETAINED must be at least OAC_SANDBOX_MAX_ACTIVE")
+		return SandboxLimits{}, configError("OAC_SANDBOX_MAX_RETAINED must be at least OAC_SANDBOX_MAX_ACTIVE")
 	}
 	return capacity, nil
 }

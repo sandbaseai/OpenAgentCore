@@ -51,7 +51,7 @@ func CheckCLIAvailable(ctx context.Context, binary string) (string, error) {
 	if err != nil {
 		status = "error"
 	}
-	obslog.Info(ctx, "runtime version probe", "harness_kind", "codex", "stage", "process_spawn", "duration_ms", float64(time.Since(spawnAt))/float64(time.Millisecond), "status", status)
+	obslog.Ctx(ctx).Info("runtime version probe", "harness_kind", "codex", "stage", "process_spawn", "duration_ms", float64(time.Since(spawnAt))/float64(time.Millisecond), "status", status)
 	if err == nil {
 		waitAt := time.Now()
 		err = cmd.Wait()
@@ -59,15 +59,15 @@ func CheckCLIAvailable(ctx context.Context, binary string) (string, error) {
 		if err != nil {
 			status = "error"
 		}
-		obslog.Info(ctx, "runtime version probe", "harness_kind", "codex", "stage", "process_wait", "duration_ms", float64(completedAt.Sub(waitAt))/float64(time.Millisecond), "status", status)
+		obslog.Ctx(ctx).Info("runtime version probe", "harness_kind", "codex", "stage", "process_wait", "duration_ms", float64(completedAt.Sub(waitAt))/float64(time.Millisecond), "status", status)
 		// Wait joins the stdout copier. Inspect its timestamp only after it returns;
 		// receiving bytes never replaces process exit or output validation.
 		if !stdout.first.IsZero() {
-			obslog.Info(ctx, "runtime version probe", "harness_kind", "codex", "stage", "first_stdout", "duration_ms", float64(stdout.first.Sub(spawnAt))/float64(time.Millisecond))
-			obslog.Info(ctx, "runtime version probe", "harness_kind", "codex", "stage", "stdout_to_completion", "duration_ms", float64(completedAt.Sub(stdout.first))/float64(time.Millisecond), "status", status)
+			obslog.Ctx(ctx).Info("runtime version probe", "harness_kind", "codex", "stage", "first_stdout", "duration_ms", float64(stdout.first.Sub(spawnAt))/float64(time.Millisecond))
+			obslog.Ctx(ctx).Info("runtime version probe", "harness_kind", "codex", "stage", "stdout_to_completion", "duration_ms", float64(completedAt.Sub(stdout.first))/float64(time.Millisecond), "status", status)
 		}
 		if cmd.ProcessState != nil {
-			obslog.Info(ctx, "runtime version probe resources", "harness_kind", "codex",
+			obslog.Ctx(ctx).Info("runtime version probe resources", "harness_kind", "codex",
 				"user_cpu_ms", float64(cmd.ProcessState.UserTime())/float64(time.Millisecond),
 				"system_cpu_ms", float64(cmd.ProcessState.SystemTime())/float64(time.Millisecond))
 		}

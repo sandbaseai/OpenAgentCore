@@ -184,7 +184,7 @@ func (c *JSONRPCClient) Start(ctx context.Context, init InitializeParams) (_ Ini
 	spawnStarted := time.Now()
 	process, err := clirunner.Start(clirunner.StartOptions{
 		Parent: ctx, Binary: c.cfg.Binary, Args: args, Dir: c.cfg.Cwd, Env: c.cfg.Env,
-		NeedStdin: true, OwnProcessGroup: true, KillTimeout: 250 * time.Millisecond,
+		NeedStdin: true, KillTimeout: 250 * time.Millisecond,
 	})
 	observePreparationStage(ctx, "process_spawn", spawnStarted, err)
 	if err != nil {

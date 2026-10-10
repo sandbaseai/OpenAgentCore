@@ -120,7 +120,7 @@ func (c *executionTraceConn) Close() error                              { c.once
 func TestExecutionSendPreservesPayloadAndCarriesTrace(t *testing.T) {
 	for _, traced := range []bool{false, true} {
 		conn := &executionTraceConn{writes: make(chan []byte, 2), closed: make(chan struct{})}
-		peer := runtimegateway.NewSession(conn, "device-one", "workspace-one", "test", nil, nil)
+		peer := runtimegateway.NewSessionWithOwner(conn, "device-one", "workspace-one", "test", runtimegateway.NewRegistry(), func(string, ...any) {}, nil)
 		peer.Start()
 		ctx := t.Context()
 		if traced {
@@ -163,7 +163,7 @@ func TestExecutionSendPreservesPayloadAndCarriesTrace(t *testing.T) {
 
 func TestInitialInputOriginKeepsHTTPTraceAndSessionIdentity(t *testing.T) {
 	out := captureExecutionLogs(t)
-	ctx, origin := obslog.StartBackgroundTrace(t.Context(), "http")
+	ctx, origin := obslog.StartBackgroundTrace(t.Context())
 	recordInitialInputOrigin(ctx, "session-one")
 	var entry map[string]any
 	if err := json.Unmarshal(out.Bytes(), &entry); err != nil {

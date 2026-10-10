@@ -37,7 +37,9 @@ func TestSchedulerWakeCoalescesConcurrentAdmissionsAndKeepsNextHint(t *testing.T
 }
 
 func TestWorkerCancelledWithoutGatewayPreservesShutdown(t *testing.T) {
-	worker := &Worker{dispatcher: &Dispatcher{}, lease: heldLease{}, stopped: make(chan struct{}), concurrency: 1}
+	m := testRuntimeManager(t)
+	m.closed = true
+	worker := &Worker{runtimes: m, dispatcher: &Dispatcher{}, lease: heldLease{}, stopped: make(chan struct{}), concurrency: 1}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := worker.Run(ctx); !errors.Is(err, context.Canceled) {

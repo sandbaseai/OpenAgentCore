@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/coremetrics"
 	"testing"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
@@ -12,7 +13,7 @@ func TestHistoryOwnershipObservesWorkerWithoutDatabaseChecks(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		owner     *bool
-		status    string
+		status    coremetrics.JobStatus
 		available bool
 	}{
 		{"unobserved", nil, "unknown", false}, {"owned", &owned, "ok", true},

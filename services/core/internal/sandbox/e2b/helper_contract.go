@@ -5,19 +5,17 @@ import (
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/runtimebootstrap"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
 //go:generate go run ./internal/contractgen
 
 // This adapter-private boundary is documented in tools/e2b-provider/README.md.
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 const MaxOutputBytes = 1024 * 1024
 const MaxRequestBytes = 72 * 1024 * 1024
 const MaxResponseBytes = 16 * 1024 * 1024
 const MaxCredentialReferences = 32
-const MaxObservationReferences = runtimeobs.MaxBatchTargets
 const MaxCommandInputBytes = sandbox.MaxCommandInputBytes
 
 // HelperOperations declares the complete set of one-shot helper operations.
@@ -39,18 +37,10 @@ func (q Request) Validate() error {
 	if q.Operation != "list_templates" && q.Operation != "list_builds" && !validID(q.Config.InstallationID) {
 		return sandbox.ErrInvalid
 	}
+	if q.Bootstrap != nil && q.Bootstrap.Workspace != nil {
+		return sandbox.ErrInvalid
+	}
 	switch q.Operation {
-	case "observe":
-		if len(q.References) < 1 || len(q.References) > MaxObservationReferences {
-			return sandbox.ErrInvalid
-		}
-		seen := map[sandbox.Reference]bool{}
-		for _, r := range q.References {
-			if !validReference(r) || seen[r] {
-				return sandbox.ErrInvalid
-			}
-			seen[r] = true
-		}
 	case "verify_credential":
 		if len(q.References) > MaxCredentialReferences {
 			return sandbox.ErrInvalid
@@ -80,7 +70,7 @@ func (q Request) Validate() error {
 			return sandbox.ErrInvalid
 		}
 	case "resume":
-		if q.Resume == nil || q.Resume.Reference != q.Reference || !validID(q.Resume.OperationID) || sandbox.ValidateRetained(q.Resume.Retained) != nil || q.Resume.Retained.Reference != q.Reference.AllocationID {
+		if q.Resume == nil || q.Resume.Workspace != nil || q.Resume.Reference != q.Reference || !validID(q.Resume.OperationID) || sandbox.ValidateRetained(q.Resume.Retained) != nil || q.Resume.Retained.Reference != q.Reference.AllocationID {
 			return sandbox.ErrInvalid
 		}
 	case "delete_retained":
@@ -96,7 +86,7 @@ type Request struct {
 	Operation string
 	Config    Config
 	Reference sandbox.Reference
-	// References lists the allocations of one read-only observe request.
+	// References lists the allocations of one verify_credential request.
 	References       []sandbox.Reference          `json:",omitempty"`
 	Bootstrap        *sandbox.Bootstrap           `json:",omitempty"`
 	RuntimeBootstrap *runtimebootstrap.Connection `json:",omitempty"`
@@ -117,7 +107,7 @@ type Response struct {
 	TemplateBuild   *TemplateBuild    `json:",omitempty"`
 	Templates       []TemplateSummary `json:",omitempty"`
 	Builds          []ReadyBuild      `json:",omitempty"`
-	Observations    []Observation     `json:",omitempty"`
+	Observation     *Observation      `json:",omitempty"`
 }
 
 func (r Response) Validate() error {

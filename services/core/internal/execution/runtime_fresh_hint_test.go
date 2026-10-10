@@ -12,6 +12,7 @@ import (
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/identity"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgtest"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -37,10 +38,11 @@ func TestFreshHintRoutesAndPreservesLifecycleGuards(t *testing.T) {
 	for _, scenario := range []string{"direct", "node", "closed", "switching", "cancelled", "self_hosted", "released_placement", "lookup_failed", "suspended"} {
 		t.Run(scenario, func(t *testing.T) {
 			m := testRuntimeManager(t)
-			m.config = RuntimeProvider{InstallationID: uuid.NewString()}
+			m.setupGate = make(chan struct{}, 1)
+			m.config = RuntimeProvider{InstallationID: uuid.NewString(), ProviderKind: "e2b", Mode: "direct", Provider: &freshHintProvider{}}
 			nodeID := ""
 			if scenario == "node" || scenario == "released_placement" {
-				m.config.ProviderKind = "docker"
+				m.config.ProviderKind, m.config.Mode = "docker", "nodes"
 				nodeID = uuid.NewString()
 			}
 			node, err := m.node(nodeID)
@@ -49,7 +51,7 @@ func TestFreshHintRoutesAndPreservesLifecycleGuards(t *testing.T) {
 			}
 			environment := sessions.Environment{ID: uuid.NewString(), Configuration: json.RawMessage(`{"type":"openai_hosted"}`)}
 			if scenario == "self_hosted" {
-				environment.Configuration = json.RawMessage(`{"type":"self_hosted","workspace_directory":"/workspace"}`)
+				environment.Configuration = json.RawMessage(`{"type":"self_hosted"}`)
 			}
 			if scenario == "suspended" {
 				environment.Initialization = "complete"
@@ -66,7 +68,7 @@ func TestFreshHintRoutesAndPreservesLifecycleGuards(t *testing.T) {
 					return deployment.Allocation{}, deployment.ErrNotFound
 				},
 				lifecyclePlacement: func(context.Context, deployment.AllocationKey) (deployment.LifecyclePlacement, error) {
-					return deployment.LifecyclePlacement{Provider: m.config.ProviderKind, PlacementNodeID: nodeID, PlacementReleased: scenario == "released_placement"}, nil
+					return deployment.LifecyclePlacement{Provider: m.config.ProviderKind, Mode: m.config.Mode, PlacementNodeID: nodeID, PlacementReleased: scenario == "released_placement"}, nil
 				},
 			}
 			m.deploymentService, _ = deploymentOperations(t, &strictDeploymentStorage{t: t}, reader, &strictExecutionStorage{t: t})
@@ -103,18 +105,19 @@ func (p *freshHintProvider) Create(_ context.Context, b sandbox.Bootstrap) (sand
 }
 
 func TestFreshEnvironmentHintProvisionsWithoutMaintenanceTick(t *testing.T) {
-	for _, mode := range []string{"create", "stream", "recovered_input", "recovered_initial"} {
+	for _, mode := range []string{"create", "create_initial", "recovered_input", "recovered_initial"} {
 		t.Run(mode, func(t *testing.T) {
-			s, owner, deployments, reader, pool := resetManagerStoreDB(t, nil)
+			owner, deployments, reader, pool := resetManagerDB(t, nil)
 			installation := initializeE2BDeployment(t, owner)
-			sessionReader, _ := testSessions(t, pool, testCredentialCipher(t))
+			sessionReader, sessionService := testSessions(t, pool, pgtest.CredentialKey(t))
 			provider := &freshHintProvider{created: make(chan struct{}, 1)}
 			m := testRuntimeManager(t)
-			m.store, m.sessions, m.sessionExecution = owner.Store, sessionReader, owner.Sessions
+			m.setupGate = make(chan struct{}, 1)
+			m.sessions, m.sessionExecution = sessionReader, owner.Sessions
 			m.deployment, m.deploymentService, m.deploymentReader = owner.Deployment, deployments, reader
 			m.lease, m.registry = owner.Lease, runtimegateway.NewRegistry()
-			m.config = RuntimeProvider{InstallationID: installation, CoreURL: fixturePublicURL + "/api/v1", Provider: provider}
-			worker := &Worker{admission: s, lease: owner.Lease, runtimes: m, dispatcher: &Dispatcher{SessionsReader: sessionReader, DeploymentReader: reader, notifications: &executionNotifications{}}, scheduleWake: make(chan struct{}, 1)}
+			m.config = RuntimeProvider{InstallationID: installation, Generation: 1, ProviderKind: "e2b", Mode: "direct", CoreURL: fixturePublicURL + "/api/v1", Provider: provider}
+			worker := &Worker{lease: owner.Lease, runtimes: m, dispatcher: &Dispatcher{Sessions: sessionService, SessionsReader: sessionReader, DeploymentReader: reader, notifications: &executionNotifications{}}, scheduleWake: make(chan struct{}, 1)}
 			node, err := m.node("")
 			if err != nil {
 				t.Fatal(err)
@@ -133,22 +136,20 @@ func TestFreshEnvironmentHintProvisionsWithoutMaintenanceTick(t *testing.T) {
 			t.Cleanup(func() { cancel(); <-done })
 			<-scans // Startup scan finishes before any Session is committed.
 			tenant := uuid.NewString()
-			input := sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "fixture"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"model":"test-model"},"environment":{"type":"openai_hosted"}}`), ModelProvider: &v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://model.fixture.example/v1", APIKey: "fixture-key"}, ModelProviderSource: v1.ModelProviderSourceSession}
+			input := sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "fixture"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"model":"test-model"},"environment":{"type":"openai_hosted"}}`), ModelProvider: &v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://model.fixture.example/v1", APIKey: "fixture-key"}, ModelProviderSource: v1.ExecutionSourceSession}
 			messages := []sessions.Input{{Kind: "message", Payload: json.RawMessage(`{"input":[{"role":"user","content":[{"type":"input_text","text":"fixture"}]}]}`)}}
-			if mode == "recovered_initial" {
+			if mode == "recovered_initial" || mode == "create_initial" {
 				input.InitialInputs = messages
 			}
-			var session sessions.Session
+			var creation sessions.Creation
 			switch mode {
-			case "create":
-				session, err = worker.CreateSession(ctx, tenant, input)
-			case "stream":
-				var creation sessions.Creation
-				creation, err = worker.CreateSessionStream(ctx, tenant, input)
-				session = creation.Session
+			case "create", "create_initial":
+				// Ordinary and streaming HTTP creation share this Worker entrypoint.
+				creation, err = worker.CreateSession(ctx, tenant, input)
 			case "recovered_input", "recovered_initial":
-				session, err = s.CreateSession(ctx, tenant, input)
+				creation, err = sessionService.CreateSession(ctx, tenant, input)
 			}
+			session := creation.Session
 			if err != nil {
 				t.Fatal(err)
 			}

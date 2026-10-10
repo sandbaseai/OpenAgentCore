@@ -22,6 +22,7 @@ Paths are relative to `/core/v1`.
 | Routes | Purpose | Contract |
 | --- | --- | --- |
 | `installation` | Public URL, API base URL, source commit, the installer's process settings and what is bound to the public URL | [Installation facts](#installation-facts) |
+| `workspace-storage` | Read or select independent workspace filesystem configuration | [Workspace storage](#workspace-storage) |
 | `projects`, `projects/{project_id}`, `projects/{project_id}/archive`, `projects/{project_id}/keys[/{key_id}]` | Projects and their API keys | [Projects and keys](#projects-and-keys) |
 | `projects/{project_id}/{agents,environment-templates,skills,files,vaults,sessions}/**` | Resource reads and deletion, Session history and Artifacts | [Resource reads and deletion](#resource-reads-and-deletion) |
 | `projects/{project_id}/sessions/{session_id}/archive` | Archive one hosted Session | [Session archive](#session-archive) |
@@ -38,6 +39,14 @@ Paths are relative to `/core/v1`.
 | `summary` | Session counts and usage by Project, Agent or key | [Summary](#summary) |
 | `metrics` | Core's own process, execution, database and job metrics | [Core metrics](./core-metrics.md) |
 | `audit-log` | Administrator writes | [Audit log](#audit-log) |
+
+## Workspace storage
+
+Operator scripts use `GET /core/v1/workspace-storage` and `PUT /core/v1/workspace-storage` with a Core key. Web has no workspace storage editor. The request and successful response use the canonical filesystem configuration: `{"id":"<canonical UUID>","adapter":"<adapter identifier>","parameters":{...}}`. `parameters` is an adapter-owned JSON object; the selected adapter validates it. Unknown top-level fields are rejected.
+
+GET returns the selected configuration, or 404 `workspace_storage_not_found` when none is configured. PUT validates and selects an immutable configuration and returns it with 200. Reusing an ID requires identical adapter configuration; changing its meaning or conflicting with retained ownership returns 409 `workspace_storage_conflict`. Configuration changes are serialized with workspace ownership changes, and successful mutations carry the same administrator audit provenance as other deployment settings. The [workspace filesystem protocol](../../docs/workspace-provider.md) owns identity, attachment, admission and retention semantics.
+
+Invalid configuration returns 400 `invalid_workspace_configuration`; unsupported adapters or combinations return 400 `workspace_operation_unsupported`. Unavailable storage or an unconfirmed operation returns 503 `workspace_storage_unavailable`. Error messages do not expose native paths or adapter error text. The endpoint configures storage independently of Sandbox Provider selection; it does not create or delete a Session workspace.
 
 ## Projects and keys
 
@@ -132,12 +141,12 @@ Core writes this record in the same transaction that creates the Session. Later 
 | Field | Meaning |
 | --- | --- |
 | `object` | `core.installation` |
-| `installation_id` | The installation ID from `state.json` ([installation directory](../../docs/configuration.md#installation-directory)); null when Core runs without the sandbox manager |
-| `public_url` | The [`public_url`](../../docs/configuration.md#settings) setting: the origin applications, nodes, sandboxes and self-hosted executors use. Null when unset |
-| `api_base_url` | `public_url` followed by `/v1`, the `OPENAI_BASE_URL` for Project API keys. Null when `public_url` is null |
+| `installation_id` | The installation ID from `OAC_INSTALLATION_ID_FILE` ([Compose installations](../../docs/configuration.md#compose-installations)) |
+| `public_url` | The [`public_url`](../../docs/configuration.md#settings) setting: the origin applications, nodes, sandboxes and self-hosted executors use |
+| `api_base_url` | `public_url` followed by `/v1`, the `OPENAI_BASE_URL` for Project API keys |
 | `local_only` | True when `public_url` names a loopback host, which only the Core host reaches |
 | `source_commit` | The full source commit Core was built from; null for development builds |
-| `configuration` | The process settings Core loaded from its environment. `path` and `apply_command` are empty, and `applied_at` is null |
+| `configuration` | The process settings Core loaded from its environment, under `settings` |
 | `address_bindings` | What a change of `public_url` affects, counted on each read |
 
 `configuration.settings` has one entry per setting Core loaded, with its dotted `key`, effective `value`, `default`, whether it is `changeable`, whether it is `sensitive`, and the services it `restarts` (`core`, `web`, `database`).
@@ -181,12 +190,12 @@ Both routes accept only the parameters listed; an unknown, repeated or empty par
 
 ```json
 {"data":[
-  {"resource_id":"id1","api_key":{"id":"key-uuid","name":"SDK","prefix":"pc_example","kind":"issued","revoked_at":null},"source":"api_key","admin_audit_id":null},
-  {"resource_id":"id2","api_key":null,"source":null,"admin_audit_id":null}
+  {"resource_id":"id1","api_key":{"id":"key-uuid","name":"SDK","prefix":"pc_example","kind":"issued","revoked_at":null}},
+  {"resource_id":"id2","api_key":null}
 ]}
 ```
 
-`api_key` and `source` are null when Core has no creation record, including for resources in another Project. `source: "admin_copy"` with an `admin_audit_id` marks a resource recorded by a `copy` entry in the audit log; no current route writes one.
+`api_key` is null when Core has no creation record, including for resources in another Project.
 
 `GET /projects/{project_id}/write-operations` lists writes newest first by `(created_at, id)`. Filters: `key_id`, `resource_type`, `resource_id`, inclusive `created_after` and exclusive `created_before` (RFC 3339). `limit` is 1–100, default 50. Pass the previous `next_cursor` as `after` with unchanged filters. The response is `{data, has_more, next_cursor}`; each entry has `id`, `created_at`, `api_key`, `action`, `resource_type`, `resource_id`, `parent_id` (empty when absent), `request_id` and `trace_id`.
 
@@ -217,7 +226,7 @@ The [Runtime telemetry API](./runtime-observability-api.md) owns current observa
 
 `GET /audit-log` lists administrator writes newest first. Filters: `project_id`, `resource_type`, `resource_id`, `action`, inclusive `created_after` and exclusive `created_before` (RFC 3339). `limit` is 1–100, default 50, with the opaque `after` cursor. The response is `{data, has_more, next_cursor}`.
 
-Each entry has `id`, `created_at`, `admin_credential_id` (the first 8 hex characters of the Core key digest), `actor_label`, `action`, `project_id`, `resource_type`, `resource_id`, `result_ids`, `request_id` and `trace_id`. `result_ids` is an empty array except on `copy` entries. Deployment-wide entries have `project_id: null`, and a `project_id` filter excludes them.
+Each entry has `id`, `created_at`, `admin_credential_id` (the first 8 hex characters of the Core key digest), `actor_label`, `action`, `project_id`, `resource_type`, `resource_id`, `request_id` and `trace_id`. Deployment-wide entries have `project_id: null`, and a `project_id` filter excludes them.
 
 | `resource_type` | `action` | `resource_id` |
 | --- | --- | --- |

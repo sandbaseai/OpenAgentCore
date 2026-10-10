@@ -54,7 +54,10 @@ class Suspension:
 
     def request(self, field):
         q = self.p.q.get(field)
-        if (not isinstance(q, dict) or set(q) != set(SUSPEND_FIELDS if field == 'Suspend' else RESUME_FIELDS) or
+        fields = set(SUSPEND_FIELDS if field == 'Suspend' else RESUME_FIELDS)
+        required = fields - ({'Workspace'} if field == 'Resume' else set())
+        if (not isinstance(q, dict) or set(q) - fields or not required <= set(q) or
+                (field == 'Resume' and q.get('Workspace') is not None) or
                 q.get('Reference') != self.p.reference):
             raise Failure('invalid')
         # UUID parsing is shared with the allocation envelope validator.

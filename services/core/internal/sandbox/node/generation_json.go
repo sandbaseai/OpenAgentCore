@@ -135,13 +135,13 @@ func validateGenerationJSON(raw []byte, kind string) error {
 			return err
 		}
 		if bootstrap := request["bootstrap"]; bootstrap != nil {
-			if _, err := generationObject(bootstrap, "TenantID EnvironmentID AllocationID SessionID DeviceID CoreURL Credential Harness NetworkAccess AllowedDomains", "", "AllowedDomains"); err != nil {
+			if _, err := generationObject(bootstrap, "TenantID EnvironmentID AllocationID SessionID DeviceID CoreURL Credential Harness NetworkAccess AllowedDomains", "Workspace", "AllowedDomains Workspace"); err != nil {
 				return err
 			}
 		}
 	}
 	if value := values["response"]; value != nil {
-		if _, err := generationObject(value, "id connection_id", "error_code info compute state command sample", ""); err != nil {
+		if _, err := generationObject(value, "id connection_id", "error_code unsupported info compute state command sample", ""); err != nil {
 			return err
 		}
 	}
