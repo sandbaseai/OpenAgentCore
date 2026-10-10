@@ -57,7 +57,17 @@ func TestPublicOpenAPIRoutesMatchPinnedUpstream(t *testing.T) {
 		Routes []string `json:"routes"`
 	}
 	readContractJSON(t, "upstream-routes.json", &pinned)
-	operations, _ := publicOperations(t)
+	operations, definitions := publicOperations(t)
+	for route, schema := range map[string]string{
+		"GET /agents/sessions/{}/diagnostics": "v1.SessionDiagnostics",
+		"GET /agents/sessions/{}/turns/{}/diagnostics": "v1.TurnDiagnostics",
+	} {
+		operation := operations[route]
+		if operation == nil || definitions[schema] == nil {
+			t.Fatalf("missing declared Core diagnostic extension %s or schema %s", route, schema)
+		}
+		delete(operations, route)
+	}
 	var missing, extra []string
 	for _, route := range pinned.Routes {
 		if operations[route] == nil {
