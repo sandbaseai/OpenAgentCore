@@ -63,3 +63,9 @@ Core resolves its own cgroup, including nested and subtree mounts, and reports t
 - The Runtime sampler's `processed` and `failed` count the targets its last sweep observed and failed to observe.
 - A cleanup job's `processed` counts the rows it removed.
 - For the scheduler and the cleanup jobs, a failed pass sets `processed` to null and `failed` to 1; `failed` never estimates lost rows or failed Turns.
+
+## Terminal Turn statistics
+
+`execution.terminal_turns` is a nullable database-backed summary over completed root Turns in the requested `[range.start, range.end)` interval, selected by `completed_at`. It contains `total`, `completed`, `failed`, `cancelled` and `failures` (`code`, `source: turn`, `count`). `total` includes all three terminal statuses; the failure proportion is `failed / total` when total is nonzero. The classification is identical to Project diagnostics, including `unknown`. Empty successful reads contain zeros and an empty failures array. Unavailable history yields null, never measured zero.
+
+These are window aggregates of retained authoritative terminal rows, not process counters. Retried reads, concurrent writers and service restarts cannot add duplicate counts. Deleted Sessions' retained Turns are included. Environment failures without a Turn are excluded from both numerator and denominator. No Project, model, Session or Turn identifiers become dimensions. Aggregation shares the bounded repeatable-read history snapshot and its three-second request budget; no retry or execution mutation occurs.

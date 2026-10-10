@@ -101,6 +101,8 @@ func (h *Handler) routes() *chi.Mux {
 		r.Post("/agents/sessions", h.createSession)
 		r.Get("/agents/sessions", h.listSessions)
 		r.Get("/agents/sessions/{session_id}", h.getSession)
+		r.Get("/agents/sessions/{session_id}/diagnostics", h.getProjectSessionDiagnostics)
+		r.Get("/agents/sessions/{session_id}/turns/{turn_id}/diagnostics", h.getProjectTurnDiagnostics)
 		r.Post("/agents/sessions/{session_id}", h.updateSession)
 		r.Delete("/agents/sessions/{session_id}", h.deleteSession)
 		r.Post("/agents/sessions/{session_id}/events", h.createEvents)

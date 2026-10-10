@@ -277,7 +277,7 @@ def extension_owners(bindings):
     return owners
 
 
-def public_document(source, extensions, owners, beta_header):
+def public_document(source, extensions, owners, beta_header, extension_paths=None):
     doc = copy.deepcopy(source)
     doc['info'] = {'title': 'OpenAgentCore public API', 'version': 'v1', 'description': 'The pinned OpenAI Agents, Files and Skills API with x_agents_core extensions. See the coverage ledger for implementation qualification.'}
     doc['servers'] = [{'url': '/v1'}]
@@ -292,6 +292,12 @@ def public_document(source, extensions, owners, beta_header):
                 operation['parameters'] = operation.get('parameters', []) + [{'name': 'OpenAI-Beta', 'in': 'header', 'required': True, 'schema': {'type': 'string', 'const': beta_header}}]
     # Extensions are authored in Core's Go types and projected by swag. Official
     # properties are never rewritten to accommodate a narrower implementation.
+    bindings = json.loads((CONTRACT / 'go-bindings.json').read_text())
+    official_refs = {
+        '#/definitions/v1.' + name: binding['sources'][0]
+        for name, binding in bindings.items()
+        if len(binding.get('sources', [])) == 1
+    }
     def convert(value):
         if isinstance(value, list):
             return [convert(v) for v in value]
@@ -299,10 +305,29 @@ def public_document(source, extensions, owners, beta_header):
             return value
         result = {k: convert(v) for k, v in value.items() if k != 'x-nullable'}
         if '$ref' in result:
-            result['$ref'] = result['$ref'].replace('#/definitions/', '#/components/schemas/')
+            result['$ref'] = official_refs.get(result['$ref'], result['$ref'].replace('#/definitions/', '#/components/schemas/'))
         if value.get('x-nullable'):
             return {'anyOf': [result, {'type': 'null'}]}
         return result
+    for path, item in (extension_paths or {}).items():
+        if path in doc['paths']:
+            raise ValueError(f'extension cannot replace official path: {path}')
+        projected = convert(copy.deepcopy(item))
+        for method, operation in projected.items():
+            if method not in HTTP_METHODS:
+                continue
+            operation['x-agents-core-extension'] = True
+            operation.pop('security', None)
+            operation.pop('produces', None)
+            operation.pop('consumes', None)
+            for parameter in operation.get('parameters', []):
+                if 'schema' not in parameter:
+                    parameter['schema'] = {k: parameter.pop(k) for k in ('type', 'format', 'enum') if k in parameter}
+            operation['parameters'] = operation.get('parameters', []) + [{'name': 'OpenAI-Beta', 'in': 'header', 'required': True, 'schema': {'type': 'string', 'const': beta_header}}]
+            for response in operation.get('responses', {}).values():
+                if 'schema' in response:
+                    response['content'] = {'application/json': {'schema': response.pop('schema')}}
+        doc['paths'][path] = projected
     doc['components']['schemas'].update({k: convert(v) for k, v in extensions.items()})
     for name, extension in owners.items():
         doc['components']['schemas'][name]['properties']['x_agents_core'] = {'anyOf': [{'$ref': '#/components/schemas/v1.' + extension}, {'type': 'null'}]}
@@ -452,12 +477,13 @@ def main():
         roots = 'package extensions\n\n' + '\n'.join(f'// @Success 200 {{object}} v1.{name}' for name in sorted(set(owners.values()))) + '\nfunc extensions() {}\n'
         args.swag_roots.write_text(roots)
     else:
-        doc = public_document(source, json.loads(args.extensions.read_text()), owners, pin["beta_header"])
+        overlay = json.loads(args.extensions.read_text())
+        doc = public_document(source, overlay["definitions"], owners, pin["beta_header"], overlay["paths"])
         # JSON is a YAML subset and keeps generation independent of PyYAML.
         write(CONTRACT / 'openapi.yaml', (json.dumps(doc, indent=2, ensure_ascii=False) + '\n').encode(), args.check)
         write(CLIENT_TYPES, ts_module(doc['components']['schemas'], 'contracts/agents-api/openapi.yaml'), args.check)
         write(CORE_CLIENT_TYPES, core_module(json.loads(args.core.read_text()), doc['components']['schemas'], bindings), args.check)
-        routes = sorted(method.upper() + ' ' + re.sub(r'\{[^}]*\}', '{}', path) for path, item in doc['paths'].items() for method in item if method in HTTP_METHODS)
+        routes = sorted(method.upper() + ' ' + re.sub(r'\{[^}]*\}', '{}', path) for path, item in doc['paths'].items() for method in item if method in HTTP_METHODS and not item[method].get("x-agents-core-extension"))
         write(CONTRACT / 'upstream-routes.json', (json.dumps({'openapi_commit': pin['openapi']['commit'], 'generator': 'scripts/generate-public-api.py', 'routes': routes}, indent=2) + '\n').encode(), args.check)
 
 

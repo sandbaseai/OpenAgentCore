@@ -44,3 +44,11 @@ The public completion time of a successful Turn may come from the native executo
 ## Client
 
 `AdminClient.retrieveSessionDiagnostics(projectId, sessionId, options)` and `AdminClient.retrieveTurnDiagnostics(projectId, sessionId, turnId, options)` in `packages/agents-client` support request cancellation and validate scope, categories, nullability and safe parameter values.
+
+## Project diagnostics extension
+
+Applications use a Project API key and `OpenAI-Beta: agents=v1` with `GET /v1/agents/sessions/{session_id}/diagnostics` or `GET /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics`. These two read-only routes are OpenAgentCore extensions, not official OpenAI Agents API operations. The generated public OpenAPI marks them `x-agents-core-extension: true`. Existing official Session and Turn responses and their error enums do not change.
+
+The objects are `agent.session_diagnostics` and `agent.turn_diagnostics`. Both return `session_id`, `status` and nullable `diagnostic`; Turn diagnostics also return `turn_id`. Session diagnostics include `turn_id` only when the failure source is a Turn. `diagnostic` contains only `code`, `source` and nullable RFC 3339 `failed_at`. The fixed categories and snapshot precedence above apply; the catch-all `internal_error` is exposed as `unknown`. No `params`, native text, timing Items, device identities or credential data are exposed. `diagnostic` is null for nonfailed status. Authentication and resource isolation use the requesting Project, including for deleted or foreign resources. Administrator keys are rejected.
+
+The reads share the administrator snapshot and five-second budget and return `Cache-Control: no-store`. A storage or timeout error is an HTTP error, not a failed execution snapshot; callers must distinguish diagnostic unavailability from an execution with an unknown cause. Reads do not change execution or counters and do not authorize automatic retry.
