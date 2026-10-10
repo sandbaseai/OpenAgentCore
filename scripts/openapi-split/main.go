@@ -33,7 +33,7 @@ func main() {
 }
 
 // run exports Go-owned definitions for the public extension overlay and emits
-// the two internal contracts. Public operations come only from official OpenAPI.
+// the two internal contracts. Explicit extension operations are exported separately.
 func run(input, extensionOutput, coreOutput, runtimeOutput string, check bool) error {
 	raw, err := os.ReadFile(input)
 	if err != nil {
@@ -47,7 +47,17 @@ func run(input, extensionOutput, coreOutput, runtimeOutput string, check bool) e
 	if err := field(source.Content[0], "definitions").Decode(&definitions); err != nil {
 		return err
 	}
-	extensionJSON, err := json.Marshal(definitions)
+	var paths map[string]any
+	if err := field(source.Content[0], "paths").Decode(&paths); err != nil {
+		return err
+	}
+	projectPaths := map[string]any{}
+	for path, item := range paths {
+		if strings.HasPrefix(path, "/v1/") {
+			projectPaths[strings.TrimPrefix(path, "/v1")] = item
+		}
+	}
+	extensionJSON, err := json.Marshal(map[string]any{"definitions": definitions, "paths": projectPaths})
 	if err != nil {
 		return err
 	}

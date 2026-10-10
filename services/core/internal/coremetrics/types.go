@@ -43,7 +43,20 @@ type Pool struct {
 	Idle  *int64 `json:"idle" extensions:"x-nullable"`
 	Max   *int64 `json:"max" extensions:"x-nullable"`
 }
+type FailureCount struct {
+	Code   string `json:"code"`
+	Source string `json:"source" enums:"turn"`
+	Count  int64  `json:"count"`
+}
+type TerminalTurns struct {
+	Total     int64          `json:"total"`
+	Completed int64          `json:"completed"`
+	Failed    int64          `json:"failed"`
+	Cancelled int64          `json:"cancelled"`
+	Failures  []FailureCount `json:"failures"`
+}
 type Execution struct {
+	TerminalTurns       *TerminalTurns    `json:"terminal_turns" extensions:"x-nullable"`
 	SlotsInUse          *int64            `json:"slots_in_use" extensions:"x-nullable"`
 	SlotsTotal          *int64            `json:"slots_total" extensions:"x-nullable"`
 	QueuedTurns         *int64            `json:"queued_turns" extensions:"x-nullable"`
@@ -119,9 +132,10 @@ type ExecutionSnapshot struct {
 // History is the root Turn history of a range. Buckets maps each bucket's UTC
 // start to its queue wait p95 in milliseconds, nil without observations.
 type History struct {
-	Interrupted int64
-	QueueWaitMS Latency
-	Buckets     map[time.Time]*float64
+	TerminalTurns TerminalTurns
+	Interrupted   int64
+	QueueWaitMS   Latency
+	Buckets       map[time.Time]*float64
 }
 type Source interface {
 	Sample(context.Context) Sample

@@ -179,3 +179,40 @@ func TestCoreMetricsHistoryBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalTurnStatisticsAreSnapshotCounts(t *testing.T) {
+	pool := pgtest.Open(t)
+	store := New(pgunit.NewPool(pool))
+	start := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	before, err := store.ReadExecutionHistory(t.Context(), start, end, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := start.Add(time.Minute)
+	session := coreMetricsSession(t, pool, true)
+	for _, row := range []struct{ status, code string }{{"completed", ""}, {"cancelled", ""}, {"failed", "device_disconnected"}, {"failed", "unrecognized-private-canary"}} {
+		coreMetricsTurn(t, pool, session, row.status, row.code, start, nil, &at)
+	}
+	coreMetricsTurn(t, pool, session, "failed", "engine_failed", start, nil, &end)
+	for i := 0; i < 2; i++ {
+		got, err := store.ReadExecutionHistory(t.Context(), start, end, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats := got.TerminalTurns
+		if stats.Total != before.TerminalTurns.Total+4 || stats.Completed != before.TerminalTurns.Completed+1 || stats.Cancelled != before.TerminalTurns.Cancelled+1 || stats.Failed != before.TerminalTurns.Failed+2 {
+			t.Fatal(stats)
+		}
+		counts := map[string]int64{}
+		for _, f := range stats.Failures {
+			if f.Source != "turn" || strings.Contains(f.Code, "canary") {
+				t.Fatal(f)
+			}
+			counts[f.Code] = f.Count
+		}
+		if counts["runtime_disconnected"] < 1 || counts["unknown"] < 1 {
+			t.Fatal(stats)
+		}
+	}
+}

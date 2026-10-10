@@ -24,9 +24,26 @@ class PublicAPITests(unittest.TestCase):
     def test_public_projection_is_current_and_keeps_source_immutable(self):
         source = copy.deepcopy(self.source)
         extensions = {k: v for k, v in self.public['components']['schemas'].items() if k.startswith('v1.')}
-        actual = generator.public_document(source, extensions, generator.extension_owners(self.bindings), self.pin["beta_header"])
+        paths = {p: copy.deepcopy(v) for p, v in self.public['paths'].items() if any(op.get('x-agents-core-extension') for op in v.values() if isinstance(op, dict))}
+        # Feed Swagger-style operations back into the projection.
+        for item in paths.values():
+            for operation in item.values():
+                operation['parameters'] = [p for p in operation.get('parameters', []) if p.get('name') != 'OpenAI-Beta']
+        actual = generator.public_document(source, extensions, generator.extension_owners(self.bindings), self.pin["beta_header"], paths)
         self.assertEqual(actual, self.public)
         self.assertEqual(source, self.source)
+
+    def test_diagnostic_extensions_do_not_change_official_routes(self):
+        extensions = [p for p, item in self.public['paths'].items() if item.get('get', {}).get('x-agents-core-extension')]
+        self.assertEqual(sorted(extensions), ['/agents/sessions/{session_id}/diagnostics', '/agents/sessions/{session_id}/turns/{turn_id}/diagnostics'])
+        routes = json.loads((generator.CONTRACT / 'upstream-routes.json').read_text())['routes']
+        self.assertEqual(len(routes), 58)
+        self.assertTrue(all('/diagnostics' not in p for p in routes))
+        schemas = self.public['components']['schemas']
+        self.assertEqual(set(schemas['v1.ExecutionDiagnostic']['properties']), {'code', 'source', 'failed_at'})
+        self.assertEqual(set(schemas['v1.TurnDiagnostics']['properties']['status']['enum']), {'queued', 'in_progress', 'waiting', 'completed', 'failed', 'cancelled'})
+        with self.assertRaisesRegex(ValueError, 'cannot replace official path'):
+            generator.public_document(self.source, {}, {}, self.pin['beta_header'], {'/agents': {}})
 
     def test_union_and_nullable_fields_keep_the_official_schema(self):
         schemas = self.public['components']['schemas']
