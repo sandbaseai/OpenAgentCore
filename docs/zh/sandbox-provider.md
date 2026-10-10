@@ -91,7 +91,7 @@ Microsandbox 在返回创建不存在回执前永久关闭初始 Create 准入�
 
 `ErrInvalid`、`ErrOwnership`、`ErrExists`、`ErrNotFound`、`ErrComputeUnconfirmed` 和 `ErrCommandUnconfirmed` 保持其定义含义。未分类原生或 transport error 表示未知，不授权重试 mutation。Core 不将 provider diagnostics 读作生命周期事实，也不暴露原生错误文本或凭据；node transport 将错误映射为固定 code，直接 SDK 细节保持私有。
 
-暂停支持增加精确的 `Compute` 代次和不透明的 `RetainedState` 收据。原样持久化其身份与操作 ID。`ReconcileOnly` 观察原始尝试并可完成它拥有的清理，但不会开始另一次捕获或恢复。`ResumeCompute` 仅解冻保留的源实例，绝不冷启动已停止的源实例。清理针对精确计算实例和保留状态。声明支持前请阅读[共享暂停契约](#suspension)。
+暂停支持增加精确的 `Compute` 代次、名称和 ID，以及不透明的 `RetainedState` 收据。原样持久化操作 ID 和 Provider 保留状态的来源。暂停或恢复中的 `ReconcileOnly` 观察原始尝试，不会开始另一次捕获或恢复。`ResumeCompute` 仅解冻保留的源实例，绝不冷启动已停止的源实例。清理针对精确计算实例和保留状态，而非当前恰好同名的实例。声明支持前请阅读 [`runtime_compute.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/execution/runtime_compute.go) 及其失败测试。
 
 ### 四个独立就绪事实 {#four-distinct-readiness-facts}
 
@@ -198,17 +198,17 @@ placement 自动完成：environment-to-node placement 与 Session 创建及其 
 
 `ResumeRequest.Workspace` 携带 allocation 独立拥有的文件系统绑定；Core 在恢复前获取 ready 绑定。源实例必须已释放活跃执行能力，目标才可成为写者。adapter 在原生副作用前校验绑定；不支持独立文件系统的 adapter 拒绝非空绑定。`DeleteRetained` 仅删除 adapter 的计算保留状态，绝不删除 workspace。显式 Session 删除先完成 compute 清理，再删除独立存储，恢复期间保持单一活跃写者。
 
-Core 对支持暂停的 Provider 应用固定策略：空闲 300 秒后暂停，保留状态期限为 86400 秒；部署的 [`suspension`](../../contracts/agents-api/zh/sandbox-deployment.md#safe-response) 返回这些值。
+Core 对所有声明暂停支持的 Provider 应用统一固定策略：工作空闲 5 分钟（300 秒）后暂停，保留状态期限为 24 小时（86400 秒）；部署的 [`suspension`](../../contracts/agents-api/zh/sandbox-deployment.md#safe-response) 返回这些值。Core 暂停已经初始化的 Environment，包括尚未执行 Turn 的 Environment，前提是没有 root 或 Subagent Turn 排队、执行或等待，没有输入、文件操作或初始化待处理，且真实活动已空闲达到该时长。Core 在同一事务中使用数据库时钟记录 allocation 的初始化完成和 root 或 child 终结转换。候选筛选和持有 Session 锁的复查比较数据库经过时间与空闲时长，初始保留状态期限也锚定同一数据库观测，因此 Core 与数据库主机的时钟无需一致。公开历史中的原生完成时间戳保持不变，但不驱动空闲准入，心跳也不重置活动时间。确认计划暂停前，daemon 关闭准入并排空原生清理、输出收据和文件工作。
 
-初始化完成的 Environment 即使尚未执行 Turn，也会在没有根或 Subagent Turn、输入或文件操作待处理，且真实活动已超过部署空闲时长时暂停。共享数据库时钟、Session 锁和生命周期租约串行化准入；心跳从不重置空闲时间。排队工作和实时 Files 访问请求唤醒；历史和已发布 artifact 不会。daemon 在确认静止前排空原生清理、收据和文件工作。确认丢失只授权精确源实例回滚，绝不授权新捕获。
+Worker 租约、Session 锁和每个 node 的 gate 负责所有 Provider 的暂停。新 Turn claim、文件写入意图和捕获准入在 Session 锁下串行化，共享计算阶段检查；新待处理工作取消捕获并唤醒同一源实例。正常准备在经过认证的恢复握手后等待计算阶段变为 running；待处理输入的提升与生命周期转换冲突时，输入保持 pending。计算阶段和经 revision 校验的收据存储在 allocation 中。Core 在副作用前持久化静止、捕获和恢复意图，仅新收据执行捕获或恢复；恢复流程观察精确尝试，不重试结果未知的创建、捕获或恢复。已消费的保留状态不会使运行中的代次回滚。删除、撤销和保留期到期始终优先于唤醒，直至最后的数据库 compare-and-swap；未知清理身份会一直保留，直到确认所属资源已不存在。已消费产物和旧计算实例会被删除，因此暂停循环不会累积可写磁盘链。
 
-完整声明的 SandboxProvider 操作组在直接和节点放置中使用同一生命周期。RetainedState 是绑定分配、源实例和操作的不透明 adapter 收据，其原生 Data 上限为 64 KiB；它不承诺快照语义。Core 从不解释原生 Data。Initial 和 NewCompute 规划精确逻辑实例而不分配资源；不同逻辑代次可保留相同原生 ID。GetCompute 仅观察。RenewCompute 为精确的运行实例续租而不唤醒它；公共运行路径在保持所有权或清除唤醒前先观察并续租。
+排队工作和实时 Environment 文件访问会唤醒暂停的 Environment；历史和已发布 Artifact 的读取不会唤醒。计划暂停在 daemon 连接上使用 Environment 与 suspension token。由 PID 和启动时间隔离的本地控制信号（`RunCommandCompute`）唤醒 parked daemon，daemon 在准入工作前重新认证。确认前的临时断连通过有界尝试和退避重试同一已准备好的暂停；永久认证或协议拒绝会将其关闭。Core 负责保留状态的到期期限，daemon 没有相应定时器。静止确认丢失时可以通过明确回滚解冻同一源实例，但不授权捕获。
 
-Suspend 负责原生资源释放，返回绑定的保留句柄、suspended 状态、ResourcesReleased 和 SuspendSettled 后，Core 才释放活跃容量。ReconcileOnly 禁止重放原始捕获或暂停，但允许完成由持久保留产物证明安全的 adapter 清理。无保留状态的结果只有在带有 SuspendSettled 且源实例处于可恢复的运行或暂停状态时才允许回滚。其他所有不确定结果均保留所有权并关闭准入。Core 从不在 Suspend 后无条件销毁源实例。
+`Suspend` 负责原生资源释放，返回绑定的保留句柄、suspended 状态、`ResourcesReleased` 和 `SuspendSettled` 后，Core 才释放活跃容量。`ReconcileOnly` 禁止重放原始捕获或暂停，但允许完成由持久保留产物证明安全的 adapter 清理。无保留状态的结果只有在带有 `SuspendSettled` 且源实例处于可恢复的运行或暂停状态时才允许回滚。其他所有不确定结果均保留所有权并关闭准入。Core 从不在 `Suspend` 后无条件销毁源实例。
 
-Resume 将保留状态恰好消费一次并恢复到预先提交的目标。恢复逻辑观察同一次尝试。Core 持久化 waking、认证并恢复 daemon、删除已消费的保留资源，然后提交 running 并准入工作。DeleteRetained 是幂等产物清理，会保留运行中的计算资源。清理失败会保持 waking 阶段，不能触发再次恢复。KillCompute 仍然是破坏性操作；清理旧代次时不得终止共享原生 ID 的较新活跃实例。
+`Resume` 将保留状态恰好消费一次并恢复到预先提交的目标。恢复逻辑观察同一次尝试。Core 持久化 `waking`、认证并恢复 daemon、删除已消费的保留资源，然后提交 `running` 并准入工作。`DeleteRetained` 是幂等产物清理，会保留运行中的计算资源。清理失败会保持 `waking` 阶段，不能触发再次恢复。`KillCompute` 仍然是破坏性操作；清理旧代次时不得终止共享原生 ID 的较新活跃实例。
 
-现有 Session 锁、生命周期租约、空闲规则、容量查询和清理顺序继续作为权威。每个尚未释放的分配都占用 max_retained，包括运行中的分配。每个分配在预留时都写入共享计算协议版本，包括暂停阶段为 disabled 的分配。激活会拒绝任何协议版本缺失或不同的未释放分配；升级前必须由旧版本完成普通清理。Session 历史保留。
+现有 Session 锁、生命周期租约、空闲规则、容量查询和清理顺序继续作为权威。每个尚未释放的分配都占用 `max_retained`，包括运行中的分配。每个分配在预留时都写入共享计算协议版本，包括暂停阶段为 `disabled` 的分配。激活会拒绝任何协议版本缺失或不同的未释放分配；升级前必须由旧版本完成普通清理。Session 历史保留。
 
 ### 重置与归档 {#reset-and-archive}
 
