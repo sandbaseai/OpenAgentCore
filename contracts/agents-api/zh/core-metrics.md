@@ -1,7 +1,7 @@
 ---
 title: "Core 运行指标"
 source: contracts/agents-api/core-metrics.md
-source_hash: 08ac6802f0da2eb5138dc7706a995754a69e7c864e034cf412f75dcc4950c679
+source_hash: 46964107c35c91bb4b40ac784416330f1a357a756ad161dc336e281f17068b48
 ---
 
 `GET /core/v1/metrics?range=1h|6h|24h|7d` 报告 Core 自身的健康状况：进程、执行队列与槽位、PostgreSQL 和后台任务。它要求 Core 密钥（[Core 管理 API](admin-api.md)）。
@@ -65,3 +65,9 @@ Core 解析自身的 cgroup，包括嵌套与子树挂载，并报告该 cgroup 
 - Runtime sampler 的 `processed` 和 `failed` 统计上次扫描成功观察和未能观察的目标。
 - 清理任务的 `processed` 统计删除的行数。
 - scheduler 和清理任务失败时，`processed` 为 null，`failed` 为 1；`failed` 不估算丢失行数或失败 Turn 数量。
+
+## Terminal Turn statistics
+
+`execution.terminal_turns` 是基于数据库的可空汇总，按 `completed_at` 选择请求 `[range.start, range.end)` 窗口内的 root Turn 终态，包含 `total`、`completed`、`failed`、`cancelled` 和 `failures`（`code`、`source: turn`、`count`）。`total` 包含三种终态；非零时失败率为 `failed / total`。分类与 Project 诊断一致，含 `unknown`。查询成功但没有记录时返回零与空数组；历史不可用时为 null，而非零。
+
+这是保留的权威终态记录的窗口聚合，不是进程计数器。重复读取、并发写入及服务重启不会重复计数；包含已删除 Session 的保留 Turn。尚未形成 Turn 的环境失败不进入分子或分母。维度不包含 Project、模型、Session 或 Turn 标识。聚合共享有界的 repeatable-read 历史快照和三秒请求预算，不触发重试或执行变更。

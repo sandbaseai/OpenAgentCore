@@ -768,6 +768,10 @@ definitions:
       slots_total:
         type: integer
         x-nullable: true
+      terminal_turns:
+        allOf:
+          - $ref: '#/definitions/coremetrics.TerminalTurns'
+        x-nullable: true
       unavailable:
         type: integer
         x-nullable: true
@@ -787,6 +791,17 @@ definitions:
         type: integer
         x-nullable: true
       start:
+        type: string
+    type: object
+  coremetrics.FailureCount:
+    properties:
+      code:
+        type: string
+      count:
+        type: integer
+      source:
+        enum:
+          - turn
         type: string
     type: object
   coremetrics.Job:
@@ -884,6 +899,21 @@ definitions:
         x-nullable: true
       status:
         type: string
+    type: object
+  coremetrics.TerminalTurns:
+    properties:
+      cancelled:
+        type: integer
+      completed:
+        type: integer
+      failed:
+        type: integer
+      failures:
+        items:
+          $ref: '#/definitions/coremetrics.FailureCount'
+        type: array
+      total:
+        type: integer
     type: object
   coremetrics.View:
     properties:

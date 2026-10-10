@@ -75,7 +75,7 @@ func (s *coreMetricsSource) History(ctx context.Context, start, end time.Time, s
 	if err != nil {
 		return coremetrics.History{}, err
 	}
-	result := coremetrics.History{Interrupted: value.Interrupted, QueueWaitMS: coremetrics.Latency{P50: value.QueueWaitMS.P50, P95: value.QueueWaitMS.P95}, Buckets: map[time.Time]*float64{}}
+	result := coremetrics.History{TerminalTurns: value.TerminalTurns, Interrupted: value.Interrupted, QueueWaitMS: coremetrics.Latency{P50: value.QueueWaitMS.P50, P95: value.QueueWaitMS.P95}, Buckets: map[time.Time]*float64{}}
 	for _, bucket := range value.Buckets {
 		result.Buckets[bucket.Start.UTC()] = bucket.P95MS
 	}

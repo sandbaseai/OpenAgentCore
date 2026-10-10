@@ -41,7 +41,7 @@ func TestCompleteBucketsAndObservedPercentiles(t *testing.T) {
 	} {
 		s.record(sample)
 	}
-	source.history = History{Interrupted: 2, QueueWaitMS: Latency{P50: ptr(100.0), P95: ptr(200.0)}, Buckets: map[time.Time]*float64{end.Add(-time.Minute): ptr(200.0)}}
+	source.history = History{TerminalTurns: TerminalTurns{Total: 5, Completed: 3, Failed: 2, Failures: []FailureCount{{Code: "unknown", Source: "turn", Count: 2}}}, Interrupted: 2, QueueWaitMS: Latency{P50: ptr(100.0), P95: ptr(200.0)}, Buckets: map[time.Time]*float64{end.Add(-time.Minute): ptr(200.0)}}
 	s.now = func() time.Time { return end.Add(-10 * time.Second) }
 	s.RecordUnavailable()
 	s.now = func() time.Time { return now }
@@ -52,6 +52,9 @@ func TestCompleteBucketsAndObservedPercentiles(t *testing.T) {
 	}
 	if !got.Range.End.Equal(end) || len(got.Execution.Series) != 60 || *got.Execution.QueuedTurns != 99 || *got.Execution.Unavailable != 1 {
 		t.Fatal(got)
+	}
+	if got.Execution.TerminalTurns == nil || got.Execution.TerminalTurns.Total != 5 || got.Execution.TerminalTurns.Failed != 2 {
+		t.Fatal(got.Execution.TerminalTurns)
 	}
 	b := got.Execution.Series[59]
 	d := got.Database.Series[59]
@@ -71,7 +74,7 @@ func TestUnknownAndFailureRemainNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Service.Status != "degraded" || got.Execution.Unavailable != nil || got.Execution.Interrupted != nil || got.Execution.QueueWaitMS.P50 != nil || got.Database.SizeBytes != nil {
+	if got.Service.Status != "degraded" || got.Execution.TerminalTurns != nil || got.Execution.Unavailable != nil || got.Execution.Interrupted != nil || got.Execution.QueueWaitMS.P50 != nil || got.Database.SizeBytes != nil {
 		t.Fatal(got)
 	}
 	raw, _ := json.Marshal(got)
