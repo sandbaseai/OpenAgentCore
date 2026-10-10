@@ -106,7 +106,7 @@ securityDefinitions:
 	if err := json.Unmarshal(rawDefinitions, &definitions); err != nil {
 		t.Fatal(err)
 	}
-	if len(definitions) != 4 {
+	if len(definitions["definitions"].(map[string]any)) != 4 {
 		t.Fatalf("missing extension dependencies: %v", definitions)
 	}
 	// Every internal document keeps only the schemes its operations use.

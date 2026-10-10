@@ -6329,6 +6329,199 @@
           "name": "Delete a vault credential"
         }
       }
+    },
+    "/agents/sessions/{session_id}/diagnostics": {
+      "get": {
+        "description": "OpenAgentCore extension. Project key only. Safe committed failure classification without private execution details.",
+        "parameters": [
+          {
+            "description": "Session ID",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "OpenAI-Beta",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "agents=v1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.SessionDiagnostics"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retrieve Project Session diagnostics",
+        "tags": [
+          "Diagnostics"
+        ],
+        "x-agents-core-extension": true
+      }
+    },
+    "/agents/sessions/{session_id}/turns/{turn_id}/diagnostics": {
+      "get": {
+        "description": "OpenAgentCore extension. Project key only. Safe committed failure classification without private execution details.",
+        "parameters": [
+          {
+            "description": "Session ID",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Root Turn ID",
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "OpenAI-Beta",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "agents=v1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.TurnDiagnostics"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retrieve Project Turn diagnostics",
+        "tags": [
+          "Diagnostics"
+        ],
+        "x-agents-core-extension": true
+      }
     }
   },
   "webhooks": {
@@ -17663,6 +17856,46 @@
         "additionalProperties": false,
         "description": "Confirmation that a vault credential was deleted."
       },
+      "v1.APIError": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "misalignment": {
+            "type": "object"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "param",
+          "type"
+        ],
+        "type": "object"
+      },
       "v1.AgentsCore": {
         "properties": {
           "harness": {
@@ -17704,6 +17937,75 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "v1.ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/v1.APIError"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "v1.ExecutionDiagnostic": {
+        "properties": {
+          "code": {
+            "enum": [
+              "unknown",
+              "harness_error",
+              "model_provider_required",
+              "runtime_unavailable",
+              "runtime_disconnected",
+              "runtime_preparation_failed",
+              "execution_interrupted",
+              "delivery_unconfirmed",
+              "input_rejected",
+              "executor_protocol_error",
+              "core_storage_failed",
+              "environment_connection_timeout",
+              "environment_unavailable",
+              "environment_provisioning_failed",
+              "authentication_error",
+              "rate_limit_exceeded",
+              "usage_limit_exceeded",
+              "server_overloaded",
+              "server_error",
+              "invalid_request",
+              "resource_not_found",
+              "request_timeout",
+              "context_length_exceeded",
+              "cyber_policy",
+              "connection_failed"
+            ],
+            "type": "string"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "turn",
+              "environment",
+              "environment_input"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "failed_at",
+          "source"
+        ],
         "type": "object"
       },
       "v1.ModelProviderInput": {
@@ -17823,6 +18125,52 @@
         },
         "type": "object"
       },
+      "v1.SessionDiagnostics": {
+        "properties": {
+          "diagnostic": {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/v1.ExecutionDiagnostic"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "object": {
+            "enum": [
+              "agent.session_diagnostics"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "idle",
+              "in_progress",
+              "requires_action",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diagnostic",
+          "object",
+          "session_id",
+          "status"
+        ],
+        "type": "object"
+      },
       "v1.SessionExecutionInput": {
         "properties": {
           "environment": {
@@ -17836,6 +18184,55 @@
             "$ref": "#/components/schemas/v1.ModelProviderInput"
           }
         },
+        "type": "object"
+      },
+      "v1.TurnDiagnostics": {
+        "properties": {
+          "diagnostic": {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/v1.ExecutionDiagnostic"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "object": {
+            "enum": [
+              "agent.turn_diagnostics"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "in_progress",
+              "waiting",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "diagnostic",
+          "object",
+          "session_id",
+          "status",
+          "turn_id"
+        ],
         "type": "object"
       }
     },

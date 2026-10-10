@@ -4,6 +4,9 @@ package coremetricspg
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"sort"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/coremetrics"
@@ -93,6 +96,49 @@ func (s *Store) ReadExecutionHistory(ctx context.Context, start, end time.Time, 
 				result.Buckets[buckets[row.BucketNumber]] = &row.P95Ms
 			}
 		}
+		terminal, err := tx.Query(ctx, `SELECT status, outcome->>'error_code', outcome->>'engine_error_code', outcome->'engine_http_status', count(*) FROM turns WHERE completed_at >= $1 AND completed_at < $2 AND status IN ('completed','failed','cancelled') GROUP BY 1,2,3,4`, start, end)
+		if err != nil {
+			return err
+		}
+		defer terminal.Close()
+		counts := map[string]int64{}
+		result.TerminalTurns.Failures = []coremetrics.FailureCount{}
+		for terminal.Next() {
+			var status string
+			var coreCode, engineCode *string
+			var httpStatus json.RawMessage
+			var count int64
+			if err := terminal.Scan(&status, &coreCode, &engineCode, &httpStatus, &count); err != nil {
+				return err
+			}
+			result.TerminalTurns.Total += count
+			switch status {
+			case "completed":
+				result.TerminalTurns.Completed += count
+			case "cancelled":
+				result.TerminalTurns.Cancelled += count
+			case "failed":
+				result.TerminalTurns.Failed += count
+				metadata, err := json.Marshal(map[string]any{"error_code": coreCode, "engine_error_code": engineCode, "engine_http_status": httpStatus})
+				if err != nil {
+					return err
+				}
+				code, _ := sessions.DiagnosticFailureCode(metadata)
+				if code == "internal_error" {
+					code = "unknown"
+				}
+				counts[code] += count
+			}
+		}
+		if err := terminal.Err(); err != nil {
+			return err
+		}
+		for code, count := range counts {
+			result.TerminalTurns.Failures = append(result.TerminalTurns.Failures, coremetrics.FailureCount{Code: code, Source: "turn", Count: count})
+		}
+		sort.Slice(result.TerminalTurns.Failures, func(i, j int) bool {
+			return result.TerminalTurns.Failures[i].Code < result.TerminalTurns.Failures[j].Code
+		})
 		return nil
 	})
 	if err != nil {

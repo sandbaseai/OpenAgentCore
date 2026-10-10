@@ -77,34 +77,7 @@ func (h *Handler) getSessionDiagnostics(w http.ResponseWriter, r *http.Request) 
 		writeSessionsError(w, r, err)
 		return
 	}
-	response := SessionDiagnostics{Object: "core.session_diagnostics", SessionID: public.ID, Status: public.Status}
-	if public.Status == "failed" {
-		failure := SessionDiagnosticFailure{DiagnosticFailure: DiagnosticFailure{Code: "internal_error", Params: CoreErrorDetails{}}}
-		switch {
-		case session.EnvironmentFailure != nil:
-			failure.Source = "environment"
-			failure.Code = "environment_provisioning_failed"
-			failure.FailedAt = diagnosticTime(session.EnvironmentFailure.FailedAt)
-			failure.Params = provisioningFailureParams(session.EnvironmentFailure.Detail)
-		case session.EnvironmentInputActivity != nil:
-			failure.Source = "environment_input"
-			failure.FailedAt = diagnosticTime(session.EnvironmentInputActivity.LastActiveAt)
-			switch session.EnvironmentInputActivity.Failure {
-			case "":
-				failure.Code = "environment_connection_timeout"
-			case "environment_unavailable":
-				failure.Code = "environment_unavailable"
-			case "runtime_preparation_failed":
-				failure.Code = "runtime_preparation_failed"
-			case "model_provider_required":
-				failure.Code = "model_provider_required"
-			}
-		case session.LastTurn != nil:
-			failure.Source, failure.TurnID = "turn", session.LastTurn.ID
-			failure.DiagnosticFailure = *turnDiagnosticFailure(*session.LastTurn)
-		}
-		response.Failure = &failure
-	}
+	response := sessionDiagnosticResponse(session, public.ID, public.Status)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, response)
 }
@@ -168,4 +141,36 @@ func provisioningFailureParams(detail *sessions.ProvisioningFailureDetail) CoreE
 		params["exit_code"] = CoreErrorNumber(float64(*detail.ExitCode))
 	}
 	return params
+}
+
+func sessionDiagnosticResponse(session sessions.Session, id, status string) SessionDiagnostics {
+	response := SessionDiagnostics{Object: "core.session_diagnostics", SessionID: id, Status: status}
+	if status == "failed" {
+		failure := SessionDiagnosticFailure{DiagnosticFailure: DiagnosticFailure{Code: "internal_error", Params: CoreErrorDetails{}}}
+		switch {
+		case session.EnvironmentFailure != nil:
+			failure.Source = "environment"
+			failure.Code = "environment_provisioning_failed"
+			failure.FailedAt = diagnosticTime(session.EnvironmentFailure.FailedAt)
+			failure.Params = provisioningFailureParams(session.EnvironmentFailure.Detail)
+		case session.EnvironmentInputActivity != nil:
+			failure.Source = "environment_input"
+			failure.FailedAt = diagnosticTime(session.EnvironmentInputActivity.LastActiveAt)
+			switch session.EnvironmentInputActivity.Failure {
+			case "":
+				failure.Code = "environment_connection_timeout"
+			case "environment_unavailable":
+				failure.Code = "environment_unavailable"
+			case "runtime_preparation_failed":
+				failure.Code = "runtime_preparation_failed"
+			case "model_provider_required":
+				failure.Code = "model_provider_required"
+			}
+		case session.LastTurn != nil:
+			failure.Source, failure.TurnID = "turn", session.LastTurn.ID
+			failure.DiagnosticFailure = *turnDiagnosticFailure(*session.LastTurn)
+		}
+		response.Failure = &failure
+	}
+	return response
 }
