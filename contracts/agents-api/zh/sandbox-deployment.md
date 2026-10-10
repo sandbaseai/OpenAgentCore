@@ -1,10 +1,10 @@
 ---
 title: "沙箱部署"
 source: contracts/agents-api/sandbox-deployment.md
-source_hash: 9d4559f7207943ece262ed626fbc233dd16b1bb1f271e6ea440b30d26f0a0bd3
+source_hash: ddf10342dfb4b27c1d618c07b085b64b20a1483b4cfbb09b668fae02b66a08c7
 ---
 
-沙箱部署为 Core 管理的 `openai_hosted` 执行选择 Sandbox Provider、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness；部署可以保持未配置状态，既无节点，也不接受托管准入。
+沙箱部署为 Core 管理的 `openai_hosted` 执行选择 Sandbox Provider、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness。部署可以保持未配置状态，没有节点；此时它拒绝托管准入。
 
 本契约负责下列 Core API 路由及其语义。[节点指南](../../../docs/zh/getting-started/nodes.md)负责操作员工作流，[机器连接 API](machine-api.md#node-routes)负责节点调用的路由，[沙箱节点协议](node-generation-protocol.md)负责节点连接。
 
@@ -50,13 +50,18 @@ POST 和 PUT 接受相同的完整选择，并要求提供先前 GET 返回的 `
 | `cpus` | 整数，1 到 255 |
 | `memory_mib` | 整数，512 到 1048576 MiB |
 | `root_disk_mib` | microsandbox：至少 1024 MiB；Docker 和 E2B：省略或为零 |
-| `environment_disk_mib` | microsandbox：至少 1024 MiB；Docker 和 E2B：省略或为零 |
+| `environment_disk_mib` | microsandbox 自有磁盘：至少 1024 MiB；外部文件系统：零表示不请求配额；正值必须至少为 1024 MiB 且要求强制执行配额；Docker 和 E2B：省略或为零 |
 
 这些限制描述每个沙箱。节点的 `max_active` 和 `max_retained` 是独立的预留限制，主机测量值绝不会允许超过其中任何一个。即使数值满足这些边界，原生提供商仍可能拒绝这些值。
 
 Docker 应用 CPU 和内存限制，并检查运行中容器的限制和精确镜像；它没有硬性的根磁盘或工作区磁盘配额。E2B 的 CPU 和内存必须与精确的就绪模板构建一致，Core 会在保存前通过固定版本 SDK 进行验证；磁盘容量仍属于模板的一部分。两种提供商都不接受其无法强制执行的磁盘配额。E2B 选择可以省略 `resources`：此时 Core 将构建的 CPU 数量和内存存储为 `cpus` 和 `memory_mib`，并通过 `specification.resources` 返回，不带磁盘字段。重启时，Core 会加载已提交的 E2B 选择，而不会再次验证模板构建，因此 E2B 中断绝不会阻碍检查或清理；新选择仍需验证。
 
 microsandbox 会配置 CPU、内存、托管根磁盘，以及位于 `/environment` 的独立自有磁盘。[microsandbox 辅助工具](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/tools/microsandbox-provider/README.md)说明了 restore 如何处理这些限制。
+
+
+响应中可选的 `specification.workspace` 是从所选[工作区文件系统](../../../docs/zh/workspace-provider.md)派生的不可变能力回执，不是可独立写入的设置。它仅包含 `attachment`、`user_xattr` 和 `capacity_quota`；文件系统配置、路径和凭据不进入 Sandbox specification。Core 保存前校验组合声明，保留代次校验与节点构造均使用此回执。缺失 `workspace` 时保留自有磁盘模式及现有容量边界。Create 和 Resume 必须且仅当固定代次选择外部存储时提供绑定。
+
+为现有自有磁盘部署启用外部存储时，先选择文件系统配置，再使用兼容资源更新 Sandbox 部署（不支持配额的文件系统使用 `environment_disk_mib: 0`）。选择文件系统不会改变现有代次或 allocation。下一次 Sandbox 更新派生外部能力回执；旧的自有磁盘 allocation 保留原磁盘。文件系统选择必须支持 Provider 声明的要求；已采用外部存储的部署要求等价声明及兼容配额语义。
 
 ### Runtime 发行版 {#runtime-release}
 
@@ -88,7 +93,7 @@ E2B 使用 `template-id:build-uuid` 形式的 `configuration.template`；构建 
 GET 和成功的写入操作会返回 `installation_id`、`provider`、`core_url`（只读：安装公开 URL，即使配置前也存在）、`mode`、`generation`、`owner_epoch`、`reset`、`rollout`、`suspension`、`resources` 和 `credential_configured`。已配置的部署还会返回 `specification`、`specification_digest`、`configuration` 和 `metadata`：这是适配器对其选择器及其记录的观测结果所作的公开投影，绝不会包含原始存储值或机密。E2B 返回 `configuration.template`、`configuration.api_url`、`configuration.domain`，并在记录后返回 `metadata.template_build`。Docker 和 microsandbox 返回空的 `configuration` 和 `metadata` 对象以及 `credential_configured: false`；未配置的部署则不含这两个对象。
 
 - `metadata.template_build` 为 `{status, resources: {cpus, memory_mib, root_disk_mib}}`：这是保存选择时 Core 通过固定版本 SDK 读取的构建。GET 绝不会调用 E2B，因此 E2B 中断期间该操作仍保持低成本。验证仅接受 CPU 数量和内存与所选值一致的 `ready` 构建；`root_disk_mib` 是构建的原生磁盘大小，Core 不会强制执行该值。未知值为 null，`metadata: {}` 表示未记录任何观测，在不提供凭据的情况下提交完全相同的 PUT 也不会刷新它。
-- `suspension` 对 microsandbox 而言为 `{idle_seconds, retention_seconds}`，microsandbox 是 Core 唯一会暂停的提供商（当前为 300 和 86400）；Docker、E2B 和未配置的部署返回 null。
+- 所选 Provider 声明 checkpoint 支持时，`suspension` 为 `{idle_seconds, retention_seconds}`，即 Core 的 [suspension policy](../../../docs/zh/sandbox-provider.md#suspension)；其他部署（包括未配置的部署）返回 null。
 - 请求中的 `resources` 和响应中的 `specification.resources` 是每个沙箱的限制。响应中的 `resources.allocations` 和 `resources.pending` 分别计算尚未释放的分配，以及尚未分配沙箱的待处理托管 Environment。
 - 未配置的部署具有空的 provider 且没有 specification。Docker 和 microsandbox 使用 `mode: nodes`；E2B 使用 `mode: direct`，且没有合成节点。
 - `generation` 标识已保存的选择。`owner_epoch` 用于对执行所有者和节点连接进行栅栏隔离；它不能替代 `expected_generation`。
@@ -179,7 +184,7 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 
 `GET /core/v1/sandbox/nodes` 返回 `{data: [...]}`，其中每个节点包含 `id`、`name`、`provider`、`online`、`last_seen_at`、`created_at`、`max_active`、`max_retained`，计数项 `active`、`reserved`、`running`、`retained`、`snapshots` 和 `cleanup_pending`，以及 `provider_ready`、`diagnostic`、主机测量值 `cpu_count`、`available_memory_bytes` 和 `available_disk_bytes`、`rollout`、`enrollment_id` 和 `core_url`。`enrollment_id` 是注册该节点的命令的句柄；如果 Core 没有该句柄，则为 null。`core_url` 是注册时的安装公开 URL；`core_url` 与当前公开 URL 不同的节点不会收到新放置。已放置到该节点的工作会继续在那里完成，包括已放置但尚未获得分配的 Environment；只要旧地址仍能访问 Core，其保留沙箱仍可恢复。请移除该节点并重新添加。
 
-不具备代次管理的节点会自行报告其提供商的就绪状态：`provider_ready`，未就绪时则报告一个固定的 `diagnostic` 代码。通过 Web 的命令添加的节点会管理代次，因此其就绪状态取决于服务代次，而目标代次的固定代码会出现在 `rollout.diagnostic` 中。节点会对首次失败的就绪检查进行分类，并且只发送代码；Core 会将任何其他值存储为 `provider_unavailable`，且绝不存储或返回探测文本或主机路径。代码包括 `docker_unavailable`、`docker_limits_unsupported`、`runtime_download_failed`、`runtime_image_unavailable`、`kvm_unavailable`、`microsandbox_artifacts_unavailable`、`capacity_insufficient` 和 `provider_unavailable`。`runtime_download_failed` 表示无法传输或验证精确的 Runtime 制品；它绝不会包含制品 URL、凭据或传输输出。[就绪代码](../../../docs/zh/getting-started/nodes.md#readiness-codes)给出了原因和操作员应采取的措施。Core 和节点必须来自同一发行包。
+不具备代次管理的节点会自行报告其提供商的就绪状态：`provider_ready`，未就绪时则报告一个固定的 `diagnostic` 代码。通过 Web 的命令添加的节点会管理代次，因此其就绪状态取决于服务代次，而目标代次的固定代码会出现在 `rollout.diagnostic` 中。节点会对首次失败的就绪检查进行分类，并且只发送代码；携带任何其他值的帧均无效，且 Core 绝不存储或返回探测文本或主机路径。这些代码是与 Provider 无关的类别：`provider_unavailable`、`host_unsupported`、`artifacts_unavailable`、`runtime_download_failed`、`runtime_image_unavailable` 和 `capacity_insufficient`。`runtime_download_failed` 表示无法传输或验证精确的 Runtime 制品；它绝不会包含制品 URL、凭据或传输输出。[就绪代码](../../../docs/zh/getting-started/nodes.md#readiness-codes)给出了原因和操作员应采取的措施。Core 和节点必须来自同一发行包。
 
 `PATCH /core/v1/sandbox/nodes/{node_id}` 接受 `{name, max_active, max_retained}`；降低限制不会停止任何正在运行的沙箱。当节点仍持有分配、快照、预留或待处理清理时，包括节点离线期间，`DELETE /core/v1/sandbox/nodes/{node_id}` 会拒绝操作并返回 409 `runtime_node_in_use`。移除操作不会删除任何计算资源，并且会停用该节点的身份；该主机只能作为新节点重新加入。不存在节点排空过程。
 
@@ -199,7 +204,6 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | 注册令牌 `max_active`、`max_retained` | 先执行 400 容量检查，然后返回 409 `sandbox_deployment_conflict`；E2B 没有节点 | `max_retained` 始终等于 `max_active` | 两个限制均适用 |
 | 节点列表和详情 | 空列表；详情返回 404 | 已注册节点 | 已注册节点 |
 | 节点 `retained`、`snapshots`、`max_retained` | 不适用 | Docker 绝不暂停：`retained` 等于 `active`，`snapshots` 为 0，`max_retained` 等于 `max_active` | 已暂停沙箱数为 `retained` 减去 `active` |
-| 节点 `diagnostic` 代码 | 不适用 | `docker_unavailable`、`docker_limits_unsupported`、`runtime_download_failed`、`runtime_image_unavailable`、`capacity_insufficient` 或 `provider_unavailable` | `kvm_unavailable`、`microsandbox_artifacts_unavailable`、`runtime_download_failed`、`capacity_insufficient` 或 `provider_unavailable` |
 | 节点 `host.available_disk_bytes` | 不适用 | 节点状态目录所在文件系统的可用空间，而不是容器的磁盘 | 节点状态目录所在文件系统的可用空间；沙箱磁盘有自己的配额 |
 | 分配 `compute_phase`、`compute_phase_changed_at` | 不适用：没有节点分配 | 始终为 `disabled`，在释放前计为运行中；该时间为分配创建时间 | 包含 `suspended`；该时间加上 `suspension.retention_seconds` 可大致确定 Core 回收快照的时间 |
 | Runtime 观测 `cpu`、`memory` | 来自 E2B 指标：`cpu.utilization_ratio` 和 `capacity_cores`、内存使用量和限制；无累计 CPU 时间 | 来自 Docker stats：`cpu.usage_seconds_total`、CPU 和内存限制、内存使用量 | 来自 VM：`cpu.usage_seconds_total`、CPU 和内存限制、内存使用量 |
@@ -220,12 +224,13 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | 409 | `sandbox_deployment_conflict` | 更改无法应用于另一种状态 |
 | 409 | `runtime_node_in_use` | 节点仍持有资源时移除节点 |
 | 503 | `execution_unavailable` | 无法准备提供商 |
-| 503 | `credential_storage_unavailable` | Core 没有凭据加密密钥 |
 
 存储和凭据故障始终作为错误处理：读取为空或读取失败绝不能证明清理完成。[机器连接 API](machine-api.md#node-route-errors)列出了节点路由的错误。
 
 ## 规范的节点规格 {#canonical-node-specification}
 
-`sandbox/deployment_contract.go`负责资源边界、提供商要求、发行版模式和规范字段顺序；`sandbox/deployment.go`在 Core 中应用这些规则。安装程序会使用 `deploy/node/node_spec.py` 中生成的声明，因此不存在第二套限制或模式。请在仓库根目录运行 `go run ./services/core/cmd/specification-contract -write` 重新生成；作为 `make check` 一部分的沙箱 Go 测试会拒绝过时的投影。
+`sandbox/deployment_contract.go`负责资源边界、发行版模式和规范字段顺序，每个已注册 Provider 的 `sandbox.DeploymentPolicy` 声明其要求；`sandbox/deployment.go`在 Core 中应用这些规则。安装程序会使用 `deploy/node/node_spec.py` 中生成的声明，TypeScript 客户端和 Web 使用 `packages/agents-client/src/deployment-contract.ts` 中生成的边界、模式和 Provider 声明，因此不存在第二套限制、模式或提供商列表。请在仓库根目录运行 `go run ./services/core/cmd/specification-contract -write` 重新生成两者；作为 `make check` 一部分的沙箱 Go 测试会拒绝过时的投影。
 
 规范摘要是紧凑 UTF-8 JSON 的 SHA-256，其中 `provider` 位于首位，其次是 `resources`，然后在提供商需要时放置 `runtime`。资源和 Runtime 字段遵循契约的声明顺序；值为零的可选磁盘字段会被省略，必填字段则保持存在。发行版标识采用小写 ASCII，摘要绝不会受传入字段顺序或空白字符影响。`services/core/internal/sandbox/testdata/deployment-contract.json`保存共享验收用例、精确的规范字节和摘要，Go 与 Python 测试都会使用这些内容。
+
+规范摘要的 JSON 在 `runtime` 后包含可选的 `workspace`，字段按文件系统声明顺序排列：`attachment`、`user_xattr`、`capacity_quota`，布尔字段始终保留。该回执参与不可变 specification digest。

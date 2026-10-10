@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/auth"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -214,9 +213,13 @@ func TestMainLoopOverlapsPreflightWithoutEarlyRegistration(t *testing.T) {
 				}
 				defer close(completed)
 				info.Available = failure != "discovery" && ctx.Err() == nil
-				return &agent.Runtime{Info: info, Session: func(context.Context, proto.PromptRequestPayload, chan<- proto.Envelope) (agent.Session, error) {
-					return nil, errors.New("unexpected session")
-				}}
+				runtime := &agent.Runtime{Info: info}
+				if info.Available {
+					runtime.Executor = func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+						return nil, errors.New("unexpected executor")
+					}
+				}
+				return runtime
 			}
 			harnessDeclarations = []agent.Declaration{declaration}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -268,49 +271,19 @@ func TestMainLoopOverlapsPreflightWithoutEarlyRegistration(t *testing.T) {
 	}
 }
 
-func TestInlinePairDiscoveryBeforeTokenAndOnlyOnce(t *testing.T) {
-	for _, available := range []bool{false, true} {
-		t.Run(fmt.Sprint(available), func(t *testing.T) {
-			t.Setenv("OAC_RUNTIME_HOME", t.TempDir())
-			t.Setenv("OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE", "")
-			original := harnessDeclarations
-			defer func() { harnessDeclarations = original }()
-			var probes, pairs, boots atomic.Int32
-			declaration := original[0]
-			declaration.Discover = func(_ context.Context, _ agent.DiscoveryOptions, info proto.SupportedAgentKind) *agent.Runtime {
-				probes.Add(1)
-				info.Available = available
-				return &agent.Runtime{Info: info}
-			}
-			harnessDeclarations = []agent.Declaration{declaration}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/v1/runtimes/pair":
-					if probes.Load() != 1 {
-						t.Error("pair before discovery")
-					}
-					pairs.Add(1)
-					_ = json.NewEncoder(w).Encode(pairResponse{Runtime: pairRuntime{ID: "device"}, RunnerCredential: "fixture"})
-				case "/agent-daemon/bootstrap":
-					boots.Add(1)
-					http.Error(w, "end test", http.StatusUnauthorized)
-				default:
-					t.Errorf("unexpected request: %s", r.URL.Path)
-					http.NotFound(w, r)
-				}
-			}))
-			defer server.Close()
-			err := runConnect(&runContext{stdout: io.Discard, stderr: io.Discard}, []string{"--url", server.URL, "--token", "fixture"})
-			if err == nil {
-				t.Fatal("expected failure")
-			}
-			expected := int32(0)
-			if available {
-				expected = 1
-			}
-			if probes.Load() != 1 || pairs.Load() != expected || boots.Load() != expected {
-				t.Fatalf("probes=%d pairs=%d bootstrap=%d", probes.Load(), pairs.Load(), boots.Load())
-			}
-		})
+func TestConnectRejectsRemovedPairingFlagsBeforeDiscovery(t *testing.T) {
+	t.Setenv("OAC_RUNTIME_HOME", t.TempDir())
+	original := harnessDeclarations
+	defer func() { harnessDeclarations = original }()
+	declaration := original[0]
+	declaration.Discover = func(context.Context, agent.DiscoveryOptions, proto.SupportedAgentKind) *agent.Runtime {
+		t.Fatal("removed pairing options reached discovery")
+		return nil
+	}
+	harnessDeclarations = []agent.Declaration{declaration}
+	for _, args := range [][]string{{"--url", "https://fixture.invalid"}, {"--token", "fixture"}, {"--device-name", "fixture"}} {
+		if err := runConnect(&runContext{stdout: io.Discard, stderr: io.Discard}, args); err == nil {
+			t.Fatalf("removed pairing flags accepted: %s", args[0])
+		}
 	}
 }

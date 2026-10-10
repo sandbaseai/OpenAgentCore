@@ -20,7 +20,7 @@ func observeRuntimeStartup(ctx context.Context, stage string, started time.Time,
 			status = "timeout"
 		}
 	}
-	obslog.Info(ctx, "runtime startup stage", "stage", stage,
+	obslog.Ctx(ctx).Info("runtime startup stage", "stage", stage,
 		"duration_ms", float64(time.Since(started))/float64(time.Millisecond), "status", status)
 }
 

@@ -14,6 +14,6 @@ func observePreparationStage(ctx context.Context, stage string, started time.Tim
 }
 
 func observePreparationInterval(ctx context.Context, stage string, started, ended time.Time, err error) {
-	obslog.Info(ctx, "codex preparation stage", "stage", stage,
+	obslog.Ctx(ctx).Info("codex preparation stage", "stage", stage,
 		"duration_ms", float64(ended.Sub(started))/float64(time.Millisecond), "success", err == nil)
 }

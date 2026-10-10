@@ -26,11 +26,24 @@ func allocation(row sqlc.RuntimeAllocation, session, tenant pgtype.UUID, deleted
 		ComputeActivityAt: row.ComputeActivityAt.Time, ComputeWakeRequested: row.ComputeWakeRequested, ComputeRetainedUntil: timestamp(row.ComputeRetainedUntil),
 		ID: uuidString(row.ID), EnvironmentID: uuidString(row.EnvironmentID), SessionID: uuidString(session), TenantID: uuidString(tenant),
 		DeviceID: uuidString(row.DeviceID), ProviderKey: uuidString(row.ProviderKey), State: row.State, CreateSettled: row.CreateSettled,
-		SessionDeleted: deleted.Valid, Expired: expired, CreatedAt: row.CreatedAt.Time, KeptAt: row.KeptAt.Time,
+		SessionDeleted: deleted.Valid, Expired: expired, CreatedAt: row.CreatedAt.Time,
 	}
 }
 
 // allocationKey returns the stored form of the key's identifiers.
+// findAllocation reads the tenant's allocation of the Environment; found is
+// false when it has none.
+func findAllocation(ctx context.Context, q *sqlc.Queries, tenant, environment pgtype.UUID) (deployment.Allocation, bool, error) {
+	row, err := q.GetRuntimeAllocation(ctx, sqlc.GetRuntimeAllocationParams{TenantID: tenant, EnvironmentID: environment})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return deployment.Allocation{}, false, nil
+	}
+	if err != nil {
+		return deployment.Allocation{}, false, err
+	}
+	return allocation(row.RuntimeAllocation, row.SessionID, row.TenantID, row.DeletedAt, row.Expired), true, nil
+}
+
 func allocationKey(key deployment.AllocationKey) (pgtype.UUID, pgtype.UUID, error) {
 	tenant, err := parseID(key.TenantID)
 	if err != nil {
@@ -67,7 +80,6 @@ func (e *Execution) WithReservation(ctx context.Context, key deployment.Allocati
 		q := sqlc.New(tx)
 		owned, err := q.GetEnvironment(ctx, sqlc.GetEnvironmentParams{TenantID: tenant, ID: environment})
 		if errors.Is(err, pgx.ErrNoRows) {
-			// sessions.ErrNotFound keeps the public 404 that writeStoreError maps.
 			return sessions.ErrNotFound
 		}
 		if err != nil {
@@ -141,7 +153,6 @@ func (s *Store) WithActivity(ctx context.Context, key deployment.AllocationKey, 
 		q := sqlc.New(tx)
 		owned, err := q.GetEnvironment(ctx, sqlc.GetEnvironmentParams{TenantID: tenant, ID: environment})
 		if errors.Is(err, pgx.ErrNoRows) {
-			// sessions.ErrNotFound keeps the public 404 that writeStoreError maps.
 			return sessions.ErrNotFound
 		}
 		if err != nil {
@@ -176,14 +187,7 @@ type reservationTx struct {
 }
 
 func (t *reservationTx) FindAllocation() (deployment.Allocation, bool, error) {
-	row, err := t.q.GetRuntimeAllocation(t.ctx, sqlc.GetRuntimeAllocationParams{TenantID: t.tenant, EnvironmentID: t.environment})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return deployment.Allocation{}, false, nil
-	}
-	if err != nil {
-		return deployment.Allocation{}, false, err
-	}
-	return allocation(row.RuntimeAllocation, t.session, t.tenant, row.DeletedAt, row.Expired), true, nil
+	return findAllocation(t.ctx, t.q, t.tenant, t.environment)
 }
 
 func (t *reservationTx) LockDeployment() (placement.Deployment, error) {
@@ -231,14 +235,11 @@ type allocationTx struct {
 }
 
 func (t *allocationTx) LoadAllocation() (deployment.Allocation, error) {
-	row, err := t.q.GetRuntimeAllocation(t.ctx, sqlc.GetRuntimeAllocationParams{TenantID: t.tenant, EnvironmentID: t.environment})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return deployment.Allocation{}, deployment.ErrNotFound
+	current, found, err := findAllocation(t.ctx, t.q, t.tenant, t.environment)
+	if err == nil && !found {
+		err = deployment.ErrNotFound
 	}
-	if err != nil {
-		return deployment.Allocation{}, err
-	}
-	return allocation(row.RuntimeAllocation, row.SessionID, row.TenantID, row.DeletedAt, row.Expired), nil
+	return current, err
 }
 
 func (t *allocationTx) LoadSessionDevice() (deployment.SessionDevice, bool, error) {
@@ -270,10 +271,6 @@ func (t *allocationTx) LoadRestore(current deployment.Allocation) (placement.Res
 
 func (t *allocationTx) ObserveRunning(current deployment.Allocation) (deployment.Allocation, error) {
 	return t.change(current, t.q.ObserveRuntimeRunning)
-}
-
-func (t *allocationTx) Keep(current deployment.Allocation) (deployment.Allocation, error) {
-	return t.change(current, t.q.KeepRuntimeAllocation)
 }
 
 func (t *allocationTx) SettleCreation(current deployment.Allocation) (deployment.Allocation, error) {
@@ -365,14 +362,11 @@ func (s *Store) EnvironmentAllocation(ctx context.Context, key deployment.Alloca
 	if err != nil {
 		return deployment.Allocation{}, err
 	}
-	row, err := s.pool.Queries().GetRuntimeAllocation(ctx, sqlc.GetRuntimeAllocationParams{TenantID: tenant, EnvironmentID: environment})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return deployment.Allocation{}, deployment.ErrNotFound
+	current, found, err := findAllocation(ctx, s.pool.Queries(), tenant, environment)
+	if err == nil && !found {
+		err = deployment.ErrNotFound
 	}
-	if err != nil {
-		return deployment.Allocation{}, err
-	}
-	return allocation(row.RuntimeAllocation, row.SessionID, row.TenantID, row.DeletedAt, row.Expired), nil
+	return current, err
 }
 
 func (s *Store) CredentialAllocations(ctx context.Context, after string) ([]deployment.Allocation, error) {
@@ -528,7 +522,6 @@ func (s *Store) LifecyclePlacement(ctx context.Context, key deployment.Allocatio
 	defer cancel()
 	row, err := s.pool.Queries().GetRuntimeLifecyclePlacement(ctx, sqlc.GetRuntimeLifecyclePlacementParams{TenantID: tenant, ID: environment})
 	if errors.Is(err, pgx.ErrNoRows) {
-		// sessions.ErrNotFound keeps the public 404 that writeStoreError maps.
 		return deployment.LifecyclePlacement{}, sessions.ErrNotFound
 	}
 	if err != nil {

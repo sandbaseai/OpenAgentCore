@@ -40,6 +40,17 @@ type fakeStorage struct {
 	// credentials is the transaction the executor credential With methods
 	// apply in, with locked.
 	credentials *fakeTx
+	// deletion is the transaction WithSessionDeletion applies in, with
+	// locked.
+	deletion       *fakeTx
+	updateMetadata func(encoded string) (Session, error)
+	auditOperation func() error
+	// inputTx is the transaction WithInputs applies in.
+	inputTx *fakeInputTx
+	// creation is the transaction WithCreation applies in.
+	creation     *fakeCreationTx
+	fingerprint  func(secret string) (string, error)
+	findCreation func() (CreationRecord, error)
 }
 
 func (s *fakeStorage) record(name string, set bool, detail ...string) {
@@ -75,6 +86,21 @@ func (s *fakeStorage) WithEnrollment(ctx context.Context, environment, credentia
 	return apply(ctx, s.enrollment, s.environment, s.locked)
 }
 
+func (s *fakeStorage) WithSessionDeletion(ctx context.Context, tenant, session string, apply func(context.Context, LockedSession, SessionDeletionTx) error) error {
+	s.record("WithSessionDeletion", s.deletion != nil, tenant, session)
+	return apply(ctx, s.locked, s.deletion)
+}
+
+func (s *fakeStorage) UpdateSessionMetadata(_ context.Context, tenant, session string, encoded []byte) (Session, error) {
+	s.record("UpdateSessionMetadata", s.updateMetadata != nil, tenant, session, string(encoded))
+	return s.updateMetadata(string(encoded))
+}
+
+func (s *fakeStorage) AuditSessionOperation(_ context.Context, tenant, session, action string) error {
+	s.record("AuditSessionOperation", s.auditOperation != nil, tenant, session, action)
+	return s.auditOperation()
+}
+
 func (s *fakeStorage) WithArtifactStaging(context.Context, ArtifactStagingKey, func(context.Context, ArtifactStagingTx) error) error {
 	s.t.Fatal("unexpected call to WithArtifactStaging")
 	return nil
@@ -87,7 +113,7 @@ func (s *fakeStorage) DeleteSessionArtifact(context.Context, string, string, str
 
 func deviceService(t *testing.T, storage *fakeStorage) *Service {
 	t.Helper()
-	service, err := NewService(storage)
+	service, err := NewService(storage, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

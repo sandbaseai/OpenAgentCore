@@ -9,8 +9,9 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspaces"
 )
 
 // runtimeManager owns node membership, not provider operations. Each registered
@@ -18,7 +19,9 @@ import (
 var errRuntimeTransition = fmt.Errorf("%w: sandbox configuration is changing", ErrExecutionUnavailable)
 
 type runtimeManager struct {
-	store               *store.Store
+	workspaces          *workspaces.ExecutionOperations
+	workspaceCursor     string
+	workspaceGate       chan struct{}
 	sessions            sessions.Reader
 	sessionExecution    *sessions.ExecutionOperations
 	deployment          *deployment.ExecutionOperations
@@ -81,7 +84,7 @@ func (m *runtimeManager) node(id string) (*runtimeNode, error) {
 		m.mu.Unlock()
 		return nil, errRuntimeTransition
 	}
-	if m.closed || (m.loadDeployment != nil && m.config.Provider == nil) || (id == "") != (m.config.ProviderKind == "" || m.config.Mode == "direct") {
+	if m.closed || m.config.Provider == nil || (id == "") != (m.config.Mode == string(sandbox.DeploymentDirect)) {
 		m.mu.Unlock()
 		return nil, ErrExecutionUnavailable
 	}
@@ -89,7 +92,7 @@ func (m *runtimeManager) node(id string) (*runtimeNode, error) {
 	if n == nil {
 		ctx, stop := context.WithCancel(m.ctx)
 		n = &runtimeNode{lifecycle: &runtimeLifecycle{
-			store: m.store, sessions: m.sessions, sessionExecution: m.sessionExecution,
+			workspaces: m.workspaces, sessions: m.sessions, sessionExecution: m.sessionExecution,
 			deployment: m.deployment, deployments: m.deploymentService, reader: m.deploymentReader,
 			lease: m.lease, registry: m.registry, config: m.config, nodeID: id,
 			gate: make(chan struct{}, 1), ctx: ctx, stop: stop,
@@ -188,7 +191,7 @@ func (m *runtimeManager) applyInventory(previous map[string]*runtimeNode, ids []
 	}
 	m.mu.Unlock()
 	// Inventory includes offline nodes. Only explicit removal retires a lane;
-	// the Store requires all retained resources to be cleaned before removal.
+	// deployment removes only a node that retains no resources.
 	if err := m.cancelLifecycles(retired); err != nil {
 		// No cancellation was authorized. Keep each retiring identity and gate;
 		// acquiring its gate later cannot substitute for successful cancellation.
@@ -243,10 +246,11 @@ func (m *runtimeManager) run(ctx context.Context) error {
 	}
 	m.running = true
 	m.mu.Unlock()
-	if m.loadDeployment != nil {
-		if err := m.deployment.CollectGenerations(ctx); err != nil {
-			return err
-		}
+	if err := m.deployment.CollectGenerations(ctx); err != nil {
+		return err
+	}
+	if err := m.deleteWorkspaces(ctx); err != nil {
+		return err
 	}
 	if err := m.resetStep(ctx); err != nil {
 		return err
@@ -265,10 +269,11 @@ func (m *runtimeManager) run(ctx context.Context) error {
 		case err := <-m.failed:
 			return err
 		case <-ticker.C:
-			if m.loadDeployment != nil {
-				if err := m.deployment.CollectGenerations(ctx); err != nil {
-					return err
-				}
+			if err := m.deployment.CollectGenerations(ctx); err != nil {
+				return err
+			}
+			if err := m.deleteWorkspaces(ctx); err != nil {
+				return err
 			}
 			if err := m.resetStep(ctx); err != nil {
 				return err
@@ -288,6 +293,9 @@ func (m *runtimeManager) reconcile(parent context.Context) error {
 		return err
 	}
 	defer finish()
+	if err := m.deleteWorkspaces(ctx); err != nil {
+		return err
+	}
 	nodes, err := m.syncNodes(ctx)
 	if err != nil {
 		return err
@@ -321,3 +329,23 @@ func (m *runtimeManager) stop() {
 // stop must precede drain. Both background loops and external provisioning or
 // manual reconciliation finish before Worker releases its unique writer lease.
 func (m *runtimeManager) drain() { m.active.Wait() }
+
+func (m *runtimeManager) deleteWorkspaces(ctx context.Context) error {
+	if m.workspaces == nil {
+		return nil
+	}
+	select {
+	case m.workspaceGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-m.workspaceGate }()
+	operation, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cursor, err := m.workspaces.DeleteBatch(operation, m.workspaceCursor)
+	m.workspaceCursor = cursor
+	if err != nil && operation.Err() != nil && ctx.Err() == nil {
+		return m.lease.CheckOwnership(ctx)
+	}
+	return err
+}

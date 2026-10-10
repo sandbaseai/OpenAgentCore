@@ -70,6 +70,12 @@ func validManagedExchange(data []byte) bool {
 	delete(expected, "Harness")
 	expected["InstallationID"] = nil
 	expected["RuntimeBootstrap"] = nil
+	if workspace, present := fields["Workspace"]; present {
+		if string(workspace) != "null" {
+			return false
+		}
+		delete(fields, "Workspace")
+	}
 	if len(fields) != len(expected) {
 		return false
 	}

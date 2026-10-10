@@ -1,7 +1,7 @@
 ---
 title: "沙箱节点协议"
 source: contracts/agents-api/node-generation-protocol.md
-source_hash: 31b83635cc8052ac32e0743f14e25724f1f64d9b77e6df765543b87b72e9bf2a
+source_hash: e9a9e3d1027d797bdf467d867023fa11792866ea93252f94904a66f7be45af1e
 ---
 
 沙箱节点在其主机上运行 Docker 或 microsandbox Provider，并通过一个 WebSocket 与 Core 相连。Core 通过该连接发送 Provider 操作；节点针对本地 Provider 执行这些操作，并报告就绪状态、主机测量值及其持有的部署代次。Core 始终是唯一的生命周期所有者：节点绝不重试变更操作或调度工作。帧和校验器位于 [`services/core/internal/sandbox/node`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/node)（`wire.go`、`generation_wire.go`）；节点用于注册和读取配置的 HTTP 路由位于[机器连接 API](machine-api.md#node-routes)。
@@ -19,7 +19,7 @@ source_hash: 31b83635cc8052ac32e0743f14e25724f1f64d9b77e6df765543b87b72e9bf2a
 
 只要节点在当前所有者 epoch 下保持连接，并且最近一次心跳距今不足 45 秒，Core 就会将该节点计为在线。心跳会确立 Provider 的就绪状态和最近的主机测量值，但绝不表示 Session 活动。
 
-健康报告包含 `provider_ready`、可选的固定 `diagnostic`、`observed_at`、最多为 32 的 `active_operations`，以及 [Runtime 遥测 API](runtime-observability-api.md#node-host-observations-and-history) 报告的主机测量值。未启用代次管理的节点每次报告时都会探测其 Provider；未就绪的 Provider 会报告一个固定诊断代码，该代码根据类型化探测错误进行分类；探测文本和主机路径保留在节点上。Core 会将未知代码存储为 `provider_unavailable`。[节点指南](../../../docs/zh/getting-started/nodes.md#readiness-codes) 列出了这些代码及其原因。支持代次管理的节点则按下文所述按代次报告就绪状态。
+健康报告包含 `provider_ready`、可选的固定 `diagnostic`、`observed_at`、最多为 32 的 `active_operations`，以及 [Runtime 遥测 API](runtime-observability-api.md#node-host-observations-and-history) 报告的主机测量值。未启用代次管理的节点每次报告时都会探测其 Provider；未就绪的 Provider 会报告其首个失败检查所属的、与 Provider 无关的就绪类别，该类别取自探测所包装的类别错误；探测文本、厂商细节和主机路径保留在节点上。节点或代次健康状态中的 `diagnostic` 若不是已声明的类别，该帧即无效。[节点指南](../../../docs/zh/getting-started/nodes.md#readiness-codes) 列出了这些类别及其原因。支持代次管理的节点则按下文所述按代次报告就绪状态。
 
 ## Provider 请求 {#provider-requests}
 
@@ -70,7 +70,7 @@ Core 发送包含以下内容的 `request` 帧：
 | `unsupported` | 该操作被声明为不支持；见下文 |
 | `unconfirmed` 或任何其他值 | 结果未知 |
 
-失败响应不携带结果，唯一的例外是作为精确引用 `CreateSettled` 回执的 `info` 结果：即便已确认的原生 Create 在后续检查中失败，仍可证明该尝试已有确定结果。超时、响应丢失或断连属于不可用或不确定情况，绝不能证明资源不存在；发生这些情况后，Core 绝不重放变更操作，而是改为观察原始操作。[Sandbox Provider 指南](../../../docs/zh/sandbox-provider.md#operation-outcomes-and-retries) 定义了每种结果。
+失败响应不携带结果；例外包括下文规定的精确来源 Resume 目标清理证据，以及作为精确引用 `CreateSettled` 回执的 `info` 结果：即便已确认的原生 Create 在后续检查中失败，仍可证明该尝试已有确定结果。超时、响应丢失或断连属于不可用或不确定情况，绝不能证明资源不存在；发生这些情况后，Core 绝不重放变更操作，而是改为观察原始操作。[Sandbox Provider 指南](../../../docs/zh/sandbox-provider.md#operation-outcomes-and-retries) 定义了每种结果。
 
 节点启动和代次加载会在接受工作前验证完整的 Provider 操作声明，Core 代理使用同一份已注册声明，因此不支持的操作会在节点解析或原生 I/O 之前被拒绝。操作清单由[操作契约](../../../docs/zh/sandbox-provider.md#explicit-operation-contracts)维护。`unsupported` 响应包含一个 `unsupported` 对象，其中有精确的方法 `operation` 和经作者编写且安全的 `reason`；代理会将两者与请求进行核对。证据缺失、格式错误或不匹配会得到 `unconfirmed` 结果，而绝不会证明变更操作被拒绝。`unsupported` 始终不同于观察不可用，也不同于计算或命令结果未知；它既不确定资源所有权，也不授权重放。
 
@@ -122,8 +122,10 @@ Runtime 字节缺失时，绝不将固定的放置实例迁移到当前 Runtime�
 
 下载中断后，只会修复原始路径中缺失的字节。如果在任何导入尝试之前执行回收，准备日志会证明该代次没有已导入的原生镜像。如果某代次的原生可执行文件缺失，且导入可能已经开始，该代次仍会保留：文件缺失永远不能证明原生制品不存在，而空的原生清单也永远不能抹除回执或存储历史。
 
-诊断代码编写于 `services/core/internal/sandbox/node_diagnostic.go`。共享的 `services/core/internal/sandbox/testdata/node-diagnostics.json` 测试夹具检查 Go 映射、OpenAPI 源注释和生成的枚举，以及 TypeScript 客户端声明。Web 使用客户端规范化器，并检查每个已声明代码的本地化消息。代码变更时要同步更新这些投影；未知代码会规范化为 `provider_unavailable`。
+就绪类别编写于 `services/core/internal/sandbox/node_diagnostic.go`，每个类别对应一个导出错误和一个代码。共享的 `services/core/internal/sandbox/testdata/node-diagnostics.json` 测试夹具检查 Go 映射、OpenAPI 源注释和生成的枚举，以及 TypeScript 客户端声明。Web 使用客户端规范化器，并检查每个已声明代码的本地化消息。代码变更时要同步更新这些投影；客户端将未知代码读作 `provider_unavailable`。
 
 准备诊断使用固定的类型化原因。只有制品传输、校验和或版本来源验证失败才会报告 `runtime_download_failed`；私有准备器通过退出类别指示这一类失败，Core 和节点都不解析 stderr。Provider 故障、所有权故障、取消和未分类故障保留其类型化代码，或使用 `provider_unavailable`。协议中不会传输任何 Provider 原始文本。
 
-创建操作通过 `Bootstrap.Harness` 将会话选择传递到 Runtime 启动协议版本 2。Core 和节点使用协议版本 6；发布此 Core 版本前需升级配套节点。
+创建操作通过 `Bootstrap.Harness` 将会话选择传递到 Runtime 启动协议版本 2。Core 和节点使用协议版本 7，需协调升级配套组件。`Bootstrap.Harness` 是必填字段。十项暂停操作均属于同一个 `SandboxProvider`，必须完整声明支持或不支持；不通过可选接口分派。`Observe` 每次只观测一个 allocation。
+
+当前线协议版本为 7。Create 引导和 Resume 请求可携带可选的工作区文件系统绑定。节点在转发前校验其租户及 Environment 与分配引用一致、ObjectID 不可变且有效，以及挂载配置 ID 与所传配置一致。文件系统解析器负责适配器原生所有权校验。未提供绑定时选择自有存储；已提供绑定时不得回退。错误响应仅可保留原生 ID 非空且名称、代次、保留状态来源均匹配请求的 Resume 目标；这仅为清理证据，不代表恢复成功。

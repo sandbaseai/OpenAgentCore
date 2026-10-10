@@ -2,21 +2,21 @@
 """Adapter-private wire declarations. No SDK or repository dependency."""
 COMPUTE_FIELDS = ["Generation","Name","ID","RestoredFrom"]
 ERROR_CODES = ["","invalid","ownership","exists","not_found","command_unconfirmed","unconfirmed","template_invalid","team_mismatch","unauthorized"]
-MANAGED_BOOTSTRAP_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","NetworkAccess","AllowedDomains","InstallationID","RuntimeBootstrap"]
+MANAGED_BOOTSTRAP_FIELDS = ["Workspace","TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","NetworkAccess","AllowedDomains","InstallationID","RuntimeBootstrap"]
+MANAGED_BOOTSTRAP_REQUIRED_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","NetworkAccess","AllowedDomains","InstallationID","RuntimeBootstrap"]
 MANAGED_IDENTITY_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","InstallationID"]
 MAX_COMMAND_INPUT = 52428832
 MAX_CREDENTIAL_REFERENCES = 32
-MAX_OBSERVATION_REFERENCES = 100
 MAX_OUTPUT = 1048576
 MAX_REQUEST = 75497472
 MAX_RESPONSE = 16777216
 NETWORK_ACCESS = ["enabled","disabled","restricted"]
 OPERATIONS = ["create","inspect","renew","kill","command","validate_deployment","observe","list_templates","list_builds","verify_credential","compute_info","compute_renew","suspend","resume","compute_kill","delete_retained","compute_command","resume_compute"]
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 REFERENCE_FIELDS = ["TenantID","EnvironmentID","AllocationID"]
 REQUEST_FIELDS = ["Version","Operation","Config","Reference","References","Bootstrap","RuntimeBootstrap","Command","Compute","Suspend","Resume","Retained","Deadline"]
-RESPONSE_FIELDS = ["Version","State","Info","Command","ErrorCode","DeploymentValid","TemplateBuild","Templates","Builds","Observations"]
-RESUME_FIELDS = ["Reference","OperationID","Retained","Target","ReconcileOnly"]
+RESPONSE_FIELDS = ["Version","State","Info","Command","ErrorCode","DeploymentValid","TemplateBuild","Templates","Builds","Observation"]
+RESUME_FIELDS = ["Workspace","Reference","OperationID","Retained","Target","ReconcileOnly"]
 RETAINED_FIELDS = ["Reference","ID","Data","OperationID","SourceGeneration","SourceName","SourceID"]
 SDK_VERSION = "2.51.0"
 SUSPEND_CONTROL_FILE = "/run/oac/daemon-suspend.json"

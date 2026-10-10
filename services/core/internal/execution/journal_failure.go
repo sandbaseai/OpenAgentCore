@@ -7,7 +7,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Journal failures can contain SQL, model output and credentials. Record only
@@ -44,17 +43,17 @@ func journalFailureCategory(err error) (string, string) {
 	case errors.Is(err, sessions.ErrTurnConflict):
 		return "turn_conflict", ""
 	}
-	var pg *pgconn.PgError
+	var pg interface{ SQLState() string }
 	if errors.As(err, &pg) {
-		if len(pg.Code) == 5 {
+		if len(pg.SQLState()) == 5 {
 			valid := true
-			for _, c := range pg.Code {
+			for _, c := range pg.SQLState() {
 				if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z') {
 					valid = false
 				}
 			}
 			if valid {
-				return "database", pg.Code
+				return "database", pg.SQLState()
 			}
 		}
 		return "database", ""

@@ -36,11 +36,11 @@ func observeExecutionStage(ctx context.Context, stage string, started time.Time,
 		status = "error"
 	}
 	fields := []any{"stage", stage, "duration_ms", float64(time.Since(started).Microseconds()) / 1000, "status", status}
-	obslog.Info(ctx, "execution stage", append(fields, attrs...)...)
+	obslog.Ctx(ctx).Info("execution stage", append(fields, attrs...)...)
 }
 
 // Initial input is committed by Session creation. Joining its origin to the
 // worker's is_initial reservation avoids an additional diagnostic store query.
 func recordInitialInputOrigin(ctx context.Context, session string) {
-	obslog.Info(ctx, "session initial input origin", "session_id", session)
+	obslog.Ctx(ctx).Info("session initial input origin", "session_id", session)
 }

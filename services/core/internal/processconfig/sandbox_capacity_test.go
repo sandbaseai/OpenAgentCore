@@ -14,7 +14,8 @@ func TestSandboxCapacityDefaultsAndSettings(t *testing.T) {
 	}
 	t.Setenv("OAC_SANDBOX_MAX_ACTIVE", "7")
 	t.Setenv("OAC_SANDBOX_MAX_RETAINED", "31")
-	settings, err := Settings()
+	capacity, err = SandboxCapacity()
+	settings := (Config{SandboxCapacity: capacity}).Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,7 @@ func TestCheckValidatesSandboxCapacity(t *testing.T) {
 				t.Setenv("OAC_SANDBOX_MAX_ACTIVE", "1")
 				t.Setenv("OAC_SANDBOX_MAX_RETAINED", "100000")
 				t.Setenv(key, tc.value)
-				err := Check()
+				_, err := SandboxCapacity()
 				if (err == nil) != tc.valid || err != nil && (!strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "synthetic-secret-value")) {
 					t.Fatal("wrong process validation", err)
 				}
@@ -46,7 +47,7 @@ func TestCheckValidatesSandboxCapacity(t *testing.T) {
 	}
 	t.Setenv("OAC_SANDBOX_MAX_ACTIVE", "100")
 	t.Setenv("OAC_SANDBOX_MAX_RETAINED", "99")
-	if err := Check(); err == nil {
+	if _, err := SandboxCapacity(); err == nil {
 		t.Fatal("accepted retained limit below active limit")
 	}
 }

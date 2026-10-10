@@ -35,7 +35,6 @@ func fixtureRules(t *testing.T) *placement.Rules {
 
 // testDeployment builds the pooled deployment service and reader and the
 // deployment execution operations on lease, as cmd/server does for the Worker.
-// cipher is nil when the owner has no credential key.
 func testDeployment(t *testing.T, pool *pgxpool.Pool, cipher *credentialcrypto.Cipher, lease *pgunit.Lease) (*deployment.Service, deployment.Reader, *deployment.ExecutionOperations) {
 	t.Helper()
 	adapter := deploymentpg.New(pgunit.NewPool(pool), cipher)
@@ -50,6 +49,15 @@ func unitDeploymentService(t *testing.T) *deployment.Service {
 	t.Helper()
 	service, _ := deploymentOperations(t, &strictDeploymentStorage{t: t}, &strictDeploymentReader{t: t}, &strictExecutionStorage{t: t})
 	return service
+}
+
+// unusedPreparation is the preparer of a test that submits no sandbox
+// selection; preparing one fails the test.
+func unusedPreparation(t *testing.T) RuntimeDeploymentPreparer {
+	return func(context.Context, deployment.Setup) (PreparedRuntimeDeployment, error) {
+		t.Error("the test prepared a sandbox selection it did not submit")
+		return PreparedRuntimeDeployment{}, errors.New("unexpected sandbox selection preparation")
+	}
 }
 
 // deploymentOperations builds the deployment service on storage and reader and
@@ -132,6 +140,8 @@ func (s *strictExecutionStorage) WithDeployment(ctx context.Context, apply func(
 
 // strictDeploymentReader runs each set func; any other call fails the test.
 type strictDeploymentReader struct {
+	countRetainedAllocations func(context.Context, string) (int64, error)
+	countComputeReservations func(context.Context, string) (int64, error)
 	t                        *testing.T
 	deployment               func(context.Context) (deployment.Record, error)
 	snapshot                 func(context.Context) (deployment.Snapshot, error)
@@ -153,8 +163,6 @@ type strictDeploymentReader struct {
 	unallocatedEnvironments  func(context.Context, string, string) ([]deployment.UnallocatedEnvironment, error)
 	lifecyclePlacement       func(context.Context, deployment.AllocationKey) (deployment.LifecyclePlacement, error)
 	activity                 func(context.Context, string) (deployment.Activity, error)
-	countComputeReservations func(context.Context, string) (int64, error)
-	countRetainedAllocations func(context.Context, string) (int64, error)
 }
 
 func (r *strictDeploymentReader) Deployment(ctx context.Context) (deployment.Record, error) {
@@ -253,6 +261,10 @@ func (s *strictExecutionStorage) WithAllocationCleanup(ctx context.Context, key 
 		return unexpectedDeploymentCall(s.t, "WithAllocationCleanup")
 	}
 	return s.withAllocationCleanup(ctx, key, apply)
+}
+
+func (s *strictExecutionStorage) WithSessionArchive(context.Context, string, string, func(context.Context, sessions.LockedSession, deployment.SessionArchiveTx) error) error {
+	return unexpectedDeploymentCall(s.t, "WithSessionArchive")
 }
 
 func (s *strictExecutionStorage) ClearWake(ctx context.Context, allocationID string, observed time.Time) error {

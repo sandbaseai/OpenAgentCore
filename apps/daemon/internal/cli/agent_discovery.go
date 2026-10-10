@@ -32,7 +32,7 @@ func discoverAgentCLIs(parent context.Context, rc *runContext, profile string, d
 		}
 		started := time.Now()
 		runtime := declaration.Discover(parent, agent.DiscoveryOptions{Profile: profile, Stdout: rc.stdout, Stderr: rc.stderr}, declaration.Info)
-		obslog.Info(parent, "runtime startup stage", "stage", "harness_discovery",
+		obslog.Ctx(parent).Info("runtime startup stage", "stage", "harness_discovery",
 			"harness_kind", declaration.Info.Kind, "duration_ms", float64(time.Since(started))/float64(time.Millisecond),
 			"available", runtime != nil && runtime.Info.Available)
 		if runtime == nil {
