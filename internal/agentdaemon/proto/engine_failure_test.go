@@ -40,3 +40,22 @@ func TestErrorClassificationCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderBillingClassificationAndCorrelation(t *testing.T) {
+	for _, code := range []string{"connection_failed", "provider_billing_unavailable"} {
+		raw := `{"error":"private-body","code":"` + code + `","http_status":402,"upstream_request_id":"88a8d808-59c1-4bf3-8950-b34ce57e028b"}`
+		var p ErrorPayload
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Code != "provider_billing_unavailable" || p.HTTPStatus == nil || *p.HTTPStatus != 402 || p.UpstreamRequestID == "" {
+			t.Fatal(p)
+		}
+	}
+	for _, id := range []string{`"Bearer secret"`, `123`, `{"token":"secret"}`, `null`} {
+		var p ErrorPayload
+		if err := json.Unmarshal([]byte(`{"error":"unchanged","upstream_request_id":`+id+`}`), &p); err != nil || p.UpstreamRequestID != "" || p.Error != "unchanged" {
+			t.Fatal(err, p)
+		}
+	}
+}

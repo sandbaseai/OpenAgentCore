@@ -17971,6 +17971,7 @@
               "authentication_error",
               "rate_limit_exceeded",
               "usage_limit_exceeded",
+              "provider_billing_unavailable",
               "server_overloaded",
               "server_error",
               "invalid_request",
@@ -18140,6 +18141,19 @@
                 "type": "null"
               }
             ]
+          },
+          "input_available": {
+            "description": "InputAvailable is advisory at this snapshot; submission retains all atomic admission checks.",
+            "type": "boolean"
+          },
+          "input_unavailable_reason": {
+            "enum": [
+              "busy",
+              "requires_action",
+              "environment_unavailable",
+              "configuration_required"
+            ],
+            "type": "string"
           },
           "object": {
             "enum": [
