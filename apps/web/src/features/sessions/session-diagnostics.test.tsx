@@ -78,3 +78,12 @@ describe("Core diagnostics in the console", () => {
     client.clear();
   });
 });
+
+it("renders billing failures in Session and Turn rows in both languages", async () => {
+ const f: DiagnosticFailure = { code: "provider_billing_unavailable", params: { http_status: 402 }, failed_at: null };
+ for (const [language, text] of [["en", "billing or usage-limit issue"], ["zh-CN", "账单或使用额度问题"]]) {
+  await i18n.changeLanguage(language);
+  expect(render("session", { ...sessionData, failure: { ...f, source: "turn", turn_id: "turn" } })).toContain(text);
+  expect(render("turn", { ...turnData, failure: f })).toContain(text);
+ }
+});

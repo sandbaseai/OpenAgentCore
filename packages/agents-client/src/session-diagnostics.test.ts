@@ -86,3 +86,18 @@ it.each([
 ] as const)("rejects arrays in %s", (_field, project) => {
   expect(project).toThrow();
 });
+
+ it.each([402, null])("retrieves billing diagnostics for Session and Turn with status %s", async (http_status) => {
+  const f = { ...failure, code: "provider_billing_unavailable", params: { http_status } };
+  const sessionValue = { ...session, failure: { ...f, source: "turn", turn_id: turn } };
+  const turnValue = { ...snapshot, failure: f };
+  const client = new AdminClient({ adminToken: "admin", fetch: (async (url) => new Response(JSON.stringify(String(url).includes("/turns/") ? turnValue : sessionValue), { headers: { "Content-Type": "application/json" } })) as typeof fetch });
+  expect(await client.retrieveSessionDiagnostics("project", id)).toEqual(sessionValue);
+  expect(await client.retrieveTurnDiagnostics("project", id, turn)).toEqual(turnValue);
+  expect(() => projectSessionDiagnostics({ ...session, failure: { ...f, source: "environment_input" } }, id)).toThrow();
+});
+it.each([{}, { http_status: 401 }, { http_status: 429 }, { http_status: "402" }, { http_status: 402.5 }, { http_status: 402, message: "private-canary" }])("rejects malformed billing parameters on both routes", (params) => {
+  const f = { ...failure, code: "provider_billing_unavailable", params };
+  expect(() => projectSessionDiagnostics({ ...session, failure: { ...f, source: "turn", turn_id: turn } }, id)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: f }, id, turn)).toThrow();
+});

@@ -20,6 +20,7 @@ export const diagnostics = {
     request_timeout: "模型服务请求超时。",
     context_length_exceeded: "输入超出模型的上下文上限。",
     cyber_policy: "模型服务因安全策略拒绝了输入。",
+    provider_billing_unavailable: "模型服务因账单或使用额度问题拒绝了本次请求。请联系支持人员检查模型服务账户后再试。",
     connection_failed: "与模型服务的连接失败。",
     harness_error: "Harness 未能完成执行，未报告具体原因。",
     model_provider_required: "此 Session 未配置模型服务。",

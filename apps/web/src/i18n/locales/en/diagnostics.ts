@@ -20,6 +20,7 @@ export const diagnostics = {
     request_timeout: "The model provider request timed out.",
     context_length_exceeded: "The input exceeds the model's context limit.",
     cyber_policy: "The model provider rejected the input under its safety policy.",
+    provider_billing_unavailable: "The model service rejected this request because of a billing or usage-limit issue. Contact support to check the model service account before trying again.",
     connection_failed: "The connection to the model provider failed.",
     harness_error: "The harness could not complete execution. No specific cause was reported.",
     model_provider_required: "No model provider is configured for this Session.",

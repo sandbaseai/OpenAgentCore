@@ -20,7 +20,7 @@ export type SessionDiagnostics = Omit<SessionDiagnosticsResource, "failure"> & {
 export type TurnDiagnostics = Omit<TurnDiagnosticsResource, "failure"> & { failure: DiagnosticFailure | null };
 
 // The schema's one code enum covers every failure source; each source produces only its subset.
-const turnCodes: readonly DiagnosticFailureCode[] = ["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed", "harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error"];
+const turnCodes: readonly DiagnosticFailureCode[] = ["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed", "provider_billing_unavailable", "harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error"];
 const inputCodes: readonly DiagnosticFailureCode[] = ["environment_connection_timeout", "environment_unavailable", "model_provider_required", "internal_error"];
 const environmentCodes: readonly DiagnosticFailureCode[] = ["environment_provisioning_failed"];
 const fields = (...values: string[]) => new Set(values);
@@ -37,9 +37,10 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
         (p.index !== null && (!Number.isSafeInteger(p.index) || (p.index as number) < 0 || p.step !== "setup")) ||
         (p.exit_code !== null && (!Number.isSafeInteger(p.exit_code) || (p.exit_code as number) < 1 || (p.exit_code as number) > 255 || !["setup", "python", "npm", "system"].includes(p.step ?? "")))) return invalidAdminResponse();
     params = { step: p.step as ProvisioningFailureParams["step"], index: p.index as number | null, exit_code: p.exit_code as number | null };
-  } else if (value.code === "connection_failed") {
+  } else if (value.code === "connection_failed" || value.code === "provider_billing_unavailable") {
     const p = value.params;
     if (!exactFields(p, fields("http_status")) || (p.http_status !== null && (!Number.isSafeInteger(p.http_status) || (p.http_status as number) < 100 || (p.http_status as number) > 599))) return invalidAdminResponse();
+    if (value.code === "provider_billing_unavailable" && p.http_status !== null && p.http_status !== 402) return invalidAdminResponse();
     params = { http_status: p.http_status as number | null };
   } else if (Object.keys(value.params).length !== 0) return invalidAdminResponse();
   return { code: value.code, params, failed_at: value.failed_at as string | null };
