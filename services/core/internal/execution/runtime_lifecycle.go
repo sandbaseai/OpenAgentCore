@@ -322,7 +322,7 @@ func (w *Worker) ReconcileManagedRuntimes(ctx context.Context) error {
 	return w.runtimes.reconcile(ctx)
 }
 
-func (r *runtimeLifecycle) reconcile(ctx context.Context) error {
+func (r *runtimeLifecycle) reconcile(ctx context.Context) (scanErr error) {
 	ctx, finish, err := r.beginReconcile(ctx)
 	if err != nil {
 		return err
@@ -344,7 +344,15 @@ func (r *runtimeLifecycle) reconcile(ctx context.Context) error {
 			}
 		}
 	}
+	scanAt := time.Now()
+	observed := 0
+	defer func() {
+		if len(rows) > 0 {
+			observeExecutionStage(ctx, "runtime_reconcile", scanAt, scanErr, "node_id", r.nodeID, "allocation_count", len(rows), "observed_count", observed)
+		}
+	}()
 	for _, owner := range rows {
+		observed++
 		r.cursor = owner.ID
 		operation, stop := context.WithTimeout(ctx, 30*time.Second)
 		observeAt := time.Now()
