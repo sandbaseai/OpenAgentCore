@@ -94,10 +94,15 @@ func (d *Dispatcher) RunEnvironmentInput(ctx context.Context, lease Ownership, t
 	defer prepared.close()
 	obslog.Ctx(owner).Info("execution preparation requested", "session_id", sessionID, "reservation_id", reservationID,
 		"environment_id", environment.ID, "device_id", bound.Device.ID, "preparation_request_id", prepared.requestID)
-	if err = send(owner, peer, proto.TypeExecutionPrepare, prepared.requestID, proto.ExecutionPreparePayload{SessionID: sessionID, Configuration: req}); err != nil {
+	prepareAt := time.Now()
+	err = send(owner, peer, proto.TypeExecutionPrepare, prepared.requestID, proto.ExecutionPreparePayload{SessionID: sessionID, Configuration: req})
+	observeExecutionStage(owner, "execution_prepare_send", prepareAt, err, "session_id", sessionID, "reservation_id", reservationID, "preparation_request_id", prepared.requestID)
+	if err != nil {
 		return run, err
 	}
+	prepareAt = time.Now()
 	run.Reservation, err = d.awaitPreparation(owner, tenantID, sessionID, run.Reservation, prepared)
+	observeExecutionStage(owner, "execution_prepare_wait", prepareAt, err, "session_id", sessionID, "reservation_id", reservationID, "preparation_request_id", prepared.requestID, "state", run.Reservation.State)
 	if err != nil || run.Reservation.State != sessions.EnvironmentInputPending {
 		return run, err
 	}

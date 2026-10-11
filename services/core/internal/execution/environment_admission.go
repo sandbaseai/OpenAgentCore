@@ -111,9 +111,12 @@ func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.S
 	obslog.Ctx(ctx).Info("environment input reserved", "session_id", session.ID,
 		"reservation_id", reservation.ID, "execution_trace_id", reservationTraceID(reservation.ID).String(), "state", reservation.State)
 	admittedAt := time.Now()
+	var notificationWakeups, pollWakeups int
+	lastWake := "none"
 	defer func() {
 		observeExecutionStage(ctx, "input_admission_wait", admittedAt, err,
-			"session_id", session.ID, "reservation_id", reservation.ID, "state", reservation.State)
+			"session_id", session.ID, "reservation_id", reservation.ID, "state", reservation.State,
+			"notification_wakeups", notificationWakeups, "poll_wakeups", pollWakeups, "last_wake_source", lastWake)
 	}()
 	w.wakeScheduler()
 	if reservation.State == sessions.EnvironmentInputPending {
@@ -136,7 +139,11 @@ func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.S
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
+			pollWakeups++
+			lastWake = "poll"
 		case <-changed:
+			notificationWakeups++
+			lastWake = "notification"
 		}
 		if err := w.checkAdmissionOwnership(ctx); err != nil {
 			return nil, err

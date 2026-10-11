@@ -176,3 +176,27 @@ func TestInitialInputOriginKeepsHTTPTraceAndSessionIdentity(t *testing.T) {
 		t.Fatal("creation fabricated a reservation identity")
 	}
 }
+
+func TestAdmissionStageDiagnosticsUseFiniteStatusAndSafeFields(t *testing.T) {
+	out := captureExecutionLogs(t)
+	stages := []string{"execution_prepare_send", "execution_prepare_wait", "environment_initialize_commit", "runtime_reconcile"}
+	for _, stage := range stages {
+		for _, sample := range []struct {
+			err    error
+			status string
+		}{{nil, "ok"}, {context.Canceled, "cancelled"}, {context.DeadlineExceeded, "timeout"}, {errors.New("SECRET fixture error body"), "error"}} {
+			out.Reset()
+			observeExecutionStage(reservationTrace(t.Context(), "reservation"), stage, time.Now(), sample.err, "session_id", "session", "reservation_id", "reservation")
+			var entry map[string]any
+			if err := json.Unmarshal(out.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry["stage"] != stage || entry["status"] != sample.status || entry["duration_ms"].(float64) < 0 || entry["reservation_id"] != "reservation" {
+				t.Fatal("invalid stage schema", entry)
+			}
+			if strings.Contains(out.String(), "SECRET") || strings.Contains(out.String(), "fixture error body") {
+				t.Fatal("raw failure leaked")
+			}
+		}
+	}
+}
