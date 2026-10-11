@@ -10,7 +10,7 @@ func turnDiagnosticFailure(turn sessions.Turn) *DiagnosticFailure {
 	}
 	code, status := sessions.DiagnosticFailureCode(turn.Outcome)
 	params := CoreErrorDetails{}
-	if code == "connection_failed" {
+	if code == "connection_failed" || code == "provider_billing_unavailable" {
 		params["http_status"] = CoreErrorNull()
 		if status != nil {
 			params["http_status"] = CoreErrorNumber(float64(*status))

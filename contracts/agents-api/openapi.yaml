@@ -722,6 +722,51 @@ definitions:
     required:
     - error
     type: object
+  v1.ExecutionDiagnostic:
+    properties:
+      code:
+        enum:
+        - unknown
+        - harness_error
+        - model_provider_required
+        - runtime_unavailable
+        - runtime_disconnected
+        - runtime_preparation_failed
+        - execution_interrupted
+        - delivery_unconfirmed
+        - input_rejected
+        - executor_protocol_error
+        - core_storage_failed
+        - environment_connection_timeout
+        - environment_unavailable
+        - environment_provisioning_failed
+        - authentication_error
+        - rate_limit_exceeded
+        - usage_limit_exceeded
+        - provider_billing_unavailable
+        - server_overloaded
+        - server_error
+        - invalid_request
+        - resource_not_found
+        - request_timeout
+        - context_length_exceeded
+        - cyber_policy
+        - connection_failed
+        type: string
+      failed_at:
+        type: string
+        x-nullable: true
+      source:
+        enum:
+        - turn
+        - environment
+        - environment_input
+        type: string
+    required:
+    - code
+    - failed_at
+    - source
+    type: object
   v1.InlineAgent:
     properties:
       instructions:
@@ -1397,6 +1442,44 @@ definitions:
     - id
     - object
     type: object
+  v1.SessionDiagnostics:
+    properties:
+      diagnostic:
+        allOf:
+        - $ref: '#/definitions/v1.ExecutionDiagnostic'
+        x-nullable: true
+      input_available:
+        description: InputAvailable is advisory at this snapshot; submission retains
+          all atomic admission checks.
+        type: boolean
+      input_unavailable_reason:
+        enum:
+        - busy
+        - requires_action
+        - environment_unavailable
+        - configuration_required
+        type: string
+      object:
+        enum:
+        - agent.session_diagnostics
+        type: string
+      session_id:
+        type: string
+      status:
+        enum:
+        - idle
+        - in_progress
+        - requires_action
+        - failed
+        type: string
+      turn_id:
+        type: string
+    required:
+    - diagnostic
+    - object
+    - session_id
+    - status
+    type: object
   v1.SessionEnvironment:
     properties:
       capability_directories:
@@ -1960,6 +2043,36 @@ definitions:
     - object
     - session_id
     - status
+    type: object
+  v1.TurnDiagnostics:
+    properties:
+      diagnostic:
+        allOf:
+        - $ref: '#/definitions/v1.ExecutionDiagnostic'
+        x-nullable: true
+      object:
+        enum:
+        - agent.turn_diagnostics
+        type: string
+      session_id:
+        type: string
+      status:
+        enum:
+        - queued
+        - in_progress
+        - waiting
+        - completed
+        - failed
+        - cancelled
+        type: string
+      turn_id:
+        type: string
+    required:
+    - diagnostic
+    - object
+    - session_id
+    - status
+    - turn_id
     type: object
   v1.TurnError:
     properties:
@@ -4860,6 +4973,95 @@ paths:
       summary: Download immutable Skill version content
       tags:
       - Skills
+  /v1/agents/sessions/{session_id}/diagnostics:
+    get:
+      description: OpenAgentCore extension. Project key only. Safe committed failure
+        classification without private execution details.
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.SessionDiagnostics'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Retrieve Project Session diagnostics
+      tags:
+      - Diagnostics
+  /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics:
+    get:
+      description: OpenAgentCore extension. Project key only. Safe committed failure
+        classification without private execution details.
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Root Turn ID
+        in: path
+        name: turn_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TurnDiagnostics'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Retrieve Project Turn diagnostics
+      tags:
+      - Diagnostics
   /vaults:
     get:
       description: Lists project-owned Vaults independently of execution. An unknown,

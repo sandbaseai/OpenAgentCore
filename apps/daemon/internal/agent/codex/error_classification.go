@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
@@ -14,6 +15,18 @@ func classifyTurnError(failure *TurnError) proto.ErrorPayload {
 	}
 	var variant string
 	var code string
+	// Some native HTTP failures arrive as "other" without typed status. Only
+	// the exact native terminal HTTP envelope is recognized, never accumulated
+	// output, notification text or provider response-body keywords.
+	if len(failure.CodexErrorInfo) == 0 || string(failure.CodexErrorInfo) == "null" ||
+		(json.Unmarshal(failure.CodexErrorInfo, &variant) == nil && variant == "other") {
+		const prefix = "unexpected status 402 Payment Required"
+		message := failure.Message
+		if !strings.ContainsAny(message, "\r\n") && (message == prefix || strings.HasPrefix(message, prefix+": ") || strings.HasPrefix(message, prefix+", ")) {
+			status := 402
+			return proto.ErrorPayload{Code: "provider_billing_unavailable", HTTPStatus: &status, UpstreamRequestID: nativeRequestID(message)}
+		}
+	}
 	if json.Unmarshal(failure.CodexErrorInfo, &variant) == nil {
 		switch variant {
 		case "unauthorized":
@@ -53,8 +66,21 @@ func classifyTurnError(failure *TurnError) proto.ErrorPayload {
 				code = "rate_limit_exceeded"
 			}
 			code, status = proto.NormalizeEngineFailure(code, status)
-			return proto.ErrorPayload{Code: code, HTTPStatus: status}
+			return proto.ErrorPayload{Code: code, HTTPStatus: status, UpstreamRequestID: nativeRequestID(failure.Message)}
 		}
 	}
 	return proto.ErrorPayload{}
+}
+
+// The native transport places its request ID last. Ignore arbitrary body text
+// and reject multiline messages or anything other than a UUID suffix.
+func nativeRequestID(message string) string {
+	if !strings.HasPrefix(message, "unexpected status ") || strings.ContainsAny(message, "\r\n") {
+		return ""
+	}
+	_, id, ok := strings.Cut(message, ", request id: ")
+	if !ok {
+		return ""
+	}
+	return proto.NormalizeProviderRequestID(id)
 }

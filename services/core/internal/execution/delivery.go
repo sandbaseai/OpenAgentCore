@@ -362,6 +362,7 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 			return err
 		}
 		r.EngineErrorCode, r.EngineHTTPStatus = proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus)
+		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
 	case proto.TypeDone:

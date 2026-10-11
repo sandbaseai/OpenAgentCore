@@ -1,7 +1,7 @@
 ---
 title: "Agents API 覆盖台账"
 source: contracts/agents-api/index.md
-source_hash: a158d22b6c42b10baa3867b56611f281dc13fd98b676765bf4b36a7684d0795a
+source_hash: b0b511827c4173949ce6d34b7e47e6928d34a8e692d23cd2dba8e9e7bbce8d5d
 ---
 
 Core 旨在以下方固定版本为准支持完整的 OpenAI Agents API（[public API rule](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/AGENTS.md#public-api)）。本台账记录 Core 对各项资源实现了哪些内容、哪些契约保存其详细信息，并列出相对于 OpenAI 服务的所有已知差异和所有未解决缺口。[API namespaces and credentials](../../../docs/zh/api/index.md) 说明谁调用哪些 API；[Agents API guide](../../../docs/zh/api/public-agent-api.md) 介绍使用方法。

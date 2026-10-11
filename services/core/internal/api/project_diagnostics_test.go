@@ -137,3 +137,43 @@ func TestProjectTurnDiagnosticsWaiting(t *testing.T) {
 		t.Fatal(w.Code, w.Body)
 	}
 }
+
+func TestProjectFailedTurnAllowsExplicitNewTurnPostgres(t *testing.T) {
+	service, pool := diagnosticDatabase(t)
+	key := callerBinding()
+	deps, fakes := testDependencies(t)
+	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
+	databaseSessionReads(pool)(&deps, fakes)
+	h := newTestHandler(t, deps)
+	created, err := service.CreateSession(t.Context(), key.TenantID, sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "test"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"id":"agent_root","model":"test"},"environment":{"type":"none"}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Session.ID
+	first := submitMessage(t, pool, key.TenantID, id, "first-explicit-message", json.RawMessage(`{"text":"first"}`))
+	transitionTurn(t, pool, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnQueued, Status: sessions.TurnInProgress})
+	transitionTurn(t, pool, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnInProgress, Status: sessions.TurnFailed, Outcome: json.RawMessage(`{"error_code":"engine_failed","engine_error_code":"provider_billing_unavailable","engine_http_status":402,"engine_request_id":"88a8d808-59c1-4bf3-8950-b34ce57e028b","error":"secret-canary"}`)})
+	path := "/v1/agents/sessions/" + id + "/diagnostics"
+	for i := 0; i < 2; i++ {
+		w := diagnosticRequest(h, path, "Bearer caller")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"input_available":true`) || !strings.Contains(w.Body.String(), `"code":"provider_billing_unavailable"`) || strings.Contains(w.Body.String(), "secret-canary") || strings.Contains(w.Body.String(), "88a8d808") {
+			t.Fatal(w.Code, w.Body)
+		}
+	}
+	var count int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM turns WHERE session_id=$1", id).Scan(&count); err != nil || count != 1 {
+		t.Fatal("diagnostic read started work", count, err)
+	}
+	next := submitMessage(t, pool, key.TenantID, id, "second-explicit-message", json.RawMessage(`{"text":"continue"}`))
+	if next.TurnID == first.TurnID {
+		t.Fatal("new message reused failed Turn")
+	}
+	w := diagnosticRequest(h, path, "Bearer caller")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"input_available":false`) || !strings.Contains(w.Body.String(), `"input_unavailable_reason":"busy"`) {
+		t.Fatal(w.Code, w.Body)
+	}
+	w = diagnosticRequest(h, "/v1/agents/sessions/"+id+"/turns/"+first.TurnID+"/diagnostics", "Bearer caller")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"code":"provider_billing_unavailable"`) {
+		t.Fatal("historical failure lost", w.Code, w.Body)
+	}
+}

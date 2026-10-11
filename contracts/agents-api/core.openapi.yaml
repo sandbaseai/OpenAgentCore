@@ -313,6 +313,7 @@ definitions:
           - authentication_error
           - rate_limit_exceeded
           - usage_limit_exceeded
+          - provider_billing_unavailable
           - server_overloaded
           - server_error
           - invalid_request
@@ -648,6 +649,7 @@ definitions:
           - authentication_error
           - rate_limit_exceeded
           - usage_limit_exceeded
+          - provider_billing_unavailable
           - server_overloaded
           - server_error
           - invalid_request
