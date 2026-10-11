@@ -10,6 +10,7 @@ export const diagnostics = {
   providerHelp: "Core 记录使用此部署默认配置的托管 Turn 结果。记录可能延迟或缺失；暂无记录不代表服务已就绪或从未使用。替换默认配置后会重新记录。",
   providerStaleHelp: "最新读取失败，当前显示上次确认的记录。",
   failure: {
+    provider_billing_unavailable: "模型服务因账单或使用额度问题拒绝了请求。请联系支持人员检查模型服务账户后再尝试。",
     authentication_error: "模型服务认证失败，请检查 API key。",
     rate_limit_exceeded: "已达到模型服务的请求频率上限。",
     usage_limit_exceeded: "已达到模型服务的用量上限，请检查额度。",
@@ -20,7 +21,6 @@ export const diagnostics = {
     request_timeout: "模型服务请求超时。",
     context_length_exceeded: "输入超出模型的上下文上限。",
     cyber_policy: "模型服务因安全策略拒绝了输入。",
-    provider_billing_unavailable: "模型服务因账单或使用额度问题拒绝了本次请求。请联系支持人员检查模型服务账户后再试。",
     connection_failed: "与模型服务的连接失败。",
     harness_error: "Harness 未能完成执行，未报告具体原因。",
     model_provider_required: "此 Session 未配置模型服务。",

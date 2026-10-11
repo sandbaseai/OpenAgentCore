@@ -96,7 +96,7 @@ it.each([
   expect(await client.retrieveTurnDiagnostics("project", id, turn)).toEqual(turnValue);
   expect(() => projectSessionDiagnostics({ ...session, failure: { ...f, source: "environment_input" } }, id)).toThrow();
 });
-it.each([{}, { http_status: 401 }, { http_status: 429 }, { http_status: "402" }, { http_status: 402.5 }, { http_status: 402, message: "private-canary" }])("rejects malformed billing parameters on both routes", (params) => {
+it.each([{}, { http_status: 400 }, { http_status: 403 }, { http_status: 500 }, { http_status: 401 }, { http_status: 429 }, { http_status: "402" }, { http_status: 402.5 }, { http_status: 402, message: "private-canary" }])("rejects malformed billing parameters on both routes", (params) => {
   const f = { ...failure, code: "provider_billing_unavailable", params };
   expect(() => projectSessionDiagnostics({ ...session, failure: { ...f, source: "turn", turn_id: turn } }, id)).toThrow();
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: f }, id, turn)).toThrow();

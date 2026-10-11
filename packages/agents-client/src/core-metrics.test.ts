@@ -27,6 +27,9 @@ describe("Core metrics projection", () => {
     const terminal = { total: 3, completed: 1, failed: 2, cancelled: 0, failures: [{ code: "provider_billing_unavailable", source: "turn", count: 2 }] };
     const body = { object: "core.metrics", range: { resolution_seconds: 60 }, service: { status: "running" }, execution: { slots_in_use: 0, slots_total: 4, connected_daemons: 0, terminal_turns: terminal } };
     expect(projectCoreMetrics(body).execution.terminal_turns).toEqual(terminal);
+    for (const total of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => projectCoreMetrics({ ...body, execution: { ...body.execution, terminal_turns: { ...terminal, total } } })).toThrow();
+    }
     expect(() => projectCoreMetrics({ ...body, execution: { ...body.execution, terminal_turns: { ...terminal, total: "3" } } })).toThrow();
     expect(projectCoreMetrics({ ...body, execution: { ...body.execution, terminal_turns: null } }).execution.terminal_turns).toBeNull();
   });

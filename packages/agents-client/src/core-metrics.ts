@@ -37,9 +37,8 @@ function number(value: unknown): number | null {
 }
 
 function count(value: unknown, path: string): number {
-  const result = number(value);
-  if (result === null) throw new AgentCoreError(`Core metrics: ${path} is missing.`, 0, "invalid_response");
-  return result;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new AgentCoreError(`Core metrics: ${path} is not a count.`, 0, "invalid_response");
+  return value as number;
 }
 
 function text(value: unknown): string | null {
