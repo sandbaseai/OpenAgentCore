@@ -1,0 +1,50 @@
+package sessions
+
+import (
+	"encoding/json"
+
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
+)
+
+// DiagnosticFailureCode classifies only typed outcome metadata. Native text is never inspected.
+func DiagnosticFailureCode(outcomeJSON json.RawMessage) (string, *int) {
+	var outcome map[string]json.RawMessage
+	var coreCode string
+	if json.Unmarshal(outcomeJSON, &outcome) == nil {
+		_ = json.Unmarshal(outcome["error_code"], &coreCode)
+	}
+	code := "internal_error"
+	var httpStatus *int
+	switch coreCode {
+	case "engine_failed":
+		code = "harness_error"
+		// Optional malformed metadata cannot hide the authoritative Core error.
+		var nativeCode string
+		var nativeStatus *int
+		_ = json.Unmarshal(outcome["engine_error_code"], &nativeCode)
+		_ = json.Unmarshal(outcome["engine_http_status"], &nativeStatus)
+		if classified, status := proto.NormalizeEngineFailure(nativeCode, nativeStatus); classified != "" {
+			code = classified
+			httpStatus = status
+		}
+	case "model_provider_required":
+		code = "model_provider_required"
+	case "execution_device_unavailable", "execution_unavailable":
+		code = "runtime_unavailable"
+	case "device_disconnected", "event_stream_incomplete":
+		code = "runtime_disconnected"
+	case "preparation_start_failed", "preparation_interrupted":
+		code = "runtime_preparation_failed"
+	case "execution_interrupted":
+		code = "execution_interrupted"
+	case "delivery_unknown", "input_outcome_unknown", "cancel_unconfirmed", "cancel_outcome_unavailable", "function_result_unconfirmed":
+		code = "delivery_unconfirmed"
+	case "invalid_input", "input_not_applied", "message_input_unsupported", "input_invalid_input", "input_run_inactive", "input_input_conflict", "input_input_limit", "input_unsupported", "input_rejected", "input_not_ready", "input_busy":
+		code = "input_rejected"
+	case "invalid_executor_result", "execution_state_unavailable", "execution_state_changed", "function_call_invalid", "function_result_invalid":
+		code = "executor_protocol_error"
+	case "event_persistence_failed", "artifact_capture_failed":
+		code = "core_storage_failed"
+	}
+	return code, httpStatus
+}

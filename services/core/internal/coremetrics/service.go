@@ -225,6 +225,7 @@ func (s *Service) Read(ctx context.Context, name string) (View, error) {
 	if err != nil {
 		view.Service.Status = ServiceDegraded
 	} else {
+		view.Execution.TerminalTurns = &history.TerminalTurns
 		view.Execution.Interrupted = ptr(history.Interrupted)
 		view.Execution.QueueWaitMS = history.QueueWaitMS
 		for i := range view.Execution.Series {

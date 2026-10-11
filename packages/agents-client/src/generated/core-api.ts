@@ -226,7 +226,7 @@ export interface DiagnosticFailure {
   params: Record<string, unknown>;
 }
 export const diagnosticFailureFields = ["code", "failed_at", "params"] as const;
-export const diagnosticFailureCodeValues = ["harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error", "environment_connection_timeout", "environment_unavailable", "environment_provisioning_failed", "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed"] as const;
+export const diagnosticFailureCodeValues = ["harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error", "environment_connection_timeout", "environment_unavailable", "environment_provisioning_failed", "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "provider_billing_unavailable", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed"] as const;
 export type DiagnosticFailureCode = (typeof diagnosticFailureCodeValues)[number];
 export const diagnosticSourceValues = ["turn", "environment", "environment_input"] as const;
 export type DiagnosticSource = (typeof diagnosticSourceValues)[number];
@@ -246,10 +246,11 @@ export interface Execution {
   series: ExecutionBucket[];
   slots_in_use: number;
   slots_total: number;
+  terminal_turns: TerminalTurns | null;
   unavailable: number | null;
   waiting_for_daemon: number | null;
 }
-export const executionFields = ["connected_daemons", "in_progress_turns", "interrupted", "oldest_queued_seconds", "queue_wait_ms", "queued_turns", "series", "slots_in_use", "slots_total", "unavailable", "waiting_for_daemon"] as const;
+export const executionFields = ["connected_daemons", "in_progress_turns", "interrupted", "oldest_queued_seconds", "queue_wait_ms", "queued_turns", "series", "slots_in_use", "slots_total", "terminal_turns", "unavailable", "waiting_for_daemon"] as const;
 export interface ExecutionBucket {
   in_progress: number | null;
   queue_wait_p95_ms: number | null;
@@ -297,6 +298,13 @@ export interface ExecutorCredentialList {
   data: ExecutorCredential[];
 }
 export const executorCredentialListFields = ["connection", "data"] as const;
+export interface FailureCount {
+  code?: string;
+  count?: number;
+  source?: "turn";
+}
+export const failureCountFields = ["code", "count", "source"] as const;
+export const failureCountRequired = [] as const;
 export interface HarnessModelConfiguration {
   harness: HarnessModelConfigurationHarness;
   harness_config: Record<string, unknown>;
@@ -848,7 +856,7 @@ export interface SessionDiagnosticFailure {
 }
 export const sessionDiagnosticFailureFields = ["code", "failed_at", "params", "source", "turn_id"] as const;
 export const sessionDiagnosticFailureRequired = ["code", "failed_at", "params", "source"] as const;
-export const sessionDiagnosticFailureCodeValues = ["harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error", "environment_connection_timeout", "environment_unavailable", "environment_provisioning_failed", "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed"] as const;
+export const sessionDiagnosticFailureCodeValues = ["harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error", "environment_connection_timeout", "environment_unavailable", "environment_provisioning_failed", "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "provider_billing_unavailable", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed"] as const;
 export type SessionDiagnosticFailureCode = (typeof sessionDiagnosticFailureCodeValues)[number];
 export interface SessionDiagnostics {
   failure: SessionDiagnosticFailure | null;
@@ -874,6 +882,15 @@ export interface Suspension {
   retention_seconds: number;
 }
 export const suspensionFields = ["idle_seconds", "retention_seconds"] as const;
+export interface TerminalTurns {
+  cancelled?: number;
+  completed?: number;
+  failed?: number;
+  failures?: FailureCount[];
+  total?: number;
+}
+export const terminalTurnsFields = ["cancelled", "completed", "failed", "failures", "total"] as const;
+export const terminalTurnsRequired = [] as const;
 export interface TurnDiagnostics {
   failure: DiagnosticFailure | null;
   items: ItemDiagnosticTiming[];

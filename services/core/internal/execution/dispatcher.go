@@ -66,6 +66,7 @@ type Credentials interface {
 type Result struct {
 	EngineErrorCode  string            `json:"engine_error_code,omitempty"`
 	EngineHTTPStatus *int              `json:"engine_http_status,omitempty"`
+	EngineRequestID  string            `json:"engine_request_id,omitempty"`
 	Done             proto.DonePayload `json:"done"`
 	ErrorCode        string            `json:"error_code,omitempty"`
 	Error            string            `json:"error,omitempty"`

@@ -369,6 +369,7 @@ definitions:
           - authentication_error
           - rate_limit_exceeded
           - usage_limit_exceeded
+          - provider_billing_unavailable
           - server_overloaded
           - server_error
           - invalid_request
@@ -750,6 +751,7 @@ definitions:
           - authentication_error
           - rate_limit_exceeded
           - usage_limit_exceeded
+          - provider_billing_unavailable
           - server_overloaded
           - server_error
           - invalid_request
@@ -890,6 +892,10 @@ definitions:
         type: integer
       slots_total:
         type: integer
+      terminal_turns:
+        allOf:
+          - $ref: '#/definitions/coremetrics.TerminalTurns'
+        x-nullable: true
       unavailable:
         type: integer
         x-nullable: true
@@ -906,6 +912,7 @@ definitions:
       - series
       - slots_in_use
       - slots_total
+      - terminal_turns
       - unavailable
       - waiting_for_daemon
     type: object
@@ -927,6 +934,17 @@ definitions:
       - queue_wait_p95_ms
       - queued
       - start
+    type: object
+  coremetrics.FailureCount:
+    properties:
+      code:
+        type: string
+      count:
+        type: integer
+      source:
+        enum:
+          - turn
+        type: string
     type: object
   coremetrics.Job:
     properties:
@@ -1078,6 +1096,21 @@ definitions:
     x-enum-varnames:
       - ServiceRunning
       - ServiceDegraded
+  coremetrics.TerminalTurns:
+    properties:
+      cancelled:
+        type: integer
+      completed:
+        type: integer
+      failed:
+        type: integer
+      failures:
+        items:
+          $ref: '#/definitions/coremetrics.FailureCount'
+        type: array
+      total:
+        type: integer
+    type: object
   coremetrics.View:
     properties:
       database:

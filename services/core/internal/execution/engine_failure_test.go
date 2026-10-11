@@ -73,3 +73,17 @@ func TestClassifiedErrorCannotOverrideCancellationReceipt(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingFailureOutcomePreservesSafeCorrelation(t *testing.T) {
+	status := 402
+	failure, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Code: "connection_failed", HTTPStatus: &status, UpstreamRequestID: "88a8d808-59c1-4bf3-8950-b34ce57e028b"})
+	result := Result{ErrorCode: "engine_failed"}
+	if err := result.mergeObservation(failure); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(result)
+	var saved Result
+	if json.Unmarshal(raw, &saved) != nil || saved.EngineErrorCode != "provider_billing_unavailable" || saved.EngineRequestID == "" || saved.EngineHTTPStatus == nil || *saved.EngineHTTPStatus != 402 {
+		t.Fatal(string(raw))
+	}
+}

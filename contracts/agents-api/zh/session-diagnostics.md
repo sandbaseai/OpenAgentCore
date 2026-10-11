@@ -1,7 +1,7 @@
 ---
 title: "根 Session 与 Turn 诊断"
 source: contracts/agents-api/session-diagnostics.md
-source_hash: d84a678de2a21f66e2090afff19aea5cff5d3f11d5c32306ebd4387b015cb416
+source_hash: f6c2bf7d41c48795074e26f5df2393723033cb53533c115581fdfcfb720784b9
 ---
 
 这些只读路由要求 Core 密钥。Project ID 选择目标 Project，不用于认证。两者都返回 `Cache-Control: no-store`：
@@ -46,3 +46,13 @@ source_hash: d84a678de2a21f66e2090afff19aea5cff5d3f11d5c32306ebd4387b015cb416
 ## 客户端 {#client}
 
 `packages/agents-client` 中的 `AdminClient.retrieveSessionDiagnostics(projectId, sessionId, options)` 和 `AdminClient.retrieveTurnDiagnostics(projectId, sessionId, turnId, options)` 支持请求取消，并验证范围、分类、可空性和安全参数值。
+
+## Project diagnostics extension
+
+应用使用 Project API key 和 `OpenAI-Beta: agents=v1` 调用 `GET /v1/agents/sessions/{session_id}/diagnostics` 或 `GET /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics`。这两条只读路由是 OpenAgentCore 扩展，并非官方 OpenAI Agents API 操作；生成的公共 OpenAPI 标记 `x-agents-core-extension: true`。既有官方 Session、Turn 响应及其错误枚举保持不变。
+
+对象名为 `agent.session_diagnostics` 和 `agent.turn_diagnostics`，都返回 `session_id`、`status` 和可空的 `diagnostic`。Turn 诊断必有 `turn_id`，Session 诊断仅在失败来自 Turn 时包含 `turn_id`。`diagnostic` 只包含 `code`、`source` 和可空的 RFC 3339 `failed_at`。分类及快照优先级遵循上文，兜底的 `internal_error` 对应用显示为 `unknown`。不暴露 `params`、原生文本、Item 时序、设备身份或凭据。非失败状态的 `diagnostic` 为 null。鉴权和资源隔离以请求 Project 为准，外租户、删除资源不可见，管理员 key 不被接受。
+
+读取共享管理接口的快照和五秒预算，返回 `Cache-Control: no-store`。存储或超时错误是 HTTP 错误，而非执行失败快照；调用方必须区分诊断不可用与执行原因未知。读取不会改变执行或计数，也不代表允许自动重试。
+
+Session 诊断还提供可选的 `input_available`，为 false 时提供 `input_unavailable_reason`（`busy`、`requires_action`、`environment_unavailable` 或 `configuration_required`）。这是用户显式发送新消息的快照建议，不是预约或执行承诺。活动 Turn、待处理输入、待操作、不可用环境或缺少模型供应商配置会阻止该建议；单独的历史 Turn 失败不会阻止。状态变化后客户端必须废弃建议并重新读取权威状态；能力缺失不等于允许恢复失败 Session。正式提交保留全部事务准入与幂等检查。用户新消息使用新的幂等键并创建新 Turn，历史失败保持不变，诊断读取不得自动重发工作。
