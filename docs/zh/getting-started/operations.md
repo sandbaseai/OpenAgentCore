@@ -1,7 +1,7 @@
 ---
 title: "运维"
 source: docs/getting-started/operations.md
-source_hash: 493098ee6b2ebee2c6cbb1076113e381d5683625c377a338d584b51c3ebf92e9
+source_hash: 5f542b305609a54ac71cc807ddcf8ae425279242595a773cf8bf1ac0d54c593b
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -245,9 +245,17 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 
 `execution_prepare_send` 测量 Core 控制消息发送；`execution_prepare_wait` 测量随后等待 Runtime 执行器就绪或预留进入终态的区间，两者都携带 Session、预留与准备请求 ID。`environment_initialize_commit` 测量初始化完成事务；成功提交后唤醒调度器，已有提示扫描绕过一秒候选扫描间隔，但不绕过准入检查。`input_admission_wait` 增加 `notification_wakeups`、`poll_wakeups` 和 `last_wake_source`（`none`、`notification`、`poll`）；它们统计等待 HTTP handler 实际选中的分支，不代表通知发送或丢失数量。选中轮询不证明漏通知。`runtime_reconcile` 仅对非空 allocation 页记录，测量清单查询及 gate 获取之后的观察批次和随后 pending 供给，附 `allocation_count` 与 `observed_count`；它与单独 provider/观察阶段重叠，不含之前的 gate 等待。这些记录不改变生命周期顺序，也不隔离慢实例观察。
 
+每轮生命周期协调在调用者 Trace 上使用新 span，没有 Trace 时创建后台 Trace。同一 trace/span 关联 `runtime reconciliation started`、`runtime_gate_wait`、`runtime_inventory`、各个 `runtime_observe` 和 `runtime_provision`、`runtime_pending_inventory`、`runtime_pending` 与 `runtime_reconcile_total`，包括 `node_id` 为空的直接 Provider 扫描。`runtime_inventory` 测量每次 allocation 页查询，`refill` 区分可选的回绕页；查询失败时 `allocation_count` 为 null，而不是空页。`runtime_pending_inventory` 测量待处理页查询；`runtime_pending` 包括该查询及返回候选的供给尝试，查询失败时 `candidate_count` 为 null，`attempted_count` 只统计开始尝试数，不代表成功数。`runtime_reconcile_total` 在获取 gate 前开始，每次返回都结束，包括空页和错误；原有非空页 `runtime_reconcile` 保留较窄区间。扫描成功仍可能含失败的单实例观察，需要查看各阶段状态。同轮身份能够证明旧实例观察是否先于 pending 供给；不同轮次仅时间重叠不能证明阻塞。跟踪不改变扫描顺序、公平性或取消语义。
+
+`e2b helper call` 测量已验证的 Go helper 调用，从请求序列化前到调用者返回，包含启动、等待和响应校验；记录已验证的 `operation`、`helper_started`、有限状态以及 allocation/environment ID。调用者超时不表示其持有的子进程已停止，原有 fence 仍等待其退出。只有子进程退出且 stderr 未超限时，Core 才转发最多两条 `e2b helper stage`：`helper_startup` 从 Python main 模块首个单调时间戳起，到导入、请求读取和 Provider 构造完成；`helper_execute` 包含整个 `Provider.execute`，包括本地 receipt 锁、SDK 工作和已分类结果处理，并非纯网络时间。失败边界记录 `completed=false`，不带错误正文。首个时间戳前的冻结包 loader/解释器启动、输出编码和子进程退出仍位于 Python 区间之外、Go 调用包络之内；不要用独立 `--check` 样本填充该残差，也不要相加重叠的父区间、execute 与 create 子阶段。helper 诊断复用调用者 trace/span 与可信 operation，不在 helper stdout 或 Runtime 协议新增跟踪/耗时字段。
+
 `control_ready_ms` 从调度、Runtime 就绪和配置组装完成后开始。`start_control_ms` 描述控制确认。`input_to_first_text_ms` 从执行投递前开始，包含 start-control 时间，不是纯模型 TTFT。admission、control、首字区间存在重叠，不要当作独立耗时相加。provider 调用成功表示该操作成功，不等于 daemon 连接完成或 Turn 完成。除非原生适配器提供相应观测，模型请求开始、响应 headers、模型首字、重试仍为不可观测。日志仅记录关联 ID 与有限状态分类，不记录输入内容、凭据或 provider 原始错误。
 
 `runtime transport registered` 记录认证后的 WebSocket 注册，`runtime capability snapshot observed` 记录合法能力声明变化及设备 ID、能力数量。连接注册本身不代表执行就绪。包含可用 Harness 的能力变化会发出合并后的调度提示；Worker 仍检查所有权、容量、生命周期和能力要求，轮询负责兜底。
+
+`journal first text received` 记录 delivery journal 接纳的第一条非空 delta 或原生 output-message 文本，包含结束时 drain。`journal_sequence` 是执行日志序号，不是公开 Session 事件序号。`journal first text persistence` 将首次失败记录为 `unconfirmed`，最终成功返回记录为 `confirmed`，包含尝试次数、append 耗时、接纳到确认耗时（失败为 null）。这是调用方确认时间，不是数据库内部精确 commit 时刻。每次 attempt 的私有 collector 只捕获该准确 source 实际生成的首个公开文本 `event_id`；只有 append 成功返回后才记录 `mapping_status=confirmed`，插入成功但提交未确认仍为候选。未知提交后的幂等 replay 可以确认 journal，但没有新公开映射时明确记录 `mapping_status=unobserved` 与空 event ID，不能因 replay 成功就升级旧候选。后续 SSE 读到同一个 ID 只能证明事件存在，不能补造原 commit 时间。不变的原生消息投影可能不产生公开文本事件。每 Turn 最多一条接纳、一条失败和一条确认，不输出正文或原始错误。
+
+`session stream first text read` 与 `session stream first text output` 观测同一连接内每个 Turn 的首条非空公开文本 delta/done，包含该连接后续的 Turn。每连接最多保留 64 个不同 Turn ID、不淘汰，缺 ID 共用一个独立槽；重复事件、旧 Turn 迟到文本、重复生命周期事件均不重置已选身份。超过上限时仅记录一次 `session stream text observation limit`，明确 `status=unobserved`、`reason=turn_limit`，公开转发照常；因此每连接最多 130 条首文本日志加 1 条超限日志。字段包含真实 `event_id`、`session_event_sequence`、Turn/Session、每次连接新建的 `connection_id`、`start_cursor`、`turn_identity_observed` 及 `scope=first_text_per_turn_connection`；重连不冒充 Turn 全局首文本。`read_at` 是该批数据库读返回时刻，早于批内前序事件写出。输出记录分开列 Write 与 Flush 耗时和状态，未到达的边界为 `unobserved` 与 null。Flush 成功仅表示 `ResponseController.Flush` 返回 nil，不表示下游已收到。短写单独记录，不改变现有行为。`read_to_emit_return_ms` 包含批内前序输出、投影、授权、序列化、Write 和 Flush，不能与子阶段相加。按真实 event ID 关联，不按相邻时间或不同领域的序号配对。GET 仍为 live-only，漏掉的事件不能伪造重放观测。批量阈值、轮询、wire、事务和鉴权行为不变。
 
 Daemon 启动日志记录 `runtime process starting` 和构建版本，`runtime startup stage` 记录各 Harness 探测、bootstrap 和每次连接尝试的本地单调时钟耗时，不输出凭据或原始错误。探测发生在连接注册之前。结合这些边界与已观察到的持久化连接时间，区分启动、周期观察和调度等待。Daemon 观测要求 Runtime 使用带有这些埋点的构建；仅升级 Core 不会升级现有 Runtime 模板。托管启动回执只确认进程已启动，不确认连接或能力就绪。
 

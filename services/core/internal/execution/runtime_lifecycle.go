@@ -323,12 +323,19 @@ func (w *Worker) ReconcileManagedRuntimes(ctx context.Context) error {
 }
 
 func (r *runtimeLifecycle) reconcile(ctx context.Context) (scanErr error) {
-	ctx, finish, err := r.beginReconcile(ctx)
+	ctx = lifecycleTrace(ctx)
+	started := time.Now()
+	log.Ctx(ctx).Info("runtime reconciliation started", "node_id", r.nodeID)
+	defer func() { observeExecutionStage(ctx, "runtime_reconcile_total", started, scanErr, "node_id", r.nodeID) }()
+	operation, finish, err := r.beginReconcile(ctx)
 	if err != nil {
 		return err
 	}
+	ctx = operation
 	defer finish()
+	inventoryAt := time.Now()
 	rows, err := r.reader.LifecycleAllocations(ctx, r.nodeID, r.cursor)
+	observeRuntimeInventory(ctx, inventoryAt, err, r.nodeID, false, len(rows))
 	if err != nil {
 		return err
 	}
@@ -338,7 +345,9 @@ func (r *runtimeLifecycle) reconcile(ctx context.Context) (scanErr error) {
 		if wrapped {
 			// Service the next page now instead of spending a ticker interval on EOF.
 			// Refill only once so an empty store still returns without spinning.
+			inventoryAt = time.Now()
 			rows, err = r.reader.LifecycleAllocations(ctx, r.nodeID, "")
+			observeRuntimeInventory(ctx, inventoryAt, err, r.nodeID, true, len(rows))
 			if err != nil {
 				return err
 			}

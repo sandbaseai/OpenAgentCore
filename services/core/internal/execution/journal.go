@@ -7,6 +7,7 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 )
 
 type journal struct {
@@ -18,6 +19,7 @@ type journal struct {
 	bytes                 int
 	pendingCount          int
 	observeSubagents      bool
+	firstText             journalTextObservation
 }
 
 type eventWriter interface {
@@ -68,6 +70,7 @@ func (j *journal) enqueue(env proto.Envelope) error {
 	if len(env.Payload) > proto.MaxFrameBytes {
 		return sessions.ErrEventLimit
 	}
+	j.observeFirstText(env)
 	j.batch = append(j.batch, sessions.ExecutionEvent{Kind: env.Type, Payload: env.Payload})
 	j.bytes += len(env.Payload)
 	return nil
@@ -95,7 +98,15 @@ func (j *journal) flush(ctx context.Context) error {
 		}
 		// An uncertain commit must retry the same batch even after more frames arrive.
 		j.pendingCount = count
-		if err := j.writer.AppendTurnEvents(ctx, j.tenant, j.session, j.turn, j.next, j.batch[:count]); err != nil {
+		appendCtx := ctx
+		var observation *textobs.Attempt
+		if j.observesTextBatch(count) {
+			appendCtx, observation = textobs.Begin(ctx, j.turn, int64(j.firstText.sequence))
+		}
+		started := time.Now()
+		err := j.writer.AppendTurnEvents(appendCtx, j.tenant, j.session, j.turn, j.next, j.batch[:count])
+		j.observeTextCommit(count, started, err, observation.EventID())
+		if err != nil {
 			j.reportFailure("flush", j.batch[0].Kind, size, err)
 			return err
 		}

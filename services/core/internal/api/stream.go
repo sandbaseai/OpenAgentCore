@@ -61,7 +61,8 @@ type streamSettlement func(context.Context) (settled bool, cursor int64, err err
 // status event and otherwise at most once a second.
 func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, session sessions.Session, cursor int64, initial *v1.SessionEvent, status int, settlement streamSettlement) {
 	id, tenant := session.ID, tenantID(r)
-	write := openEventStream(w, status)
+	observation := newStreamTextObservation(r.Context(), id, cursor)
+	write := openEventStream(w, status, observation)
 	if write == nil {
 		return
 	}
@@ -109,6 +110,7 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			writeStreamFailure(write, id)
 			return
 		}
+		readAt := time.Now()
 		for _, change := range changes {
 			if limit >= 0 && change.Sequence > limit {
 				return
@@ -118,7 +120,10 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 				writeStreamFailure(write, id)
 				return
 			}
-			if err := emit(event); err != nil {
+			observation.begin(event, change.Sequence, readAt)
+			emitErr := emit(event)
+			observation.end(emitErr)
+			if emitErr != nil {
 				return
 			}
 			cursor = change.Sequence
@@ -165,7 +170,11 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 
 // openEventStream writes the event-stream headers and the connection comment. It
 // returns nil when that write fails.
-func openEventStream(w http.ResponseWriter, status int) func([]byte) error {
+func openEventStream(w http.ResponseWriter, status int, observations ...*streamTextObservation) func([]byte) error {
+	var observation *streamTextObservation
+	if len(observations) > 0 {
+		observation = observations[0]
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -175,10 +184,16 @@ func openEventStream(w http.ResponseWriter, status int) func([]byte) error {
 		if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 			return err
 		}
-		if _, err := w.Write(data); err != nil {
+		started := time.Now()
+		written, err := w.Write(data)
+		observation.wrote(started, written, len(data), err)
+		if err != nil {
 			return err
 		}
-		return controller.Flush()
+		started = time.Now()
+		err = controller.Flush()
+		observation.flushed(started, err)
+		return err
 	}
 	if write([]byte(": connected\n\n")) != nil {
 		return nil

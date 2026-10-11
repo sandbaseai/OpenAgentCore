@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """One request over stdin; no service, model calls or provider credentials in logs."""
+import time
+
+_HELPER_STARTED = time.monotonic_ns()
+
 import importlib.metadata
 import json
 import logging
@@ -18,6 +22,16 @@ def valid_response(result):
             result.get('ErrorCode', '') in ERROR_CODES)
 
 
+def helper_stage(stage, started, completed):
+    """Only fixed stages and bounded scalars reach the parent's stderr filter."""
+    try:
+        sys.stderr.write(json.dumps({'event': 'e2b_helper_stage', 'stage': stage,
+                                     'duration_us': (time.monotonic_ns() - started) // 1000,
+                                     'completed': completed}) + '\n')
+    except Exception:
+        pass
+
+
 def main():
     logging.disable(logging.CRITICAL)
     os.umask(0o077)
@@ -25,6 +39,7 @@ def main():
     for key in list(os.environ):
         if key.startswith(('E2B_', 'PYTHON')):
             os.environ.pop(key)
+    startup_recorded = False
     try:
         if importlib.metadata.version('e2b') != SDK_VERSION:
             raise Failure('invalid')
@@ -34,6 +49,8 @@ def main():
             # freezing; importing e2b alone does not exercise that boundary.
             from pyqwest import SyncHTTPTransport
             SyncHTTPTransport(tls_include_system_certs=True)
+            helper_stage('helper_startup', _HELPER_STARTED, True)
+            startup_recorded = True
             print(json.dumps({'Version': PROTOCOL_VERSION, 'SDKVersion': SDK_VERSION}))
             return
         if len(sys.argv) != 1:
@@ -41,11 +58,23 @@ def main():
         data = sys.stdin.buffer.read(MAX_REQUEST + 1)
         if len(data) > MAX_REQUEST:
             raise Failure('invalid')
-        result = Provider(json.loads(data)).execute()
+        provider = Provider(json.loads(data))
+        helper_stage('helper_startup', _HELPER_STARTED, True)
+        startup_recorded = True
+        execution_started = time.monotonic_ns()
+        completed = False
+        try:
+            result = provider.execute()
+            completed = valid_response(result) and not result.get('ErrorCode', '')
+        finally:
+            helper_stage('helper_execute', execution_started, completed)
     except Failure as error:
         result = {'Version': PROTOCOL_VERSION, 'ErrorCode': error.code}
     except BaseException:
         result = {'Version': PROTOCOL_VERSION, 'ErrorCode': 'unconfirmed'}
+    finally:
+        if not startup_recorded:
+            helper_stage('helper_startup', _HELPER_STARTED, False)
     output = json.dumps(result) + '\n'
     if not valid_response(result) or len(output.encode('utf-8')) > MAX_RESPONSE:
         output = json.dumps({'Version': PROTOCOL_VERSION, 'ErrorCode': 'unconfirmed'}) + '\n'
