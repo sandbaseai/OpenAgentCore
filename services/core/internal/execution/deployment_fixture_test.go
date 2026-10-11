@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func deploymentOperations(t *testing.T, storage deployment.Storage, reader deplo
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations, err := deployment.NewExecutionOperations(service, execution)
+	operations, err := deployment.NewExecutionOperations(service, execution, engine.Catalog{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +143,8 @@ func (s *strictExecutionStorage) WithDeployment(ctx context.Context, apply func(
 type strictDeploymentReader struct {
 	countRetainedAllocations func(context.Context, string) (int64, error)
 	countComputeReservations func(context.Context, string) (int64, error)
+	placementDemand          func(context.Context, deployment.PlacementDemandCursor) ([]deployment.PlacementDemand, deployment.PlacementDemandCursor, error)
+	retainedNativeHistory    func(context.Context, deployment.AllocationKey) (bool, error)
 	t                        *testing.T
 	deployment               func(context.Context) (deployment.Record, error)
 	snapshot                 func(context.Context) (deployment.Snapshot, error)
@@ -356,4 +359,17 @@ func (r *strictDeploymentReader) CountRetainedAllocations(ctx context.Context, i
 		return 0, unexpectedDeploymentCall(r.t, "CountRetainedAllocations")
 	}
 	return r.countRetainedAllocations(ctx, installationID)
+}
+
+func (r *strictDeploymentReader) PlacementDemand(ctx context.Context, after deployment.PlacementDemandCursor) ([]deployment.PlacementDemand, deployment.PlacementDemandCursor, error) {
+	if r.placementDemand == nil {
+		return nil, deployment.PlacementDemandCursor{}, unexpectedDeploymentCall(r.t, "PlacementDemand")
+	}
+	return r.placementDemand(ctx, after)
+}
+func (r *strictDeploymentReader) RetainedNativeHistory(ctx context.Context, key deployment.AllocationKey) (bool, error) {
+	if r.retainedNativeHistory == nil {
+		return false, unexpectedDeploymentCall(r.t, "RetainedNativeHistory")
+	}
+	return r.retainedNativeHistory(ctx, key)
 }

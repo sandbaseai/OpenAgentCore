@@ -13,11 +13,14 @@ import (
 
 const getRuntimeLifecyclePlacement = `-- name: GetRuntimeLifecyclePlacement :one
 SELECT d.provider_kind, d.mode, a.id AS allocation_id, a.node_id AS allocation_node_id,
-       p.node_id AS placement_node_id, p.released_at
+       p.node_id AS placement_node_id, p.released_at,
+       CASE WHEN COALESCE(a.deployment_generation, p.deployment_generation, d.generation)=d.generation
+            THEN d.specification ELSE g.specification END::jsonb AS specification
 FROM environments e JOIN sessions s ON s.id=e.session_id
 CROSS JOIN runtime_deployment d
-LEFT JOIN runtime_allocations a ON a.environment_id=e.id
+LEFT JOIN runtime_allocations a ON a.environment_id=e.id AND a.state<>'released'
 LEFT JOIN runtime_placements p ON p.environment_id=e.id
+LEFT JOIN runtime_deployment_generations g ON g.generation=COALESCE(a.deployment_generation, p.deployment_generation, d.generation)
 WHERE s.tenant_id=$1 AND e.id=$2
 `
 
@@ -33,6 +36,7 @@ type GetRuntimeLifecyclePlacementRow struct {
 	AllocationNodeID pgtype.UUID        `json:"allocation_node_id"`
 	PlacementNodeID  pgtype.UUID        `json:"placement_node_id"`
 	ReleasedAt       pgtype.Timestamptz `json:"released_at"`
+	Specification    []byte             `json:"specification"`
 }
 
 func (q *Queries) GetRuntimeLifecyclePlacement(ctx context.Context, arg GetRuntimeLifecyclePlacementParams) (GetRuntimeLifecyclePlacementRow, error) {
@@ -45,8 +49,77 @@ func (q *Queries) GetRuntimeLifecyclePlacement(ctx context.Context, arg GetRunti
 		&i.AllocationNodeID,
 		&i.PlacementNodeID,
 		&i.ReleasedAt,
+		&i.Specification,
 	)
 	return i, err
+}
+
+const listPlacementDemand = `-- name: ListPlacementDemand :many
+WITH demand AS (
+SELECT e.id, s.tenant_id, s.engine, (latest.id IS NOT NULL)::boolean AS retained,
+       CASE WHEN latest.id IS NULL THEN s.created_at
+            ELSE LEAST((SELECT min(r.created_at) FROM environment_input_reservations r WHERE r.session_id = s.id AND r.state = 'pending' AND r.deadline > clock_timestamp()), CASE WHEN latest.compute_wake_requested THEN latest.compute_activity_at END) END::timestamptz AS demanded_at
+FROM environments e JOIN sessions s ON s.id = e.session_id
+LEFT JOIN LATERAL (SELECT a.id, a.state, a.compute_wake_requested, a.compute_activity_at FROM runtime_allocations a WHERE a.environment_id = e.id ORDER BY a.created_at DESC, a.id DESC LIMIT 1) latest ON true
+WHERE s.deleted_at IS NULL AND e.status NOT IN ('failed','expired')
+  AND s.configuration->'environment'->>'type' = 'openai_hosted'
+  AND (SELECT reset_clear IS NULL AND mode = 'nodes' FROM runtime_deployment)
+  AND NOT EXISTS (SELECT 1 FROM runtime_placements p WHERE p.environment_id = e.id AND p.released_at IS NULL)
+  AND NOT EXISTS (SELECT 1 FROM runtime_allocations a WHERE a.environment_id = e.id AND a.state <> 'released')
+  AND (
+    (e.initialization IN ('pending','complete') AND latest.id IS NULL)
+    OR (e.initialization = 'complete'
+      AND EXISTS (SELECT 1 FROM environment_workspaces w WHERE w.environment_id = e.id AND w.state = 'ready')
+      AND EXISTS (SELECT 1 FROM runtime_allocations a WHERE a.environment_id = e.id AND a.state = 'released')
+      AND (latest.compute_wake_requested OR EXISTS (SELECT 1 FROM environment_input_reservations r WHERE r.session_id = s.id AND r.state = 'pending' AND r.deadline > clock_timestamp())))
+  )
+)
+SELECT id, tenant_id, engine, retained, demanded_at, COALESCE($1::timestamptz, statement_timestamp())::timestamptz AS scan_until FROM demand
+WHERE (demanded_at, id) > ($2::timestamptz, $3::uuid)
+AND demanded_at <= COALESCE($1::timestamptz, statement_timestamp())
+ORDER BY demanded_at, id LIMIT 32
+`
+
+type ListPlacementDemandParams struct {
+	UntilTime pgtype.Timestamptz `json:"until_time"`
+	AfterTime pgtype.Timestamptz `json:"after_time"`
+	AfterID   pgtype.UUID        `json:"after_id"`
+}
+
+type ListPlacementDemandRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Engine     string             `json:"engine"`
+	Retained   bool               `json:"retained"`
+	DemandedAt pgtype.Timestamptz `json:"demanded_at"`
+	ScanUntil  pgtype.Timestamptz `json:"scan_until"`
+}
+
+func (q *Queries) ListPlacementDemand(ctx context.Context, arg ListPlacementDemandParams) ([]ListPlacementDemandRow, error) {
+	rows, err := q.db.Query(ctx, listPlacementDemand, arg.UntilTime, arg.AfterTime, arg.AfterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPlacementDemandRow{}
+	for rows.Next() {
+		var i ListPlacementDemandRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Engine,
+			&i.Retained,
+			&i.DemandedAt,
+			&i.ScanUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRuntimeAllocationsForNode = `-- name: ListRuntimeAllocationsForNode :many
@@ -148,11 +221,12 @@ SELECT e.id, s.tenant_id
 FROM environments e JOIN sessions s ON s.id=e.session_id
 LEFT JOIN runtime_placements p ON p.environment_id=e.id
 WHERE p.node_id IS NOT DISTINCT FROM $1::uuid
+  AND (p.environment_id IS NOT NULL OR (SELECT mode = 'direct' FROM runtime_deployment))
   AND p.released_at IS NULL
   AND (SELECT reset_clear IS NULL FROM runtime_deployment)
-  AND e.id > $2::uuid AND s.deleted_at IS NULL AND e.status='pending'
+  AND e.id > $2::uuid AND s.deleted_at IS NULL AND e.status NOT IN ('failed','expired')
   AND s.configuration->'environment'->>'type'='openai_hosted'
-  AND NOT EXISTS (SELECT 1 FROM runtime_allocations a WHERE a.environment_id=e.id)
+  AND NOT EXISTS (SELECT 1 FROM runtime_allocations a WHERE a.environment_id=e.id AND a.state<>'released')
 ORDER BY e.id LIMIT 32
 `
 

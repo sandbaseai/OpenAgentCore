@@ -53,7 +53,7 @@ func (q *Queries) CountRuntimeRetainedAllocations(ctx context.Context, providerK
 
 const getRuntimeActivity = `-- name: GetRuntimeActivity :one
 SELECT clock_timestamp()::timestamptz AS observed_at,
-    GREATEST(a.compute_activity_at,
+    GREATEST(a.compute_activity_at, a.compute_phase_changed_at,
     (SELECT max(f.settled_at) FROM environment_file_writes f WHERE f.environment_id = e.id))::timestamptz AS last_activity,
     (EXISTS (SELECT 1 FROM turns t WHERE t.session_id = e.session_id AND t.status IN ('queued','in_progress','waiting'))
      OR EXISTS (SELECT 1 FROM subagent_turns t WHERE t.session_id = e.session_id AND t.status IN ('queued','in_progress','waiting'))
@@ -87,7 +87,10 @@ const hasIncompatibleRuntimeComputeState = `-- name: HasIncompatibleRuntimeCompu
 SELECT EXISTS (
  SELECT 1 FROM runtime_allocations
  WHERE state <> 'released'
- AND (compute_state->>'protocol_version') IS DISTINCT FROM $1::text
+ AND ((compute_state->>'protocol_version') IS DISTINCT FROM $1::text
+  OR compute_state ? 'snapshot'
+  OR (compute_state #> '{current,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot']
+  OR (compute_state #> '{target,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot'])
 )::boolean
 `
 
@@ -96,6 +99,70 @@ func (q *Queries) HasIncompatibleRuntimeComputeState(ctx context.Context, protoc
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const moveSuspendedRuntimeCompute = `-- name: MoveSuspendedRuntimeCompute :one
+WITH moved AS (
+    UPDATE runtime_placements p SET node_id=$1::uuid
+    FROM runtime_allocations a
+    WHERE a.id=$4 AND a.environment_id=p.environment_id
+      AND p.node_id=$5::uuid AND p.released_at IS NULL
+      AND p.deployment_generation=a.deployment_generation
+      AND a.node_id=p.node_id AND a.compute_revision=$6
+      AND a.compute_phase='suspended'
+      AND ((a.state='running' AND $2::text='restoring'
+            AND a.compute_retained_until>clock_timestamp()
+            AND EXISTS(SELECT 1 FROM environments e WHERE e.id=a.environment_id AND e.initialization='complete'))
+           OR (a.state='cleanup_pending' AND $2::text='suspended'))
+    RETURNING a.id
+)
+UPDATE runtime_allocations a
+SET node_id=$1::uuid, compute_phase=$2,
+    compute_state=$3::jsonb, compute_revision=a.compute_revision+1,
+    compute_phase_changed_at=CASE WHEN a.compute_phase=$2::text THEN a.compute_phase_changed_at ELSE clock_timestamp() END
+FROM moved WHERE a.id=moved.id RETURNING a.id, a.environment_id, a.device_id, a.provider_key, a.state, a.create_settled, a.created_at, a.released_at, a.compute_phase, a.compute_revision, a.compute_state, a.compute_activity_at, a.compute_wake_requested, a.compute_retained_until, a.node_id, a.observation_error, a.compute_phase_changed_at, a.deployment_generation
+`
+
+type MoveSuspendedRuntimeComputeParams struct {
+	Destination pgtype.UUID `json:"destination"`
+	Phase       string      `json:"phase"`
+	State       []byte      `json:"state"`
+	ID          pgtype.UUID `json:"id"`
+	Source      pgtype.UUID `json:"source"`
+	Revision    int64       `json:"revision"`
+}
+
+func (q *Queries) MoveSuspendedRuntimeCompute(ctx context.Context, arg MoveSuspendedRuntimeComputeParams) (RuntimeAllocation, error) {
+	row := q.db.QueryRow(ctx, moveSuspendedRuntimeCompute,
+		arg.Destination,
+		arg.Phase,
+		arg.State,
+		arg.ID,
+		arg.Source,
+		arg.Revision,
+	)
+	var i RuntimeAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.DeviceID,
+		&i.ProviderKey,
+		&i.State,
+		&i.CreateSettled,
+		&i.CreatedAt,
+		&i.ReleasedAt,
+		&i.ComputePhase,
+		&i.ComputeRevision,
+		&i.ComputeState,
+		&i.ComputeActivityAt,
+		&i.ComputeWakeRequested,
+		&i.ComputeRetainedUntil,
+		&i.NodeID,
+		&i.ObservationError,
+		&i.ComputePhaseChangedAt,
+		&i.DeploymentGeneration,
+	)
+	return i, err
 }
 
 const recordRuntimeTerminalActivity = `-- name: RecordRuntimeTerminalActivity :exec
@@ -113,7 +180,7 @@ func (q *Queries) RecordRuntimeTerminalActivity(ctx context.Context, sessionID p
 const runtimeComputeBlocksAdmission = `-- name: RuntimeComputeBlocksAdmission :one
 SELECT EXISTS (
     SELECT 1 FROM runtime_allocations a JOIN environments e ON e.id = a.environment_id
-    WHERE e.session_id = $1 AND a.compute_phase NOT IN ('disabled', 'running')
+    WHERE e.session_id = $1 AND a.state <> 'released' AND a.compute_phase NOT IN ('disabled', 'running')
 )::boolean
 `
 
@@ -127,7 +194,7 @@ func (q *Queries) RuntimeComputeBlocksAdmission(ctx context.Context, sessionID p
 const sessionHasRuntimeNode = `-- name: SessionHasRuntimeNode :one
 SELECT EXISTS (
     SELECT 1 FROM runtime_allocations a JOIN environments e ON e.id = a.environment_id
-    WHERE e.session_id = $1 AND a.node_id IS NOT NULL
+    WHERE e.session_id = $1 AND a.state <> 'released' AND a.node_id IS NOT NULL
 )::boolean
 `
 
@@ -192,19 +259,20 @@ func (q *Queries) SetRuntimeCompute(ctx context.Context, arg SetRuntimeComputePa
 
 const touchRuntimeActivity = `-- name: TouchRuntimeActivity :exec
 UPDATE runtime_allocations a
-SET compute_activity_at = clock_timestamp(), compute_wake_requested = true
+SET compute_activity_at = CASE WHEN a.state = 'released' AND a.compute_wake_requested THEN a.compute_activity_at ELSE clock_timestamp() END, compute_wake_requested = true
 FROM environments e JOIN sessions s ON s.id = e.session_id
 WHERE a.environment_id = e.id AND s.tenant_id = $1
     AND e.id = $2 AND s.deleted_at IS NULL
-    AND a.state = 'running' AND a.compute_phase <> 'disabled'
+    AND ((a.state = 'running' AND a.compute_phase <> 'disabled') OR a.id = $3::uuid)
 `
 
 type TouchRuntimeActivityParams struct {
 	TenantID      pgtype.UUID `json:"tenant_id"`
 	EnvironmentID pgtype.UUID `json:"environment_id"`
+	RetainedID    pgtype.UUID `json:"retained_id"`
 }
 
 func (q *Queries) TouchRuntimeActivity(ctx context.Context, arg TouchRuntimeActivityParams) error {
-	_, err := q.db.Exec(ctx, touchRuntimeActivity, arg.TenantID, arg.EnvironmentID)
+	_, err := q.db.Exec(ctx, touchRuntimeActivity, arg.TenantID, arg.EnvironmentID, arg.RetainedID)
 	return err
 }

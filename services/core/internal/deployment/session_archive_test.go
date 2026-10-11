@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"slices"
 	"strings"
 	"testing"
@@ -216,7 +217,7 @@ func archiveOperations(t *testing.T, tx *fakeArchiveTx, locked sessions.LockedSe
 		}
 		return apply(ctx, locked, tx)
 	}}
-	operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage)
+	operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +251,7 @@ func TestArchiveSession(t *testing.T) {
 			join(head, expire, []string{"RequestArchiveCleanup device allocation", "RecordArchiveAudit", "LoadArchive"})},
 		{"no allocation", sessions.LockedSession{}, hosted, nil, nil, join(head, expire, []string{"ReleasePlacement", "RecordArchiveAudit", "LoadArchive"})},
 		{"released allocation", sessions.LockedSession{}, hosted, &Allocation{ID: "allocation", ProviderKey: "previous", State: "released"}, nil,
-			join(head, expire, []string{"RecordArchiveAudit", "LoadArchive"})},
+			join(head, expire, []string{"ReleasePlacement", "RecordArchiveAudit", "LoadArchive"})},
 		{"ended Environment", sessions.LockedSession{}, expired, live, nil,
 			join(head, settle, []string{"RequestArchiveCleanup device allocation", "RecordArchiveAudit", "LoadArchive"})},
 		{"allocation of another installation", sessions.LockedSession{}, hosted, &Allocation{ID: "allocation", ProviderKey: "previous", State: "running"}, ErrConflict, head},

@@ -102,14 +102,6 @@ func (t *creationTx) LockDeployment(ctx context.Context) (placement.Deployment, 
 	return placementpg.LockDeployment(ctx, t.q)
 }
 
-func (t *creationTx) LoadNodes(ctx context.Context) ([]placement.Node, error) {
-	return placementpg.LoadNodes(ctx, t.q)
-}
-
-func (t *creationTx) ReservePlacement(ctx context.Context, chosen placement.Placement) error {
-	return placementpg.ReservePlacement(ctx, t.q, t.session, chosen)
-}
-
 func (t *creationTx) LockSkills(ctx context.Context, ids []string) (map[string]skills.Skill, error) {
 	locked, err := skillpg.LockSkills(ctx, t.q, t.tenant, ids)
 	return locked, skillError(err)

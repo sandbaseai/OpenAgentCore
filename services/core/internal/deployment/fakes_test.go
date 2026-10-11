@@ -662,3 +662,10 @@ func (f *fakeReader) CountRetainedAllocations(ctx context.Context, installationI
 	}
 	return f.countRetainedAllocations(ctx, installationID)
 }
+
+func (f *fakeReader) PlacementDemand(context.Context, PlacementDemandCursor) ([]PlacementDemand, PlacementDemandCursor, error) {
+	panic("unexpected PlacementDemand")
+}
+func (f *fakeReader) RetainedNativeHistory(context.Context, AllocationKey) (bool, error) {
+	panic("unexpected RetainedNativeHistory")
+}
