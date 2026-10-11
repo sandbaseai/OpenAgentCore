@@ -73,15 +73,34 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 			abort(peer, runID)
 		}
 	}()
+	var doneReceived time.Time
 	journal := &journal{ctx: ctx, writer: d.sessionExecution, tenant: tenantID, session: sessionID, turn: runID, next: 1,
 		observeSubagents: request.ObserveSubagentIdentities}
 	defer func() {
 		finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := journal.drain(upstream, &result); err != nil {
+		cleanupStarted := time.Now()
+		drainErr := journal.drain(upstream, &result)
+		observeExecutionStage(ctx, "delivery_final_drain", cleanupStarted, drainErr, "session_id", sessionID, "turn_id", runID)
+		if drainErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
 		}
-		if err := journal.flush(finishCtx); err != nil {
+		flushStarted := time.Now()
+		pendingCount := len(journal.batch)
+		flushErr := journal.flush(finishCtx)
+		confirmation := "unconfirmed"
+		if flushErr == nil {
+			confirmation = "confirmed"
+			if pendingCount == 0 {
+				confirmation = "no_pending"
+			}
+		}
+		var doneToCleanup any
+		if !doneReceived.IsZero() {
+			doneToCleanup = float64(cleanupStarted.Sub(doneReceived).Microseconds()) / 1000
+		}
+		observeExecutionStage(ctx, "delivery_final_flush", flushStarted, flushErr, "session_id", sessionID, "turn_id", runID, "pending_count", pendingCount, "confirmation", confirmation, "done_to_cleanup_ms", doneToCleanup)
+		if flushErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
 		}
 		if subscription.Err() != nil {
@@ -199,6 +218,10 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				return
 			}
 			nativeObserved = true
+			if env.Type == proto.TypeDone && doneReceived.IsZero() {
+				doneReceived = time.Now()
+				obslog.Ctx(ctx).Info("executor done received", "session_id", sessionID, "turn_id", runID)
+			}
 			if !firstTextObserved && hasText(env) {
 				firstTextObserved = true
 				recordFirstText(ctx, sessionID, runID, inputStarted)

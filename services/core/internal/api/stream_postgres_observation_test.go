@@ -70,7 +70,7 @@ func TestStreamTextRealPostgresTwoTurnsSameConnection(t *testing.T) {
 		readAt := time.Now()
 		matched := false
 		for _, change := range changes {
-			event, err := streamResponse(sessions.Session{ID: session}, change, "")
+			event, err := streamResponse(sessions.Session{ID: session, Configuration: json.RawMessage(`{"agent":{"id":"agent_fixture","model":"fixture","tools":[]},"environment":{"type":"none"}}`)}, change, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,9 +92,39 @@ func TestStreamTextRealPostgresTwoTurnsSameConnection(t *testing.T) {
 		if !matched {
 			t.Fatal("collector ID not returned by SSE reader")
 		}
-		// Finish the fixture Turn before admitting the next root Turn.
-		if _, err := pool.Exec(t.Context(), `UPDATE turns SET status='completed',completed_at=clock_timestamp() WHERE id=$1`, turn); err != nil {
+		// Complete through the real settlement transaction; its terminal event
+		// must match the collector and traverse this same live connection.
+		terminalCtx, terminal := textobs.BeginTerminal(t.Context(), session, turn, sessions.TurnCompleted)
+		if _, err := operations.CompleteExecution(terminalCtx, tenant, session, turn, sessions.TurnCompleted, nil, "", 0); err != nil {
 			t.Fatal(err)
+		}
+		terminalChanges, err := reader.ListSessionEvents(t.Context(), tenant, session, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched = false
+		for _, change := range terminalChanges {
+			event, err := streamResponse(sessions.Session{ID: session, Configuration: json.RawMessage(`{"agent":{"id":"agent_fixture","model":"fixture","tools":[]},"environment":{"type":"none"}}`)}, change, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.begin(event, change.Sequence, time.Now())
+			if event.EventID == terminal.EventID() {
+				if !o.active || !o.terminal || event.Type != "agent.session.turn.completed" {
+					t.Fatal("terminal identity not selected")
+				}
+				observed[event.EventID] = change.Sequence
+				matched = true
+			}
+			err = emitSessionEvent(write, session, event)
+			o.end(err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor = change.Sequence
+		}
+		if !matched {
+			t.Fatal("real terminal missing from SSE")
 		}
 	}
 	reads, outputs := 0, 0
@@ -104,9 +134,9 @@ func TestStreamTextRealPostgresTwoTurnsSameConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch row["msg"] {
-		case "session stream first text read":
+		case "session stream first text read", "session stream terminal read":
 			reads++
-		case "session stream first text output":
+		case "session stream first text output", "session stream terminal output":
 			outputs++
 		default:
 			continue
@@ -115,14 +145,14 @@ func TestStreamTextRealPostgresTwoTurnsSameConnection(t *testing.T) {
 		if observed[id] == 0 || row["session_event_sequence"] != float64(observed[id]) || row["connection_id"] != o.connection {
 			t.Fatal("log lost authoritative identity", row)
 		}
-		if row["msg"] == "session stream first text output" && (row["write_status"] != "success" || row["flush_status"] != "success") {
+		if (row["msg"] == "session stream first text output" || row["msg"] == "session stream terminal output") && (row["write_status"] != "success" || row["flush_status"] != "success") {
 			t.Fatal(row)
 		}
 		if !bytes.Contains(w.body.Bytes(), []byte(`"event_id":"`+id+`"`)) {
 			t.Fatal("logged ID not on actual SSE wire")
 		}
 	}
-	if reads != 2 || outputs != 2 {
+	if reads != 4 || outputs != 4 {
 		t.Fatalf("cold/warm read=%d output=%d", reads, outputs)
 	}
 	if bytes.Contains(logs.Bytes(), []byte("private-answer")) {

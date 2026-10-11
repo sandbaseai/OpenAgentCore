@@ -14,6 +14,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/modelconfiguration"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/vaults"
 )
 
@@ -140,11 +141,24 @@ func (d *Dispatcher) finishRun(tenantID, sessionID, turnID, model string, result
 		encoded, _ = json.Marshal(result)
 		status, nativeID = sessions.TurnFailed, ""
 	}
-	turn, err := d.sessionExecution.CompleteExecution(finishCtx, tenantID, sessionID, turnID, status, encoded, nativeID, result.AppliedThrough)
+	attempt := 0
+	complete := func(status string) (sessions.Turn, error) {
+		attempt++
+		observed, mapping := textobs.BeginTerminal(finishCtx, sessionID, turnID, status)
+		started := time.Now()
+		turn, err := d.sessionExecution.CompleteExecution(observed, tenantID, sessionID, turnID, status, encoded, nativeID, result.AppliedThrough)
+		returnedStatus := ""
+		if err == nil {
+			returnedStatus = turn.Status
+		}
+		observeTerminalCommit(finishCtx, sessionID, turnID, status, returnedStatus, attempt, started, mapping.EventID(), err)
+		return turn, err
+	}
+	turn, err := complete(status)
 	if errors.Is(err, sessions.ErrUnappliedInputs) {
 		result.ErrorCode = "input_not_applied"
 		encoded, _ = json.Marshal(result)
-		turn, err = d.sessionExecution.CompleteExecution(finishCtx, tenantID, sessionID, turnID, sessions.TurnFailed, encoded, nativeID, result.AppliedThrough)
+		turn, err = complete(sessions.TurnFailed)
 	}
 	if err == nil {
 		d.observeDeploymentProvider(tenantID, sessionID, turn)

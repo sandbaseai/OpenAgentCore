@@ -25,3 +25,28 @@ func TestAttemptLimitsExactSourceAndNeverCarriesReplayCandidate(t *testing.T) {
 		t.Fatal("retry changed previous identity")
 	}
 }
+
+func TestTerminalAttemptMatchesExactIdentityAndCannotCaptureText(t *testing.T) {
+	ctx, a := BeginTerminal(t.Context(), "session", "turn", "completed")
+	Capture(Source(ctx, "turn", 0), "text")
+	for _, wrong := range [][3]string{{"other", "turn", "agent.session.turn.completed"}, {"session", "other", "agent.session.turn.completed"}, {"session", "turn", "agent.session.turn.failed"}, {"session", "turn", "agent.session.turn.output_text.done"}} {
+		CaptureTerminal(ctx, wrong[0], wrong[1], wrong[2], "wrong")
+	}
+	if a.EventID() != "" {
+		t.Fatal("unrelated event captured")
+	}
+	CaptureTerminal(ctx, "session", "turn", "agent.session.turn.completed", "actual")
+	CaptureTerminal(ctx, "session", "turn", "agent.session.turn.completed", "later")
+	if a.EventID() != "actual" {
+		t.Fatal("terminal identity lost")
+	}
+	textCtx, text := Begin(t.Context(), "turn", 0)
+	CaptureTerminal(textCtx, "session", "turn", "agent.session.turn.completed", "terminal")
+	if text.EventID() != "" {
+		t.Fatal("terminal contaminated first text")
+	}
+	_, retry := BeginTerminal(t.Context(), "session", "turn", "completed")
+	if retry.EventID() != "" {
+		t.Fatal("candidate copied to retry")
+	}
+}

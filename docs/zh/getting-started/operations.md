@@ -1,7 +1,7 @@
 ---
 title: "运维"
 source: docs/getting-started/operations.md
-source_hash: 5f542b305609a54ac71cc807ddcf8ae425279242595a773cf8bf1ac0d54c593b
+source_hash: 69f2d03a44ad7112d5a31ee87e32185dacbf4e82d0565f6d5a3edf510fad6d80
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -255,7 +255,13 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 
 `journal first text received` 记录 delivery journal 接纳的第一条非空 delta 或原生 output-message 文本，包含结束时 drain。`journal_sequence` 是执行日志序号，不是公开 Session 事件序号。`journal first text persistence` 将首次失败记录为 `unconfirmed`，最终成功返回记录为 `confirmed`，包含尝试次数、append 耗时、接纳到确认耗时（失败为 null）。这是调用方确认时间，不是数据库内部精确 commit 时刻。每次 attempt 的私有 collector 只捕获该准确 source 实际生成的首个公开文本 `event_id`；只有 append 成功返回后才记录 `mapping_status=confirmed`，插入成功但提交未确认仍为候选。未知提交后的幂等 replay 可以确认 journal，但没有新公开映射时明确记录 `mapping_status=unobserved` 与空 event ID，不能因 replay 成功就升级旧候选。后续 SSE 读到同一个 ID 只能证明事件存在，不能补造原 commit 时间。不变的原生消息投影可能不产生公开文本事件。每 Turn 最多一条接纳、一条失败和一条确认，不输出正文或原始错误。
 
-`session stream first text read` 与 `session stream first text output` 观测同一连接内每个 Turn 的首条非空公开文本 delta/done，包含该连接后续的 Turn。每连接最多保留 64 个不同 Turn ID、不淘汰，缺 ID 共用一个独立槽；重复事件、旧 Turn 迟到文本、重复生命周期事件均不重置已选身份。超过上限时仅记录一次 `session stream text observation limit`，明确 `status=unobserved`、`reason=turn_limit`，公开转发照常；因此每连接最多 130 条首文本日志加 1 条超限日志。字段包含真实 `event_id`、`session_event_sequence`、Turn/Session、每次连接新建的 `connection_id`、`start_cursor`、`turn_identity_observed` 及 `scope=first_text_per_turn_connection`；重连不冒充 Turn 全局首文本。`read_at` 是该批数据库读返回时刻，早于批内前序事件写出。输出记录分开列 Write 与 Flush 耗时和状态，未到达的边界为 `unobserved` 与 null。Flush 成功仅表示 `ResponseController.Flush` 返回 nil，不表示下游已收到。短写单独记录，不改变现有行为。`read_to_emit_return_ms` 包含批内前序输出、投影、授权、序列化、Write 和 Flush，不能与子阶段相加。按真实 event ID 关联，不按相邻时间或不同领域的序号配对。GET 仍为 live-only，漏掉的事件不能伪造重放观测。批量阈值、轮询、wire、事务和鉴权行为不变。
+`session stream first text read` 与 `session stream first text output` 观测同一连接内每个 Turn 的首条非空公开文本 delta/done，包含该连接后续的 Turn。每连接最多保留 64 个不同 Turn ID、不淘汰，缺 ID 共用一个独立槽；重复事件、旧 Turn 迟到文本、重复生命周期事件均不重置已选身份。超过上限时仅记录一次 `session stream text observation limit`，明确 `status=unobserved`、`reason=turn_limit`，公开转发照常；首文本与终态对每个身份使用独立 bit；终态不依赖文本，满 64 个 Turn 后已保留 Turn 仍可选择另一类别。`session stream terminal read` 和 `session stream terminal output` 用 `scope=terminal_per_turn_connection` 观测 completed、failed、cancelled，使用相同的真实事件 ID、Write/Flush 边界和 `event_type` 字段；合计最多 260 条边界日志加 1 条超限日志。字段包含真实 `event_id`、`session_event_sequence`、Turn/Session、每次连接新建的 `connection_id`、`start_cursor`、`turn_identity_observed` 及 `scope=first_text_per_turn_connection`；重连不冒充 Turn 全局首文本。`read_at` 是该批数据库读返回时刻，早于批内前序事件写出。输出记录分开列 Write 与 Flush 耗时和状态，未到达的边界为 `unobserved` 与 null。Flush 成功仅表示 `ResponseController.Flush` 返回 nil，不表示下游已收到。短写单独记录，不改变现有行为。`read_to_emit_return_ms` 包含批内前序输出、投影、授权、序列化、Write 和 Flush，不能与子阶段相加。按真实 event ID 关联，不按相邻时间或不同领域的序号配对。GET 仍为 live-only，漏掉的事件不能伪造重放观测。批量阈值、轮询、wire、事务和鉴权行为不变。
+
+`executor done received` 是主循环首次接收 done、进入 journal 之前的边界，不是模型完成时刻。`delivery_final_drain` 和 `delivery_final_flush` 分别记录最终 drain 和 flush；flush 包含 `pending_count`、`confirmation` 和 `done_to_cleanup_ms`（收到 done 到清理开始，未观测为 null）。成功空 flush 是 `no_pending`，不是新增提交。仅在 final drain 遇到 done 不补造接收边界；done 后仍可能等待 preparation/function 回执。
+
+已完成且具有本地 workspace 配置（`openai_hosted` 或 `self_hosted`）的 Turn 记录 `artifact_capture_begin`、`artifact_workspace_prepare`、`artifact_export_total`、`artifact_export_staging`、`artifact_workspace_release`、`artifact_capture_total`。Prepare 包含配置/订阅/发送/ready 等待，release 包含发送/ACK。Staging 包含远端 archive 读取、PostgreSQL 大对象写入和 staging 事务，不能当作纯 DB 时间。Capture total 包含失败时 `artifact_failure_cancel_check`。前置失败可记录 `artifact_workspace_cleanup`，`confirmation=unobserved`；其 `status=ok` 仅指清理调用返回，不确认远端 release ACK。`artifact capture skipped` 使用 `turn_not_completed` 或 `workspace_not_local`。environment-none dispatcher 本来不调用 capture，无日志不代表实测零耗时；普通目录浏览不激活此 scope。父子阶段重叠，不能相加。
+
+`turn_completion` 测量每次原有 `CompleteExecution` 调用及事务返回，记录 `requested_turn_status`、`returned_turn_status`、`attempt`、`confirmation`、`mapping_status` 和真实候选 `event_id`。仅成功时填 returned status，请求状态不证明结果。每 attempt 新建私有 collector，在 `AppendChanges` 按精确 Session、Turn、预期终态类型捕获，独立于首文本 source 投影。候选插入后调用失败仍为 `unconfirmed`，成功只确认该 attempt；即使调用成功，`mapping_status=unobserved` 和空 ID 也不证明公开终态事件存在。`CompleteExecution` 不同于 journal append，不支持幂等 replay：未知提交后重试可能返回 Turn conflict，不能追认旧候选。原 unapplied-input fallback 仍为独立第二次 attempt。Deployment-provider 观测在 completion 返回后，不直接阻塞已提交终态可用性。用真实终态 event ID 关联 commit 和 SSE，不用 journal ordinal 或相邻时间配对。事务、wire、重试和 Runtime 模板要求不变。
 
 Daemon 启动日志记录 `runtime process starting` 和构建版本，`runtime startup stage` 记录各 Harness 探测、bootstrap 和每次连接尝试的本地单调时钟耗时，不输出凭据或原始错误。探测发生在连接注册之前。结合这些边界与已观察到的持久化连接时间，区分启动、周期观察和调度等待。Daemon 观测要求 Runtime 使用带有这些埋点的构建；仅升级 Core 不会升级现有 Runtime 模板。托管启动回执只确认进程已启动，不确认连接或能力就绪。
 
