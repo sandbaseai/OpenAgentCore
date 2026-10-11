@@ -96,12 +96,24 @@ type ReservationTx interface {
 	LoadReserved() (placement.Reserved, error)
 	// InsertAllocation stores the allocation of the Session's Environment.
 	InsertAllocation(allocation NewAllocation) (Allocation, error)
+	// CanReplaceAllocation verifies retained storage and settled, revoked prior ownership.
+	CanReplaceAllocation() (bool, error)
+	// LoadGenerationSpecification reads immutable storage requirements for placement.
+	LoadGenerationSpecification(generation uint64) (GenerationSpecification, error)
+	// LoadNodes reads eligible placement facts under the deployment lock.
+	LoadNodes() ([]placement.Node, error)
+	// ReservePlacement inserts a first reservation or replaces a released reservation without changing historical receipts.
+	ReservePlacement(placement.Placement) error
 }
 
 // AllocationTx is one Session-locked allocation change. Each write applies to
 // current, the allocation LoadAllocation returned, and returns it changed. A
 // write whose stored guard no longer holds is ErrAllocationConflict.
 type AllocationTx interface {
+	// CanRetainEnvironment checks the ready retained filesystem, completed
+	// initialization and selected Harness's qualified history under the Session lock.
+	CanRetainEnvironment(current Allocation) (bool, error)
+
 	// LoadAllocation returns the Environment's allocation.
 	LoadAllocation() (Allocation, error)
 	// LoadSessionDevice returns the device the Session is bound to and
@@ -109,13 +121,21 @@ type AllocationTx interface {
 	LoadSessionDevice() (SessionDevice, bool, error)
 	// LoadActivity returns the allocation's activity.
 	LoadActivity(current Allocation) (Activity, error)
-	// LoadRestore locks the deployment and returns what restoring the
-	// allocation's suspended compute on its node reads.
-	LoadRestore(current Allocation) (placement.Restore, error)
+	// LoadSuspensionDemand locks the deployment and reads demand and capacity.
+	LoadSuspensionDemand(current Allocation) (SuspensionDemand, error)
+	// PlacementDemand reads one qualified page; next advances past all inspected
+	// rows, including ineligible receipts. An empty next.EnvironmentID ends the scan.
+	PlacementDemand(after PlacementDemandCursor) ([]PlacementDemand, PlacementDemandCursor, error)
+	// LoadGenerationSpecification reads immutable generation requirements.
+	LoadGenerationSpecification(generation uint64) (GenerationSpecification, error)
+	// LoadCheckpointPlacement locks the deployment and loads fresh readiness
+	// for the allocation's exact immutable generation, including capacity.
+	LoadCheckpointPlacement(current Allocation) (placement.Deployment, []placement.CheckpointNode, error)
+	// MoveSuspended changes node ownership, placement and compute intent in one
+	// transaction. Only a settled suspended allocation can change nodes.
+	MoveSuspended(current Allocation, nodeID string, change ComputeChange) (Allocation, error)
 	// ObserveRunning records the allocation running with its creation settled.
 	ObserveRunning(current Allocation) (Allocation, error)
-	// Keep renews the allocation's lease.
-	Keep(current Allocation) (Allocation, error)
 	// SettleCreation records that the original Create can no longer change
 	// resources.
 	SettleCreation(current Allocation) (Allocation, error)
@@ -212,7 +232,7 @@ type Reader interface {
 	// AddressBindings counts what is bound to an installation address, read
 	// in one snapshot. publicURL is the address nodes are compared against.
 	AddressBindings(ctx context.Context, publicURL string) (AddressBindings, error)
-	// EnvironmentAllocation returns the Environment's allocation, including
+	// EnvironmentAllocation returns the Environment's latest allocation receipt, including
 	// for a deleted Session. It returns ErrInvalidInput for a malformed
 	// identifier and ErrNotFound for a missing allocation.
 	EnvironmentAllocation(ctx context.Context, key AllocationKey) (Allocation, error)
@@ -242,6 +262,10 @@ type Reader interface {
 	// ID, in ID order. It reads the committed placement and never selects a
 	// replacement node.
 	UnallocatedEnvironments(ctx context.Context, nodeID, after string) ([]UnallocatedEnvironment, error)
+	// RetainedNativeHistory reports the latest owner's persisted retention eligibility.
+	RetainedNativeHistory(ctx context.Context, key AllocationKey) (bool, error)
+	// PlacementDemand lists up to 32 unreserved first or retained requests in demand-time and ID order.
+	PlacementDemand(ctx context.Context, after PlacementDemandCursor) ([]PlacementDemand, PlacementDemandCursor, error)
 	// LifecyclePlacement returns what routing the Environment to its
 	// lifecycle reads, including for a deleted Session. A missing Environment
 	// is sessions.ErrNotFound.
@@ -249,12 +273,6 @@ type Reader interface {
 	// Activity returns the allocation's activity; a missing allocation is
 	// ErrNotFound.
 	Activity(ctx context.Context, allocationID string) (Activity, error)
-	// CountComputeReservations counts the installation's allocations that
-	// reserve active compute.
-	CountComputeReservations(ctx context.Context, installationID string) (int64, error)
-	// CountRetainedAllocations counts the installation's allocations that
-	// retain resources.
-	CountRetainedAllocations(ctx context.Context, installationID string) (int64, error)
 }
 
 // NodeReads loads node authentication facts.
@@ -306,16 +324,8 @@ type DeploymentTx interface {
 	// ClaimInstallation reserves the installation for Web setup and fences the
 	// previous owner epoch's node presence.
 	ClaimInstallation(installationID string) error
-	SetProcessDeployment(installationID, backendFingerprint string, admissionPaused bool) error
-	// SetManagerDeployment records the node provider and the local node, which
-	// is empty when there is none.
-	SetManagerDeployment(provider, localNodeID string) error
-	LoadNode(id string) (StoredNode, error)
-	InsertNode(node NewNode) (StoredNode, error)
-	UpdateNode(id string, limits NodeLimits) error
 	// SaveSelection stores the next generation. It seals a secret bound to the
-	// installation and generation; without a key it returns
-	// credentialcrypto.ErrUnavailable.
+	// installation and generation.
 	SaveSelection(selection SelectionRecord) error
 	RecordConfigurationMetadata(metadata json.RawMessage) error
 	// RetainGeneration keeps the current generation for the allocations that
@@ -348,27 +358,21 @@ type DeploymentTx interface {
 
 // Record is the stored deployment.
 type Record struct {
-	// InstallationID is empty until an installation is claimed or configured.
+	// InstallationID is empty until Web setup claims an installation.
 	InstallationID     string
-	WebManaged         bool
 	Provider           string
 	BackendFingerprint string
 	Generation         uint64
 	OwnerEpoch         uint64
 	Mode               string
-	AdmissionPaused    bool
-	LocalNodeID        string
-	IdleSeconds        int64
-	RetentionSeconds   int64
 	// Specification is the stored specification document.
 	Specification json.RawMessage
 	// Configuration holds the public configuration and metadata and, when a
 	// credential is stored and could be opened, its secret.
 	Configuration    sandbox.ConfigurationRecord
 	CredentialStored bool
-	// CredentialError is why the stored credential could not be opened: no key
-	// (credentialcrypto.ErrUnavailable) or a ciphertext the key cannot open or
-	// authenticate (an internal error).
+	// CredentialError is why the stored credential could not be opened: a
+	// ciphertext the key cannot open or authenticate (an internal error).
 	CredentialError error
 	// Reset is nil unless a reset is in progress.
 	Reset *ResetState
@@ -394,7 +398,6 @@ type Snapshot struct {
 type SelectionRecord struct {
 	InstallationID, Provider, BackendFingerprint, Mode string
 	Generation                                         uint64
-	IdleSeconds, RetentionSeconds                      int64
 	Specification                                      json.RawMessage
 	// Configuration carries the secret in plaintext; the adapter seals it.
 	Configuration sandbox.ConfigurationRecord
@@ -506,4 +509,5 @@ type GenerationStatusRecord struct {
 	SpecificationDigest  string
 	OwnerEpoch           uint64
 	State, Diagnostic    string
+	Checkpoint           *sandbox.CheckpointCompatibility
 }

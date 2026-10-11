@@ -57,7 +57,7 @@ func (e *ExecutionOperations) archiveSession(ctx context.Context, tenantID, sess
 			if err := checkArchiveReset(d, *resetRequestedAt); err != nil {
 				return err
 			}
-			if d.Reset.Clear == ResetAuto {
+			if d.Reset.Clear == string(ResetAuto) {
 				busy, err := tx.LoadResetBusy()
 				if err != nil {
 					return err
@@ -101,7 +101,7 @@ func (e *ExecutionOperations) archiveSession(ctx context.Context, tenantID, sess
 			if err := tx.RequestArchiveCleanup(current); err != nil {
 				return err
 			}
-		} else if !allocated {
+		} else {
 			if err := tx.ReleasePlacement(); err != nil {
 				return err
 			}
@@ -119,13 +119,13 @@ func (e *ExecutionOperations) archiveSession(ctx context.Context, tenantID, sess
 }
 
 // checkArchiveDeployment rejects an archive against a deployment whose
-// generation is not the expected one, that Web does not manage or that has no
+// generation is not the expected one, that has no installation or that has no
 // provider.
 func checkArchiveDeployment(d Record, expectedGeneration uint64) error {
 	if d.Generation != expectedGeneration {
 		return &GenerationStaleError{CurrentGeneration: d.Generation}
 	}
-	if !d.WebManaged || d.InstallationID == "" {
+	if d.InstallationID == "" {
 		return ErrConflict
 	}
 	if d.Provider == "" {

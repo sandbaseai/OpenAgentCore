@@ -110,16 +110,12 @@ cp services/core/deploy/codex/seccomp.json "$bundle/runtime/"
 cp LICENSE "$bundle/"
 
 OAC_DEV_BUILD_REVISION="$revision" scripts/build-core-image-context.sh "$stage/core"
-(
-  cd services/core/tools/microsandbox-provider
-  GOWORK=off CGO_ENABLED=1 go build -mod=readonly -trimpath \
-    -o "$stage/core/bin/oac-microsandbox-provider" .
-)
-msb_archive="${CORE_DISTRIBUTION_MICROSANDBOX_ARCHIVE:-$runtime_root/cache/microsandbox-v0.7.2-linux-x86_64.tar.gz}"
+python3 scripts/build-microsandbox-provider.py build "$stage/core/bin/oac-microsandbox-provider"
+msb_archive="${CORE_DISTRIBUTION_MICROSANDBOX_ARCHIVE:-$runtime_root/cache/microsandbox-v0.7.8-linux-x86_64.tar.gz}"
 if [[ ! -f "$msb_archive" ]]; then
   mkdir -p "$(dirname "$msb_archive")"
   curl --fail --location --proto '=https' --tlsv1.2 \
-    https://github.com/superradcompany/microsandbox/releases/download/v0.7.2/microsandbox-linux-x86_64.tar.gz \
+    https://github.com/superradcompany/microsandbox/releases/download/v0.7.8/microsandbox-linux-x86_64.tar.gz \
     --output "$stage/microsandbox.download"
   python3 scripts/core-distribution-manifest.py extract-runtime "$stage/microsandbox.download" "$stage/core/microsandbox"
   mv "$stage/microsandbox.download" "$msb_archive"
@@ -144,7 +140,7 @@ docker run --rm --network none --entrypoint /bin/sh \
 
 OAC_DEV_WEB_BUILD_DIR="$stage/web" scripts/build-web.sh
 pnpm --filter @oac/web... install --frozen-lockfile
-OAC_WEB_OPENAI_HOSTED_SESSIONS=1 OAC_WEB_ENVIRONMENT_FILES=1 pnpm build:web
+pnpm build:web
 cp -R apps/web/dist "$stage/web/dist"
 cp services/web/Dockerfile "$stage/web/Dockerfile"
 build_image web "$stage/web"

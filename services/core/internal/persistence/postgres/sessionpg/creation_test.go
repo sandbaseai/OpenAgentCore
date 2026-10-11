@@ -4,8 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/credentialcrypto"
@@ -29,25 +24,30 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgtest"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgunit"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/skillpg"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/providers"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/skills"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/writeaudit"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var creator = identity.Subject{Kind: "service_account", ID: "test-runner"}
 
-var hostedConfiguration = json.RawMessage(`{"agent":{"model":"m"},"environment":{"type":"openai_hosted"}}`)
+// environmentConfiguration configures a self_hosted Environment Session,
+// which needs no sandbox deployment.
+var environmentConfiguration = json.RawMessage(`{"agent":{"model":"m"},"environment":{"type":"self_hosted","workspace_directory":"/workspace"}}`)
 
 // creationService returns the Session store and service over pool with the
 // built-in placement rules.
-func creationService(t *testing.T, pool *pgxpool.Pool, cipher *credentialcrypto.Cipher) (*Store, *sessions.Service) {
+func creationService(t *testing.T, pool *pgxpool.Pool) (*Store, *sessions.Service) {
 	t.Helper()
-	rules, err := placement.NewRules(providers.Builtin(), "")
+	rules, err := placement.NewRules(providers.Builtin(), "https://core.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := New(pgunit.NewPool(pool), cipher)
+	store := New(pgunit.NewPool(pool), pgtest.CredentialKey(t))
 	service, err := sessions.NewService(store, rules)
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +55,9 @@ func creationService(t *testing.T, pool *pgxpool.Pool, cipher *credentialcrypto.
 	return store, service
 }
 
-func skillService(t *testing.T, pool *pgxpool.Pool, cipher *credentialcrypto.Cipher) *skills.Service {
+func skillService(t *testing.T, pool *pgxpool.Pool) *skills.Service {
 	t.Helper()
-	store := skillpg.New(pgunit.NewPool(pool), cipher)
+	store := skillpg.New(pgunit.NewPool(pool), pgtest.CredentialKey(t))
 	service, err := skills.NewService(store, store)
 	if err != nil {
 		t.Fatal(err)
@@ -135,8 +135,8 @@ func awaitWaiters(t *testing.T, pool *pgxpool.Pool, holder int32, count int) {
 // submitting the input again.
 func TestCreationRetriesNeverReplayInitialInput(t *testing.T) {
 	pool := pgtest.Open(t)
-	store, service := creationService(t, pool, nil)
-	_, other := creationService(t, pgtest.Open(t), nil)
+	store, service := creationService(t, pool)
+	_, other := creationService(t, pgtest.Open(t))
 	ctx := t.Context()
 	tenant := uuid.NewString()
 	input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "initial", CreationRequest: json.RawMessage(`{"agent_id":"source"}`), InitialInputs: []sessions.Input{messageInput("first"), messageInput("second")}}
@@ -234,7 +234,7 @@ func TestCreationRetriesNeverReplayInitialInput(t *testing.T) {
 // one creates.
 func TestCreationIdentity(t *testing.T) {
 	pool := pgtest.Open(t)
-	_, service := creationService(t, pool, nil)
+	_, service := creationService(t, pool)
 	ctx := t.Context()
 	tenant := uuid.NewString()
 	request := json.RawMessage(`{"agent_id":"source","agent":{"tools":[{"parameters":{"const":9007199254740993}}]}}`)
@@ -328,7 +328,7 @@ func TestCreationIdentity(t *testing.T) {
 }
 
 // The provider-key fingerprint in retry identities depends on the credential
-// key and needs one.
+// key.
 func TestProviderKeyFingerprintIsKeyed(t *testing.T) {
 	fingerprint := func(seed byte) string {
 		cipher, err := credentialcrypto.New(bytes.Repeat([]byte{seed}, 32))
@@ -344,9 +344,6 @@ func TestProviderKeyFingerprintIsKeyed(t *testing.T) {
 	if fingerprint(71) == fingerprint(72) {
 		t.Fatal("fingerprint ignores the credential key")
 	}
-	if _, err := New(nil, nil).FingerprintProviderKey("provider-key"); !errors.Is(err, credentialcrypto.ErrUnavailable) {
-		t.Fatal(err)
-	}
 }
 
 // A new Session freezes its provider, Skills and initial files sealed under
@@ -354,9 +351,8 @@ func TestProviderKeyFingerprintIsKeyed(t *testing.T) {
 // bytes conflict, and a foreign source is missing.
 func TestCreationFreezesResourcesOnce(t *testing.T) {
 	pool := pgtest.Open(t)
-	cipher := frozenCipher(t)
-	store, service := creationService(t, pool, cipher)
-	skillsService := skillService(t, pool, cipher)
+	store, service := creationService(t, pool)
+	skillsService := skillService(t, pool)
 	filesService, err := files.NewService(filepg.New(pgunit.NewPool(pool)))
 	if err != nil {
 		t.Fatal(err)
@@ -383,9 +379,9 @@ func TestCreationFreezesResourcesOnce(t *testing.T) {
 	reference := environmentconfig.Skill{Metadata: environmentconfig.SkillMetadata{Type: "skill_reference", SkillID: skill.ID, Version: "latest"}}
 	fileID := environmentconfig.InitialFile{Type: "file_id", Path: "/workspace/b", FileID: source.ID}
 	input := sessions.CreateSession{
-		Creator: creator, Engine: "codex", IdempotencyKey: "frozen", Configuration: hostedConfiguration,
+		Creator: creator, Engine: "codex", IdempotencyKey: "frozen", Configuration: environmentConfiguration,
 		ModelProvider:       &v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://example.com/v1", APIKey: canary},
-		ModelProviderSource: v1.ModelProviderSourceSession,
+		ModelProviderSource: v1.ExecutionSourceSession,
 		Initialization:      environmentconfig.Setup{Skills: []environmentconfig.Skill{inline, reference}},
 		InitialFiles:        []environmentconfig.InitialFile{{Type: "inline", Path: "/workspace/a", Data: []byte(canary)}, fileID},
 	}
@@ -421,8 +417,8 @@ func TestCreationFreezesResourcesOnce(t *testing.T) {
 	}
 	assertFrozen()
 	for _, reference := range []sessions.CreateSession{
-		{Creator: creator, Engine: "codex", IdempotencyKey: "foreign-skill", Configuration: hostedConfiguration, Initialization: environmentconfig.Setup{Skills: []environmentconfig.Skill{reference}}},
-		{Creator: creator, Engine: "codex", IdempotencyKey: "foreign-file", Configuration: hostedConfiguration, InitialFiles: []environmentconfig.InitialFile{fileID}},
+		{Creator: creator, Engine: "codex", IdempotencyKey: "foreign-skill", Configuration: environmentConfiguration, Initialization: environmentconfig.Setup{Skills: []environmentconfig.Skill{reference}}},
+		{Creator: creator, Engine: "codex", IdempotencyKey: "foreign-file", Configuration: environmentConfiguration, InitialFiles: []environmentconfig.InitialFile{fileID}},
 	} {
 		if _, err := service.CreateSession(ctx, foreign, reference); !errors.Is(err, sessions.ErrNotFound) {
 			t.Fatal(reference.IdempotencyKey, err)
@@ -446,21 +442,13 @@ func TestCreationFreezesResourcesOnce(t *testing.T) {
 	if _, err := service.CreateSession(ctx, tenant, changed); !errors.Is(err, sessions.ErrIdempotencyConflict) {
 		t.Fatal("changed bytes accepted", err)
 	}
-	_, keyless := creationService(t, pool, nil)
-	sealedInput := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "keyless", Configuration: hostedConfiguration, InitialFiles: changed.InitialFiles[:1]}
-	if _, err := keyless.CreateSession(ctx, tenant, sealedInput); !errors.Is(err, credentialcrypto.ErrUnavailable) {
-		t.Fatal("sealed without a credential key", err)
-	}
-	if countRows(t, pool, "SELECT count(*) FROM sessions WHERE tenant_id=$1 AND idempotency_key='keyless'", tenant) != 0 {
-		t.Fatal("a failed creation left a Session")
-	}
 }
 
 // An Environment Session reserves its initial input, tracking its activity,
 // instead of admitting a Turn.
 func TestEnvironmentCreationReservesItsInitialInput(t *testing.T) {
 	pool := pgtest.Open(t)
-	_, service := creationService(t, pool, nil)
+	_, service := creationService(t, pool)
 	input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "environment", InitialInputs: []sessions.Input{messageInput("first")},
 		Configuration: json.RawMessage(`{"environment":{"type":"self_hosted","workspace_directory":"/workspace"}}`)}
 	created, err := service.CreateSession(t.Context(), uuid.NewString(), input)
@@ -475,18 +463,26 @@ func TestEnvironmentCreationReservesItsInitialInput(t *testing.T) {
 	}
 }
 
-// Hosted creation checks admission on the locked deployment, so it sees
-// maintenance committed while it waited, and places after creating the
-// Environment, rolling both back when no node is available. A retry admits
-// nothing and still returns its Session.
-func TestHostedCreationAdmitsAndPlacesUnderTheDeploymentLock(t *testing.T) {
+// Hosted creation checks admission on the locked deployment, so it sees a
+// reset committed while it waited. Accepted Environments wait for compute
+// without a placement; a retry admits nothing and returns its Session.
+func TestHostedCreationAdmitsUnderDeploymentLockAndLeavesComputeUnreserved(t *testing.T) {
 	pool := pgtest.OpenIsolated(t, nil)
-	_, service := creationService(t, pool, nil)
+	_, service := creationService(t, pool)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	tenant := uuid.NewString()
+	nodes, err := json.Marshal(sandbox.DeploymentSpec{Resources: sandbox.Resources{CPUs: 2, MemoryMiB: 2048}, Runtime: &sandbox.RuntimeRelease{SourceCommit: strings.Repeat("a", 40),
+		ImageID: "sha256:" + strings.Repeat("b", 64), ImageManifestDigest: "sha256:" + strings.Repeat("c", 64), MicrosandboxRef: "oac-runtime@sha256:" + strings.Repeat("d", 64),
+		RuntimeSHA256: strings.Repeat("e", 64), FirmwareSHA256: strings.Repeat("f", 64)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A direct deployment admits hosted work without placing it on a node.
+	exec(t, pool, `UPDATE runtime_deployment SET installation_id=$1, backend_fingerprint=$2, provider_kind='e2b', mode='direct', generation=1,
+		specification='{"resources":{"cpus":2,"memory_mib":2048}}'`, uuid.New(), strings.Repeat("a", 64))
 	hosted := func(key string) sessions.CreateSession {
-		return sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: key, Configuration: hostedConfiguration}
+		return sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: key, Configuration: json.RawMessage(`{"agent":{"model":"m"},"environment":{"type":"openai_hosted"}}`)}
 	}
 	existing, err := service.CreateSession(ctx, tenant, hosted("existing"))
 	if err != nil {
@@ -507,24 +503,32 @@ func TestHostedCreationAdmitsAndPlacesUnderTheDeploymentLock(t *testing.T) {
 		done <- err
 	}()
 	awaitBlocked(ctx, t, pool, holder)
-	if _, err := tx.Exec(ctx, "UPDATE runtime_deployment SET installation_id=$1, backend_fingerprint=$2, admission_paused=true", uuid.New(), strings.Repeat("a", 64)); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE runtime_deployment SET provider_kind='docker', mode='nodes', generation=2, specification=$1,
+		reset_clear='force', reset_requested_at=now(), reset_forced_at=now(), reset_audit='{}'`, string(nodes)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; !errors.Is(err, placement.ErrAdmissionClosed) {
-		t.Fatal("creation bypassed committed maintenance", err)
+	if err := <-done; !errors.Is(err, placement.ErrResetAdmission) {
+		t.Fatal("creation bypassed the committed reset", err)
 	}
 	if retry, err := service.CreateSession(ctx, tenant, hosted("existing")); err != nil || retry.Created || retry.Session.ID != existing.Session.ID {
 		t.Fatal("retry ran admission", retry, err)
 	}
-	exec(t, pool, "UPDATE runtime_deployment SET admission_paused=false, web_managed=true")
-	if _, err := service.CreateSession(ctx, tenant, hosted("unplaced")); !errors.Is(err, placement.ErrNodeUnavailable) {
-		t.Fatal("placement without a node", err)
+	exec(t, pool, "UPDATE runtime_deployment SET reset_clear=NULL, reset_requested_at=NULL, reset_forced_at=NULL, reset_audit=NULL")
+	queued, err := service.CreateSession(ctx, tenant, hosted("unplaced"))
+	if err != nil || !queued.Created {
+		t.Fatal("creation without available compute was not accepted", queued, err)
 	}
-	if count := countRows(t, pool, "SELECT count(*) FROM sessions s JOIN environments e ON e.session_id=s.id WHERE s.tenant_id=$1", tenant); count != 1 {
-		t.Fatal("failed hosted creation left work", count)
+	if count := countRows(t, pool, "SELECT count(*) FROM sessions s JOIN environments e ON e.session_id=s.id WHERE s.tenant_id=$1", tenant); count != 2 {
+		t.Fatal("accepted hosted creation did not preserve both Sessions", count)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM runtime_placements WHERE environment_id=$1", queued.Session.Environment.ID); count != 0 {
+		t.Fatal("creation reserved a node", count)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM runtime_allocations WHERE environment_id=$1", queued.Session.Environment.ID); count != 0 {
+		t.Fatal("creation allocated compute", count)
 	}
 }
 
@@ -532,9 +536,8 @@ func TestHostedCreationAdmitsAndPlacesUnderTheDeploymentLock(t *testing.T) {
 // whichever goes first decides, and no Session refers to a missing version.
 func TestSkillFreezeSerializesWithVersionDeletion(t *testing.T) {
 	pool := pgtest.Open(t)
-	cipher := frozenCipher(t)
-	store, service := creationService(t, pool, cipher)
-	skillsService := skillService(t, pool, cipher)
+	store, service := creationService(t, pool)
+	skillsService := skillService(t, pool)
 	ctx := t.Context()
 	tenant := uuid.NewString()
 	for _, freezeFirst := range []bool{true, false} {
@@ -555,7 +558,7 @@ func TestSkillFreezeSerializesWithVersionDeletion(t *testing.T) {
 		if err := holder.QueryRow(ctx, "SELECT pg_backend_pid() FROM skills WHERE id=$1 FOR UPDATE", key).Scan(&holderPID); err != nil {
 			t.Fatal(err)
 		}
-		input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: hostedConfiguration,
+		input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: environmentConfiguration,
 			Initialization: environmentconfig.Setup{Skills: []environmentconfig.Skill{{Metadata: environmentconfig.SkillMetadata{Type: "skill_reference", SkillID: skill.ID, Version: "2"}}}}}
 		type outcome struct {
 			creation sessions.Creation
@@ -606,11 +609,9 @@ func TestSkillFreezeSerializesWithVersionDeletion(t *testing.T) {
 // creation closed and rolls it back.
 func TestCreationAudit(t *testing.T) {
 	pool := pgtest.Open(t)
-	_, service := creationService(t, pool, nil)
+	_, service := creationService(t, pool)
 	tenant := uuid.NewString()
-	sum := sha256.Sum256([]byte(uuid.NewString()))
-	digest := hex.EncodeToString(sum[:])
-	source := writeaudit.Source{KeyID: "static:" + digest, Prefix: digest[:8], Name: "test key", Kind: "static", TenantID: uuid.NewString(), RequestID: uuid.NewString(), TraceID: uuid.NewString()}
+	source := writeaudit.Source{KeyID: uuid.NewString(), Prefix: "pc_aaaaaaaa", Name: "test key", Kind: "issued", TenantID: uuid.NewString(), RequestID: uuid.NewString(), TraceID: uuid.NewString()}
 	input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "audited", InitialInputs: []sessions.Input{messageInput("first")},
 		Configuration: json.RawMessage(`{"environment":{"type":"self_hosted","workspace_directory":"/workspace"}}`)}
 	if _, err := service.CreateSession(writeaudit.WithSource(t.Context(), source), tenant, input); !errors.Is(err, writeaudit.ErrInvalidSource) {
@@ -648,4 +649,66 @@ func TestCreationAudit(t *testing.T) {
 	if rows.Err() != nil || !reflect.DeepEqual(owned, []string{"environment", "session"}) {
 		t.Fatal("created resources", owned, rows.Err())
 	}
+}
+
+// Profile admission uses the deployment selected while holding its lock, so a
+// storage-mode update cannot race a preflight check and persist unsupported work.
+func TestHostedExternalHistoryAdmissionRollsBackAfterDeploymentChange(t *testing.T) {
+	pool := pgtest.OpenIsolated(t, nil)
+	store, _ := creationService(t, pool)
+	rules, err := placement.NewRules(externalAdmissionDeclarations{}, "https://core.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := sessions.NewService(store, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	tenant := uuid.NewString()
+	exec(t, pool, `UPDATE runtime_deployment SET installation_id=$1, backend_fingerprint=$2, provider_kind='test-direct', mode='direct', generation=1, specification='{"resources":{"cpus":2,"memory_mib":2048}}'`, uuid.New(), strings.Repeat("a", 64))
+	input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "raced", Configuration: json.RawMessage(`{"agent":{"model":"m"},"environment":{"type":"openai_hosted"}}`)}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	var holder int32
+	if err = tx.QueryRow(ctx, "SELECT pg_backend_pid() FROM runtime_deployment FOR UPDATE").Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := service.CreateSession(ctx, tenant, input); done <- err }()
+	awaitBlocked(ctx, t, pool, holder)
+	if _, err = tx.Exec(ctx, `UPDATE runtime_deployment SET specification=jsonb_set(specification,'{workspace}','{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; !errors.Is(err, sessions.ErrInvalidInput) {
+		t.Fatal("external combination admitted", err)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM sessions WHERE tenant_id=$1", tenant); count != 0 {
+		t.Fatal("rejected admission persisted Session", count)
+	}
+	input.SupportsRetainedNativeHistory = true
+	created, err := service.CreateSession(ctx, tenant, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SupportsRetainedNativeHistory = false
+	retry, err := service.CreateSession(ctx, tenant, input)
+	if err != nil || retry.Created || retry.Session.ID != created.Session.ID {
+		t.Fatal("trusted admission input changed retry identity", retry, err)
+	}
+}
+
+// This fixture declares a direct provider supporting both storage modes.
+type externalAdmissionDeclarations struct{}
+
+func (externalAdmissionDeclarations) RequiresPublicOrigin(string) (bool, error) { return false, nil }
+func (externalAdmissionDeclarations) ValidateSpecification(string, sandbox.DeploymentSpec) error {
+	return nil
 }

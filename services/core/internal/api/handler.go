@@ -214,7 +214,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	selectedEngine := h.Engine
 	var provider *v1.ModelProviderInput
-	var providerSource string
+	var providerSource v1.ExecutionSource
 	var deploymentRevision uuid.UUID
 	if err == nil {
 		selectedEngine, provider, providerSource, deploymentRevision, err = h.resolveSessionExecution(r.Context(), input, inheritedProvider, configuration)
@@ -232,23 +232,13 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var required *modelProviderRequiredError
-		var defaults *modelProviderDefaultsError
 		switch {
 		case errors.As(err, &required):
 			writeError(w, http.StatusBadRequest, "model_provider_required", required.message, "x_agents_core.model_provider")
-		case errors.As(err, &defaults):
-			writeModelConfigurationError(w, r, defaults.err)
+		case writeStoredDataError(w, r, err):
 		case !writeFieldError(w, err):
 			writeError(w, http.StatusBadRequest, "unsupported_or_invalid_configuration", err.Error())
 		}
-		return
-	}
-	if input.Environment.Type == "self_hosted" && h.Execution == nil {
-		writeError(w, http.StatusServiceUnavailable, "execution_unavailable", "Self-hosted execution is not configured on this service.")
-		return
-	}
-	if input.Environment.Type == "openai_hosted" && h.Sandboxes == nil {
-		writeError(w, http.StatusServiceUnavailable, "execution_unavailable", "Hosted execution is not configured on this service.")
 		return
 	}
 	executionConfiguration := sessionExecutionProjection(input, saved, inheritedProvider, provider, selectedEngine, configuration)
@@ -262,10 +252,6 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	create := h.SessionCreation.CreateSession
 	if len(initialInputs) > 0 || input.Environment.Type == "openai_hosted" {
-		if h.Execution == nil {
-			writeError(w, http.StatusServiceUnavailable, "execution_unavailable", "Execution input is not enabled on this service.")
-			return
-		}
 		create = h.Execution.SessionAdmission.CreateSession
 	}
 	result, err := create(r.Context(), tenantID(r), createInput)
@@ -294,7 +280,7 @@ func (h *Handler) respondSession(w http.ResponseWriter, r *http.Request, session
 }
 
 func (h *Handler) respondSessionStatus(w http.ResponseWriter, r *http.Request, session sessions.Session, status int) {
-	response, err := sessionResponse(session, h.executorURL())
+	response, err := sessionResponse(session, h.Execution.ExecutorURL)
 	if err != nil {
 		writeSessionsError(w, r, err)
 		return
@@ -322,7 +308,7 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	response := v1.SessionList{Data: make([]v1.Session, 0, len(page.Sessions)), HasMore: page.NextCursor != ""}
 	for _, session := range page.Sessions {
-		item, err := sessionResponse(session, h.executorURL())
+		item, err := sessionResponse(session, h.Execution.ExecutorURL)
 		if err != nil {
 			writeSessionsError(w, r, err)
 			return

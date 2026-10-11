@@ -140,23 +140,12 @@ type Session struct {
 	closed    chan struct{}
 }
 
-// NewSession wires a freshly-upgraded WS connection into a Session.
-// The session does NOT start its goroutines automatically — Start runs
-// once the handler is ready so the session can't race with response writes.
-func NewSession(conn WSConn, deviceID, workspaceID, daemonVersion string, reg *Registry, log SessionLogger) *Session {
-	return NewSessionWithOwner(conn, deviceID, workspaceID, daemonVersion, reg, log, nil)
-}
-
-// NewSessionWithOwner wires a session with an optional DB-backed owner
-// lease. Multi-pod deployments pass the lease returned by
-// ClaimAgentDaemonDeviceOwner so heartbeats can fence stale connections.
+// NewSessionWithOwner wires a freshly-upgraded WS connection into a Session
+// with an optional DB-backed owner lease. Multi-pod deployments pass the lease
+// returned by ClaimAgentDaemonDeviceOwner so heartbeats can fence stale
+// connections. The session does NOT start its goroutines automatically — Start
+// runs once the handler is ready so the session can't race with response writes.
 func NewSessionWithOwner(conn WSConn, deviceID, workspaceID, daemonVersion string, reg *Registry, log SessionLogger, owner *ownerLease) *Session {
-	if log == nil {
-		log = func(string, ...any) {}
-	}
-	if reg == nil {
-		reg = NewRegistry()
-	}
 	now := time.Now()
 	return &Session{
 		DeviceID:      deviceID,
@@ -510,6 +499,7 @@ func deviceKindsFromHeartbeat(p proto.HeartbeatPayload) []runtimedevice.Supporte
 				DurableTurns:          info.Capabilities.DurableTurns.IsSupported(),
 				DurableInputReceipts:  info.Capabilities.DurableInputReceipts.IsSupported(),
 				NativeSessionRecovery: info.Capabilities.NativeSessionRecovery.IsSupported(),
+				RetainedNativeHistory: info.Capabilities.RetainedNativeHistory.IsSupported(),
 				MessageItems:          info.Capabilities.MessageItems.IsSupported(),
 
 				ToolObservations:               info.Capabilities.ToolObservations.IsSupported(),

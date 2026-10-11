@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"slices"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment/placement"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
@@ -69,6 +72,19 @@ func (f *fakeReservationTx) LoadReserved() (placement.Reserved, error) {
 	return f.loadReserved()
 }
 
+func (f *fakeReservationTx) CanReplaceAllocation() (bool, error) {
+	unexpected(f.t, "CanReplaceAllocation")
+	return false, nil
+}
+func (f *fakeReservationTx) LoadNodes() ([]placement.Node, error) {
+	unexpected(f.t, "LoadNodes")
+	return nil, nil
+}
+func (f *fakeReservationTx) ReservePlacement(placement.Placement) error {
+	unexpected(f.t, "ReservePlacement")
+	return nil
+}
+
 func (f *fakeReservationTx) InsertAllocation(allocation NewAllocation) (Allocation, error) {
 	if f.insertAllocation == nil {
 		unexpected(f.t, "InsertAllocation")
@@ -77,12 +93,15 @@ func (f *fakeReservationTx) InsertAllocation(allocation NewAllocation) (Allocati
 }
 
 type fakeAllocationTx struct {
-	t                 testing.TB
-	loadAllocation    func() (Allocation, error)
-	loadSessionDevice func() (SessionDevice, bool, error)
-	settleCreation    func(Allocation) (Allocation, error)
-	keep              func(Allocation) (Allocation, error)
-	release           func(Allocation) (Allocation, error)
+	canRetainEnvironment func(Allocation) (bool, error)
+	t                    testing.TB
+	loadActivity         func(Allocation) (Activity, error)
+	loadSuspensionDemand func(Allocation) (SuspensionDemand, error)
+	setCompute           func(Allocation, ComputeChange) (Allocation, error)
+	loadAllocation       func() (Allocation, error)
+	loadSessionDevice    func() (SessionDevice, bool, error)
+	settleCreation       func(Allocation) (Allocation, error)
+	release              func(Allocation) (Allocation, error)
 }
 
 func (f *fakeAllocationTx) LoadAllocation() (Allocation, error) {
@@ -99,26 +118,42 @@ func (f *fakeAllocationTx) LoadSessionDevice() (SessionDevice, bool, error) {
 	return f.loadSessionDevice()
 }
 
-func (f *fakeAllocationTx) LoadActivity(Allocation) (Activity, error) {
-	unexpected(f.t, "LoadActivity")
-	return Activity{}, nil
+func (f *fakeAllocationTx) LoadActivity(current Allocation) (Activity, error) {
+	if f.loadActivity == nil {
+		unexpected(f.t, "LoadActivity")
+	}
+	return f.loadActivity(current)
 }
 
-func (f *fakeAllocationTx) LoadRestore(Allocation) (placement.Restore, error) {
-	unexpected(f.t, "LoadRestore")
-	return placement.Restore{}, nil
+func (f *fakeAllocationTx) LoadSuspensionDemand(current Allocation) (SuspensionDemand, error) {
+	if f.loadSuspensionDemand == nil {
+		unexpected(f.t, "LoadSuspensionDemand")
+	}
+	return f.loadSuspensionDemand(current)
+}
+
+func (f *fakeAllocationTx) PlacementDemand(PlacementDemandCursor) ([]PlacementDemand, PlacementDemandCursor, error) {
+	unexpected(f.t, "PlacementDemand")
+	return nil, PlacementDemandCursor{}, nil
+}
+
+func (f *fakeAllocationTx) LoadGenerationSpecification(uint64) (GenerationSpecification, error) {
+	unexpected(f.t, "LoadGenerationSpecification")
+	return GenerationSpecification{}, nil
+}
+
+func (f *fakeAllocationTx) LoadCheckpointPlacement(Allocation) (placement.Deployment, []placement.CheckpointNode, error) {
+	unexpected(f.t, "LoadCheckpointPlacement")
+	return placement.Deployment{}, nil, nil
+}
+func (f *fakeAllocationTx) MoveSuspended(Allocation, string, ComputeChange) (Allocation, error) {
+	unexpected(f.t, "MoveSuspended")
+	return Allocation{}, nil
 }
 
 func (f *fakeAllocationTx) ObserveRunning(Allocation) (Allocation, error) {
 	unexpected(f.t, "ObserveRunning")
 	return Allocation{}, nil
-}
-
-func (f *fakeAllocationTx) Keep(current Allocation) (Allocation, error) {
-	if f.keep == nil {
-		unexpected(f.t, "Keep")
-	}
-	return f.keep(current)
 }
 
 func (f *fakeAllocationTx) SettleCreation(current Allocation) (Allocation, error) {
@@ -135,9 +170,11 @@ func (f *fakeAllocationTx) Release(current Allocation) (Allocation, error) {
 	return f.release(current)
 }
 
-func (f *fakeAllocationTx) SetCompute(Allocation, ComputeChange) (Allocation, error) {
-	unexpected(f.t, "SetCompute")
-	return Allocation{}, nil
+func (f *fakeAllocationTx) SetCompute(current Allocation, change ComputeChange) (Allocation, error) {
+	if f.setCompute == nil {
+		unexpected(f.t, "SetCompute")
+	}
+	return f.setCompute(current, change)
 }
 
 func (f *fakeAllocationTx) RecordObservation(Allocation, string) error {
@@ -149,6 +186,7 @@ func (f *fakeAllocationTx) RecordObservation(Allocation, string) error {
 // methods cover a Session without an active Turn, pending input or input
 // activity change.
 type fakeCleanupTx struct {
+	canRetainEnvironment func(Allocation) (bool, error)
 	*fakeAllocationTx
 	revokeDevice         func(Allocation) error
 	requestCleanup       func(Allocation) (Allocation, error)
@@ -158,6 +196,13 @@ type fakeCleanupTx struct {
 	failPendingInput     func() error
 	loadActiveTurn       func() (sessions.Turn, bool, error)
 	cancelPendingInput   func() error
+}
+
+func (f *fakeCleanupTx) CanRetainEnvironment(current Allocation) (bool, error) {
+	if f.canRetainEnvironment == nil {
+		return false, nil
+	}
+	return f.canRetainEnvironment(current)
 }
 
 func (f *fakeCleanupTx) RevokeDevice(current Allocation) error {
@@ -266,7 +311,7 @@ func allocationOperations(t *testing.T, reservation *fakeReservationTx, locked s
 			return apply(allocation)
 		}
 	}
-	result, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage)
+	result, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,20 +361,24 @@ func TestReserveAllocationReplaysBeforeAdmission(t *testing.T) {
 func TestReserveAllocationAdmitsAndTakesTheReservedNode(t *testing.T) {
 	key := AllocationKey{TenantID: uuid.NewString(), EnvironmentID: uuid.NewString()}
 	installation, node := uuid.NewString(), uuid.NewString()
-	deployment := placement.Deployment{InstallationID: installation, Mode: "nodes", Generation: 7}
+	specification, err := json.Marshal(testSpecification("docker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := placement.Deployment{InstallationID: installation, Provider: "docker", Mode: "nodes", Generation: 7, Specification: specification}
 	fresh := func() *fakeReservationTx {
 		return &fakeReservationTx{t: t, loadEnvironment: hostedEnvironment(key.EnvironmentID),
 			findAllocation: func() (Allocation, bool, error) { return Allocation{}, false, nil },
 			lockDeployment: func() (placement.Deployment, error) { return deployment, nil }}
 	}
-	paused := fresh()
-	paused.lockDeployment = func() (placement.Deployment, error) {
+	resetting := fresh()
+	resetting.lockDeployment = func() (placement.Deployment, error) {
 		d := deployment
-		d.AdmissionPaused = true
+		d.Resetting = true
 		return d, nil
 	}
-	if _, err := allocationOperations(t, paused, sessions.LockedSession{}, nil).ReserveAllocation(t.Context(), key, installation, testCredentialHash()); !errors.Is(err, placement.ErrAdmissionClosed) {
-		t.Fatal("paused admission reserved an allocation", err)
+	if _, err := allocationOperations(t, resetting, sessions.LockedSession{}, nil).ReserveAllocation(t.Context(), key, installation, testCredentialHash()); !errors.Is(err, placement.ErrResetAdmission) {
+		t.Fatal("a resetting deployment reserved an allocation", err)
 	}
 	released := fresh()
 	released.loadReserved = func() (placement.Reserved, error) {
@@ -363,10 +412,10 @@ func TestReserveAllocationAdmitsAndTakesTheReservedNode(t *testing.T) {
 }
 
 // A live change needs the Session undeleted and bound to the allocation's
-// device; settlement continues for a deleted Session. Any other owner is a
-// conflict.
+// device; settlement continues for a deleted Session. Any other owner, or
+// compute that no longer runs, is a conflict.
 func TestAllocationChangesCheckTheOwner(t *testing.T) {
-	owner := Allocation{ID: uuid.NewString(), DeviceID: uuid.NewString(), EnvironmentID: uuid.NewString(), TenantID: uuid.NewString(), ProviderKey: uuid.NewString()}
+	owner := Allocation{ID: uuid.NewString(), DeviceID: uuid.NewString(), EnvironmentID: uuid.NewString(), TenantID: uuid.NewString(), ProviderKey: uuid.NewString(), State: "running"}
 	stored := func(current Allocation) func() (Allocation, error) {
 		return func() (Allocation, error) { return current, nil }
 	}
@@ -377,7 +426,7 @@ func TestAllocationChangesCheckTheOwner(t *testing.T) {
 	}
 	deleted := owner
 	deleted.SessionDeleted = true
-	if _, err := allocationOperations(t, nil, sessions.LockedSession{}, &fakeAllocationTx{t: t, loadAllocation: stored(deleted)}).KeepAllocation(t.Context(), owner); !errors.Is(err, sessions.ErrNotFound) {
+	if _, err := allocationOperations(t, nil, sessions.LockedSession{}, &fakeAllocationTx{t: t, loadAllocation: stored(deleted)}).CheckRunning(t.Context(), owner); !errors.Is(err, sessions.ErrNotFound) {
 		t.Fatal("a deleted Session kept its allocation", err)
 	}
 	settled := &fakeAllocationTx{t: t, loadAllocation: stored(deleted), settleCreation: func(current Allocation) (Allocation, error) {
@@ -390,8 +439,19 @@ func TestAllocationChangesCheckTheOwner(t *testing.T) {
 	unbound := &fakeAllocationTx{t: t, loadAllocation: stored(owner), loadSessionDevice: func() (SessionDevice, bool, error) {
 		return SessionDevice{ID: uuid.NewString(), EnvironmentID: owner.EnvironmentID}, true, nil
 	}}
-	if _, err := allocationOperations(t, nil, sessions.LockedSession{}, unbound).KeepAllocation(t.Context(), owner); !errors.Is(err, ErrAllocationConflict) {
+	if _, err := allocationOperations(t, nil, sessions.LockedSession{}, unbound).CheckRunning(t.Context(), owner); !errors.Is(err, ErrAllocationConflict) {
 		t.Fatal("a Session bound to another device kept the allocation", err)
+	}
+	bound := func() (SessionDevice, bool, error) {
+		return SessionDevice{ID: owner.DeviceID, EnvironmentID: owner.EnvironmentID}, true, nil
+	}
+	cleanup := owner
+	cleanup.State = "cleanup_pending"
+	if _, err := allocationOperations(t, nil, sessions.LockedSession{}, &fakeAllocationTx{t: t, loadAllocation: stored(cleanup), loadSessionDevice: bound}).CheckRunning(t.Context(), owner); !errors.Is(err, ErrAllocationConflict) {
+		t.Fatal("cleanup kept the allocation running", err)
+	}
+	if current, err := allocationOperations(t, nil, sessions.LockedSession{}, &fakeAllocationTx{t: t, loadAllocation: stored(owner), loadSessionDevice: bound}).CheckRunning(t.Context(), owner); err != nil || current.ID != owner.ID {
+		t.Fatal("the owner's running allocation", current, err)
 	}
 }
 
@@ -486,7 +546,7 @@ func TestCleanupRevokesSettlesTheSessionThenReleases(t *testing.T) {
 			storage := &fakeExecutionStorage{t: t, withAllocationCleanup: func(_ context.Context, _ AllocationKey, apply func(AllocationCleanupTx) error) error {
 				return apply(tx)
 			}}
-			operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage)
+			operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -499,5 +559,142 @@ func TestCleanupRevokesSettlesTheSessionThenReleases(t *testing.T) {
 				t.Fatal("cleanup order", result.State, calls, err)
 			}
 		})
+	}
+}
+
+func TestExpiredQualifiedFilesystemCleanupPreservesSessionWork(t *testing.T) {
+	owner := Allocation{ID: uuid.NewString(), DeviceID: uuid.NewString(), EnvironmentID: uuid.NewString(), TenantID: uuid.NewString(), ProviderKey: uuid.NewString(), State: "running", Expired: true, CreateSettled: true}
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprint("deleted=", deleted), func(t *testing.T) {
+			current := owner
+			current.SessionDeleted = deleted
+			checked, cancelled, revoked := false, false, false
+			tx := &fakeCleanupTx{fakeAllocationTx: &fakeAllocationTx{t: t, loadAllocation: func() (Allocation, error) { return current, nil }},
+				canRetainEnvironment: func(Allocation) (bool, error) {
+					if !revoked {
+						t.Fatal("eligibility checked before authority revocation")
+					}
+					checked = true
+					return true, nil
+				},
+				revokeDevice:   func(Allocation) error { revoked = true; return nil },
+				requestCleanup: func(a Allocation) (Allocation, error) { a.State = "cleanup_pending"; return a, nil },
+				loadActiveTurn: func() (sessions.Turn, bool, error) { cancelled = true; return sessions.Turn{}, false, nil }, cancelPendingInput: func() error { return nil },
+			}
+			storage := &fakeExecutionStorage{t: t, withAllocationCleanup: func(_ context.Context, _ AllocationKey, apply func(AllocationCleanupTx) error) error {
+				return apply(tx)
+			}}
+			operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := operations.RequestCleanup(t.Context(), current)
+			if err != nil || result.State != "cleanup_pending" || !revoked || checked == deleted || cancelled != deleted {
+				t.Fatal("cleanup lost lifetime separation", result, err, checked, cancelled)
+			}
+		})
+	}
+}
+
+func (f *fakeReservationTx) LoadGenerationSpecification(uint64) (GenerationSpecification, error) {
+	unexpected(f.t, "LoadGenerationSpecification")
+	return GenerationSpecification{}, nil
+}
+
+func TestSetComputeRechecksIdlePressureAndActivity(t *testing.T) {
+	now := time.Now()
+	owner := Allocation{ID: uuid.NewString(), DeviceID: uuid.NewString(), TenantID: uuid.NewString(), EnvironmentID: uuid.NewString(), NodeID: uuid.NewString(), ProviderKey: uuid.NewString(), State: "running", ComputePhase: "running", ComputeActivityAt: now.Add(-time.Minute)}
+	for _, test := range []struct {
+		name                          string
+		idle                          time.Duration
+		busy, wake, changed, pressure bool
+		want                          error
+		checkPressure                 bool
+	}{
+		{name: "idle timeout", idle: 6 * time.Minute},
+		{name: "early pressure", idle: time.Minute, pressure: true, checkPressure: true},
+		{name: "no demand", idle: time.Minute, checkPressure: true, want: ErrNotIdle},
+		{name: "quiet grace", idle: time.Second, pressure: true, want: ErrNotIdle},
+		{name: "turn became busy", idle: time.Minute, busy: true, pressure: true, want: ErrAllocationConflict},
+		{name: "wake arrived", idle: time.Minute, wake: true, pressure: true, want: ErrAllocationConflict},
+		{name: "activity changed", idle: time.Minute, changed: true, pressure: true, want: ErrAllocationConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := owner
+			if test.changed {
+				current.ComputeActivityAt = now
+			}
+			pressureChecks, writes := 0, 0
+			tx := &fakeAllocationTx{t: t,
+				loadAllocation: func() (Allocation, error) { return current, nil },
+				loadSessionDevice: func() (SessionDevice, bool, error) {
+					return SessionDevice{ID: owner.DeviceID, EnvironmentID: owner.EnvironmentID}, true, nil
+				},
+				loadActivity: func(Allocation) (Activity, error) {
+					return Activity{ObservedAt: now, LastActivity: now.Add(-test.idle), Busy: test.busy, WakeRequested: test.wake}, nil
+				},
+				loadSuspensionDemand: func(Allocation) (SuspensionDemand, error) {
+					pressureChecks++
+					node := placement.Node{ID: owner.NodeID, Online: true, Active: 1, MaxActive: 1, Retained: 1, MaxRetained: 1, CoreURL: testPublicURL}
+					demand := SuspensionDemand{Deployment: placement.Deployment{InstallationID: owner.ProviderKey, Mode: "nodes"}, Nodes: []placement.Node{node}}
+					if test.pressure {
+						compatibility := sandbox.CheckpointCompatibility{ArtifactDomain: "fixture", ExecutionClass: "fixture"}
+						demand.CheckpointRestores = []CheckpointRestoreDemand{{SourceNode: owner.NodeID, Compatibility: compatibility, Nodes: []placement.CheckpointNode{{Node: node, Checkpoint: &compatibility}}}}
+					}
+					return demand, nil
+				},
+				setCompute: func(a Allocation, c ComputeChange) (Allocation, error) {
+					writes++
+					a.ComputePhase = c.Phase
+					return a, nil
+				},
+			}
+			storage := &fakeExecutionStorage{t: t, withAllocation: func(_ context.Context, _ AllocationKey, apply func(AllocationTx) error) error { return apply(tx) }}
+			operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			until := now.Add(time.Hour)
+			_, err = operations.SetCompute(t.Context(), owner, "quiescing", json.RawMessage(`{}`), &until, 5*time.Minute)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("SetCompute: %v, want %v", err, test.want)
+			}
+			if (pressureChecks == 1) != test.checkPressure || (writes == 1) != (test.want == nil) {
+				t.Fatalf("pressure checks=%d writes=%d", pressureChecks, writes)
+			}
+		})
+	}
+}
+
+func (f *fakeAllocationTx) CanRetainEnvironment(current Allocation) (bool, error) {
+	if f.canRetainEnvironment == nil {
+		return false, nil
+	}
+	return f.canRetainEnvironment(current)
+}
+
+func TestBeginRestoreDirectKeepsAllocationAndRetention(t *testing.T) {
+	until := time.Now().Add(time.Hour)
+	owner := Allocation{ID: uuid.NewString(), DeviceID: uuid.NewString(), TenantID: uuid.NewString(), EnvironmentID: uuid.NewString(), ProviderKey: uuid.NewString(), State: "running", ComputePhase: "suspended", ComputeRetainedUntil: &until}
+	tx := &fakeAllocationTx{t: t, loadAllocation: func() (Allocation, error) { return owner, nil }, loadSessionDevice: func() (SessionDevice, bool, error) {
+		return SessionDevice{ID: owner.DeviceID, EnvironmentID: owner.EnvironmentID}, true, nil
+	}, loadActivity: func(Allocation) (Activity, error) { return Activity{WakeRequested: true}, nil }, setCompute: func(current Allocation, change ComputeChange) (Allocation, error) {
+		if change.Phase != "restoring" || change.RetainedUntil != owner.ComputeRetainedUntil {
+			t.Fatal("direct restore lost intent", change)
+		}
+		current.ComputePhase = change.Phase
+		return current, nil
+	}}
+	storage := &fakeExecutionStorage{t: t, withAllocation: func(_ context.Context, _ AllocationKey, apply func(AllocationTx) error) error { return apply(tx) }}
+	operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := operations.BeginRestore(t.Context(), owner, sandbox.CheckpointCompatibility{ArtifactDomain: "fixture", ExecutionClass: "fixture"}, json.RawMessage(`{"restore_id":"attempt"}`))
+	if err != nil || restored.ID != owner.ID || restored.NodeID != "" || restored.ComputePhase != "restoring" {
+		t.Fatal("direct restore changed ownership", restored, err)
+	}
+	if _, err := operations.SetCompute(t.Context(), owner, "restoring", json.RawMessage(`{}`), &until, time.Minute); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal("restore bypassed capacity admission", err)
 	}
 }

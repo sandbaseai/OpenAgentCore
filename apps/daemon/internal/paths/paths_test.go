@@ -75,10 +75,9 @@ func TestProfileDirAndFiles(t *testing.T) {
 	}
 
 	cases := map[string]func(string) (string, error){
-		"auth.json":     paths.AuthFile,
-		"connect.pid":   paths.PIDFile,
-		"connect.log":   paths.LogFile,
-		"sessions.json": paths.SessionsFile,
+		"auth.json":   paths.AuthFile,
+		"connect.pid": paths.PIDFile,
+		"connect.log": paths.LogFile,
 	}
 	for filename, fn := range cases {
 		got, err := fn("test")
@@ -106,5 +105,27 @@ func TestRootRejectsRelativeOverride(t *testing.T) {
 	t.Setenv("OAC_RUNTIME_HOME", "relative")
 	if _, err := paths.Root(); err == nil {
 		t.Fatal("relative private home accepted")
+	}
+}
+
+func TestStateDirectorySingleSetting(t *testing.T) {
+	home := withTempHome(t)
+	t.Setenv("OAC_RUNTIME_STATE_DIRECTORY", "")
+	if err := os.Unsetenv("OAC_RUNTIME_STATE_DIRECTORY"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := paths.StateDirectory(); err != nil || got != home {
+		t.Fatal("default state directory", got, err)
+	}
+	selected := t.TempDir()
+	t.Setenv("OAC_RUNTIME_STATE_DIRECTORY", selected)
+	if got, err := paths.StateDirectory(); err != nil || got != selected {
+		t.Fatal("explicit state directory", got, err)
+	}
+	for _, invalid := range []string{"", "relative", selected + string(filepath.Separator) + ".."} {
+		t.Setenv("OAC_RUNTIME_STATE_DIRECTORY", invalid)
+		if _, err := paths.StateDirectory(); err == nil {
+			t.Fatal("invalid explicit setting fell back to default")
+		}
 	}
 }

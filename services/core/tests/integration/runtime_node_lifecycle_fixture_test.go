@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,11 +13,9 @@ import (
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/credentialcrypto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/environmentconfig"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -80,6 +77,7 @@ type nodeIsolationFixture struct {
 	nodes                *deployment.Service
 	pool                 *pgxpool.Pool
 	worker               *execution.Worker
+	placement            *deployment.ExecutionOperations
 	provider             *nodeIsolationProvider
 	key, nodeA, nodeB    string
 	epoch                uint64
@@ -91,12 +89,7 @@ type nodeIsolationFixture struct {
 
 func newNodeIsolationFixture(t *testing.T, mode string) *nodeIsolationFixture {
 	t.Helper()
-	_, pool := newManagedTestStore(t)
-	cipher, err := credentialcrypto.New(bytes.Repeat([]byte{8}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewWithCredentialCipher(pool, cipher)
+	s, pool := newManagedTestStore(t)
 	registry := runtimegateway.NewRegistry()
 	cp := &fakeCheckpointProvider{lifecycleProvider: lifecycleProvider{resources: map[string]sandbox.Info{}}, computes: map[string]sandbox.ComputeState{}, snapshots: map[string]sandbox.SnapshotIdentity{}, bootstraps: map[string]sandbox.Bootstrap{}, peers: map[string]*websocket.Conn{}, registry: registry}
 	p := &nodeIsolationProvider{fakeCheckpointProvider: cp, blocked: map[string]bool{}, mode: mode, entered: make(chan struct{})}
@@ -124,21 +117,15 @@ func newNodeIsolationFixture(t *testing.T, mode string) *nodeIsolationFixture {
 		cp.mu.Unlock()
 		server.Close()
 	})
-	f := &nodeIsolationFixture{initializationCancel: cancelPreparation, t: t, store: s, nodes: deploymentService(t, s), pool: pool, provider: p, key: uuid.NewString(), nodeA: uuid.NewString(), nodeB: uuid.NewString()}
+	f := &nodeIsolationFixture{initializationCancel: cancelPreparation, t: t, store: s, nodes: deploymentService(t, s), pool: pool, provider: p, key: webDeployment(t, s, "microsandbox"), nodeA: uuid.NewString(), nodeB: uuid.NewString()}
 	// Keep restored compute awake throughout the isolation assertions.
 	// The suspension setup explicitly dates its activity two minutes in the past.
-	policy := &execution.RuntimeSuspensionPolicy{IdleTimeout: time.Minute, Retention: time.Hour, MaxActive: 100, MaxRetained: 100}
-	f.worker = startWorker(t, t.Context(), s, &execution.Dispatcher{Registry: registry, ManagedRuntimes: &execution.RuntimeProvider{CoreURL: "http://core.invalid/api/v1", InstallationID: f.key, BackendFingerprint: strings.Repeat("a", 64), Provider: p, ProviderKind: "microsandbox", LocalNodeID: f.nodeA, LocalCredentialSHA256: runtimedevice.HashCredential("local-credential"), LocalMaxActive: 100, LocalMaxRetained: 100, Suspension: policy}})
-	spec := SandboxDeploymentTestSpec("microsandbox")
-	raw, _ := json.Marshal(spec)
-	if _, err := pool.Exec(t.Context(), "UPDATE runtime_deployment SET specification=$1", raw); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(t.Context(), "UPDATE runtime_nodes SET specification_digest=$1,deployment_generation=1", spec.Digest("microsandbox")); err != nil {
-		t.Fatal(err)
-	}
+	owner := executionOwner(t, s)
+	f.placement = owner.Deployment
+	f.worker = startOwnedWorker(t, t.Context(), s, &execution.Dispatcher{Registry: registry, ManagedRuntimes: webRuntimes(t, s, f.key, p, &execution.RuntimeSuspensionPolicy{IdleTimeout: time.Minute, Retention: time.Hour})}, owner)
 	t.Cleanup(f.stop)
 	f.epoch = fixtureOwnerEpoch(t, s)
+	f.enroll(f.nodeA)
 	f.enroll(f.nodeB)
 	f.online(f.nodeA)
 	f.online(f.nodeB)
@@ -150,7 +137,7 @@ func (f *nodeIsolationFixture) enroll(id string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	_, err = f.nodes.Enroll(f.t.Context(), token, deployment.Enrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("microsandbox").Digest("microsandbox"), NodeID: id, Credential: strings.Repeat("x", 64), Name: id, Provider: "microsandbox", BackendFingerprint: strings.Repeat("b", 64)})
+	_, err = f.nodes.Enroll(f.t.Context(), token, deployment.Enrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("microsandbox").Digest("microsandbox"), NodeID: id, Credential: strings.Repeat("x", 64), Name: id, Provider: "microsandbox", BackendFingerprint: strings.Repeat("b", 64), CoreURL: f.store.placement.PublicURL()})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -161,7 +148,7 @@ func (f *nodeIsolationFixture) online(id string) {
 	if err := f.nodes.ConnectNode(f.t.Context(), id, connection, f.epoch); err != nil {
 		f.t.Fatal(err)
 	}
-	if err := f.nodes.Heartbeat(f.t.Context(), id, connection, f.epoch, deployment.NodeHealth{ProviderReady: true}); err != nil {
+	if err := fixtureNodeHeartbeat(f.t.Context(), f.store, f.nodes, id, connection, f.epoch, deployment.NodeHealth{ProviderReady: true}); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -196,13 +183,16 @@ func (f *nodeIsolationFixture) session(node string, initialize bool) (string, se
 		f.t.Fatal(err)
 	}
 	for _, value := range others {
-		if err := f.nodes.Heartbeat(f.t.Context(), value.id, value.connection, value.epoch, deployment.NodeHealth{ProviderReady: false}); err != nil {
+		if err := fixtureNodeHeartbeat(f.t.Context(), f.store, f.nodes, value.id, value.connection, value.epoch, deployment.NodeHealth{ProviderReady: false}); err != nil {
 			f.t.Fatal(err)
 		}
 	}
 	session, err := f.store.CreateSession(f.t.Context(), tenant, input)
+	if err == nil {
+		_, err = f.placement.EnsurePlacement(f.t.Context(), deployment.AllocationKey{TenantID: tenant, EnvironmentID: session.Environment.ID}, f.key)
+	}
 	for _, value := range others {
-		if err := f.nodes.Heartbeat(context.WithoutCancel(f.t.Context()), value.id, value.connection, value.epoch, deployment.NodeHealth{ProviderReady: true}); err != nil {
+		if err := fixtureNodeHeartbeat(context.WithoutCancel(f.t.Context()), f.store, f.nodes, value.id, value.connection, value.epoch, deployment.NodeHealth{ProviderReady: true}); err != nil {
 			f.t.Fatal(err)
 		}
 	}

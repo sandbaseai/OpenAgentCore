@@ -6,13 +6,11 @@ import (
 	"testing"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/e2b"
-
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
-	"github.com/google/uuid"
 )
 
 func TestE2BGenerationsRetainOwnershipAndUseCurrentCredential(t *testing.T) {
@@ -112,6 +110,9 @@ func TestPendingPlacementGenerationSurvivesRepeatedUpdates(t *testing.T) {
 	s, w, view, _ := webSpecificationFixture(t, "docker")
 	node := specificationNode(t, s, view)
 	tenant, session := managedArchiveSession(t, s, managerSessionInput(uuid.NewString()))
+	if err := reserveSessionPlacement(t, s, w, session); err != nil {
+		t.Fatal(err)
+	}
 	for generation := uint64(1); generation <= 2; generation++ {
 		tx, err := s.pool.Begin(t.Context())
 		if err != nil {
@@ -291,14 +292,14 @@ func TestSandboxSnapshotRolloutEquivalence(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			connection := onlineManagerNode(t, s, node.NodeID)
 			want := deployment.RolloutNodes{}
-			wantState := "settled"
+			wantState := deployment.RolloutSettled
 			switch state {
 			case "ready":
 				want.Ready = 1
 			case "preparing":
 				heartbeat(connection, "preparing")
 				want.Preparing = 1
-				wantState = "preparing"
+				wantState = deployment.RolloutPreparing
 			case "failed":
 				heartbeat(connection, "failed")
 				want.Failed = 1

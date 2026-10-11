@@ -34,7 +34,8 @@ func terminateLeaseOwner(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	var killed bool
 	err := pool.QueryRow(t.Context(), `SELECT pg_terminate_backend(pid, 1000) FROM pg_locks WHERE locktype='advisory' AND granted AND objsubid=1
-		AND classid::bigint * 4294967296 + objid::bigint = 706172736172
+		AND classid::bigint = (706172736172::bigint >> 32)
+        AND objid::bigint = (706172736172::bigint & 4294967295)
 		AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`).Scan(&killed)
 	if err != nil || !killed {
 		t.Fatal("terminate execution lease owner", killed, err)
@@ -308,7 +309,7 @@ func TestEnvironmentInputPromotionRollsBackHistoryAndSettlement(t *testing.T) {
 			ctx := t.Context()
 			pending := reserve(t, service, tenant, session, "pending")
 			name := "reservation_failure_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-			table, expression := "turn_inputs", "session_id <> '"+text(session)+"'::uuid OR payload->>'text' <> 'second'"
+			table, expression := "turn_inputs", "session_id <> '"+text(session)+"'::uuid OR payload#>>'{input,0,content,0,text}' <> 'second'"
 			switch phase {
 			case "settlement":
 				table, expression = "environment_input_reservations", "id <> '"+pending.ID+"'::uuid OR state <> 'admitted'"

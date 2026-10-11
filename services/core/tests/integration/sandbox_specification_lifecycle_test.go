@@ -11,7 +11,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment/placement"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/credentialcrypto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/google/uuid"
@@ -19,12 +18,7 @@ import (
 
 func webSpecificationFixture(t *testing.T, provider string) (*Store, *Store, deployment.View, sandbox.Selection) {
 	t.Helper()
-	_, pool := newManagedTestStore(t)
-	cipher, err := credentialcrypto.New(bytes.Repeat([]byte{13}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewWithCredentialCipher(pool, cipher)
+	s, _ := newManagedTestStore(t)
 	w := executionWriter(t, s)
 	id := uuid.NewString()
 	changes := deploymentExecution(t, w)
@@ -44,8 +38,14 @@ func webSpecificationFixture(t *testing.T, provider string) (*Store, *Store, dep
 
 func specificationNode(t *testing.T, s *Store, view deployment.View) deployment.Enrollment {
 	t.Helper()
+	return enrollNode(t, s, view, deployment.Capacity{MaxActive: 4, MaxRetained: 16})
+}
+
+// enrollNode enrolls an online node with capacity on the committed setup view.
+func enrollNode(t *testing.T, s *Store, view deployment.View, capacity deployment.Capacity) deployment.Enrollment {
+	t.Helper()
 	nodes := deploymentService(t, s)
-	token, err := EnrollmentTestToken(nodes.CreateEnrollment(t.Context(), deployment.Capacity{MaxActive: 4, MaxRetained: 16}))
+	token, err := EnrollmentTestToken(nodes.CreateEnrollment(t.Context(), capacity))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestSandboxSpecificationBootstrapReadDoesNotConsumeEnrollment(t *testing.T)
 	if _, err := nodes.NodeConfiguration(t.Context(), "", "invalid-token", 0); !errors.Is(err, deployment.ErrNodeCredential) {
 		t.Fatal("unauthenticated configuration read", err)
 	}
-	node := deployment.Enrollment{NodeID: uuid.NewString(), Name: "bootstrap", Credential: strings.Repeat("n", 64), Provider: "docker", BackendFingerprint: strings.Repeat("b", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest}
+	node := deployment.Enrollment{NodeID: uuid.NewString(), Name: "bootstrap", Credential: strings.Repeat("n", 64), Provider: "docker", BackendFingerprint: strings.Repeat("b", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest, CoreURL: s.placement.PublicURL()}
 	for _, change := range []func(*deployment.Enrollment){
 		func(n *deployment.Enrollment) { n.DeploymentGeneration++ },
 		func(n *deployment.Enrollment) { n.SpecificationDigest = strings.Repeat("c", 64) },
@@ -132,7 +132,7 @@ func TestSandboxSpecificationChangesPreserveEveryRetainedResource(t *testing.T) 
 			changes, deployments := deploymentExecution(t, w), deploymentService(t, s)
 			node := specificationNode(t, s, view)
 			tenant := uuid.NewString()
-			session, err := createSessionOnNode(t, s, tenant, managerSessionInput(uuid.NewString()), node.NodeID)
+			session, err := createSessionOnNode(t, s, w, tenant, managerSessionInput(uuid.NewString()), node.NodeID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -310,24 +310,35 @@ func TestSandboxSpecificationAllocationRaceWithMaintenance(t *testing.T) {
 // A node keeps the public URL it enrolled with. After the public URL changes it
 // receives no new sandboxes until it is re-added.
 func TestNodeBoundToAnotherPublicURLGetsNoNewSandboxes(t *testing.T) {
-	s, _, view, _ := webSpecificationFixture(t, "docker")
+	s, w, view, _ := webSpecificationFixture(t, "docker")
 	s.SetPlacement(placementRules(t, "https://old.example"))
+	w.SetPlacement(s.placement)
 	node := specificationNode(t, s, view)
 	nodes, err := deploymentService(t, s).ListNodes(t.Context())
 	if err != nil || len(nodes) != 1 || nodes[0].ID != node.NodeID || nodes[0].CoreURL != "https://old.example" {
 		t.Fatal("enrollment did not record the node's address", nodes, err)
 	}
 	s.SetPlacement(placementRules(t, "https://new.example"))
-	if _, err := s.CreateSession(t.Context(), uuid.NewString(), managerSessionInput(uuid.NewString())); !errors.Is(err, placement.ErrNodeUnavailable) {
+	w.SetPlacement(s.placement)
+	queued, err := s.CreateSession(t.Context(), uuid.NewString(), managerSessionInput(uuid.NewString()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveSessionPlacement(t, s, w, queued); !errors.Is(err, placement.ErrNodeUnavailable) {
 		t.Fatal("placed a new sandbox on a node bound to the old address", err)
 	}
 	bindings, err := deploymentService(t, s).AddressBindings(t.Context())
-	if err != nil || bindings.Nodes != 1 || bindings.NodesOnOtherAddress != 1 || bindings.HostedSandboxes != 0 {
+	if err != nil || bindings.Nodes != 1 || bindings.NodesOnOtherAddress != 1 || bindings.HostedSandboxes != 1 {
 		t.Fatal(bindings, err)
 	}
+	var placements int
+	if err := s.pool.QueryRow(t.Context(), "SELECT count(*) FROM runtime_placements WHERE environment_id=$1", queued.Environment.ID).Scan(&placements); err != nil || placements != 0 {
+		t.Fatal("waiting Session acquired an incompatible placement", placements, err)
+	}
 	s.SetPlacement(placementRules(t, "https://old.example"))
-	if _, err := s.CreateSession(t.Context(), uuid.NewString(), managerSessionInput(uuid.NewString())); err != nil {
-		t.Fatal("node on the current address rejected placement", err)
+	w.SetPlacement(s.placement)
+	if err := reserveSessionPlacement(t, s, w, queued); err != nil {
+		t.Fatal("node on current address rejected waiting placement", err)
 	}
 }
 

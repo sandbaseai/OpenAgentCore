@@ -28,6 +28,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/skills"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspacefs"
 )
 
 // testExecutorURL is the daemon URL self-hosted Sessions report unless a test
@@ -36,9 +37,11 @@ const testExecutorURL = "wss://core.example/api/v1/agent-daemon/ws"
 
 // publicHandler serves s through api.NewHandler, with every area built on s's
 // database, credential key and placement rules as cmd/server builds it. keys
-// authenticate as Project keys and "admin" as the Core key. Metrics, Runtime
-// observation and history, and executor connections are strict stand-ins.
-// Execution and Sandboxes stay disabled unless configure sets them.
+// authenticate as Project keys and "admin" as the Core key. Execution admits
+// Sessions and inputs through the Session service without a Worker, so nothing
+// runs them. Metrics, Runtime observation and history, executor connections,
+// Session archive, workspaces, and deployment changes, reset and discovery
+// are strict stand-ins. configure replaces any of them.
 func publicHandler(t testing.TB, s *Store, keys fixtureKeyResolver, engine string, configure ...func(*api.Dependencies)) (http.Handler, error) {
 	t.Helper()
 	admin, err := api.NewDeploymentAuthenticator([]string{runtimedevice.HashCredential("admin")})
@@ -74,8 +77,9 @@ func publicHandler(t testing.TB, s *Store, keys fixtureKeyResolver, engine strin
 	if err != nil {
 		return nil, err
 	}
+	deployments := deploymentService(t, s)
 	deps := api.Dependencies{
-		Engine: engine, CoreKeys: admin, InstallationBindings: deploymentService(t, s),
+		Engine: engine, CoreKeys: admin, InstallationBindings: deployments,
 		Projects: projectService, ProjectsReader: fixtureProjectsReader{Reader: projectStore, keys: keys},
 		ModelProviders: modelConfigurationService, ModelProvidersReader: modelConfigurationStore,
 		Vaults: vaultService, VaultsReader: vaultStore,
@@ -93,7 +97,9 @@ func publicHandler(t testing.TB, s *Store, keys fixtureKeyResolver, engine strin
 		Artifacts:       service,
 		ArtifactsReader: sessionStore,
 		SessionAdmin:    sessionStore, Environments: service, EnvironmentsReader: sessionStore, Admin: sessionStore, AdminAudit: audit, WriteAudit: audit,
-		ExecutorConnections: strict, Metrics: strict, RuntimeObservations: strict, RuntimeHistory: strict,
+		ExecutorConnections: strict, Metrics: strict, RuntimeObservations: strict, RuntimeHistory: strict, WorkspaceStorage: strict,
+		Execution: api.Execution{ExecutorURL: testExecutorURL, SessionAdmission: service, InputAdmission: service, SessionArchive: strict, Workspaces: strict},
+		Sandboxes: api.Sandboxes{Deployment: deployments, NodeAllocations: deploymentStore(s), DeploymentChanges: strict, DeploymentReset: strict, ConfigurationDiscovery: strict},
 	}
 	for _, c := range configure {
 		c(&deps)
@@ -143,26 +149,11 @@ func withPolicy(policy execution.Policy) func(*api.Dependencies) {
 	return func(d *api.Dependencies) { d.Policy = policy }
 }
 
-// storeExecution admits Sessions and inputs through the Session service on s
-// without a Worker, so nothing runs them.
-func storeExecution(t testing.TB, s *Store) func(*api.Dependencies) {
-	return func(d *api.Dependencies) {
-		service := sessionService(t, s)
-		d.Execution = &api.Execution{
-			ExecutorURL:      testExecutorURL,
-			SessionAdmission: service,
-			InputAdmission:   service,
-			SessionArchive:   strictStandIn{t},
-			Workspaces:       strictStandIn{t},
-		}
-	}
-}
-
 // workerExecution runs Sessions through worker. It wires no archive; an
 // archive request fails the test.
 func workerExecution(t testing.TB, worker *execution.Worker) func(*api.Dependencies) {
 	return func(d *api.Dependencies) {
-		d.Execution = &api.Execution{
+		d.Execution = api.Execution{
 			ExecutorURL:      testExecutorURL,
 			SessionAdmission: worker,
 			InputAdmission:   worker,
@@ -173,25 +164,9 @@ func workerExecution(t testing.TB, worker *execution.Worker) func(*api.Dependenc
 }
 
 // executorURL replaces the daemon URL self-hosted Sessions report. It follows
-// the option that enables Execution.
+// any option that replaces Execution.
 func executorURL(url string) func(*api.Dependencies) {
 	return func(d *api.Dependencies) { d.Execution.ExecutorURL = url }
-}
-
-// managedSandboxes enables the managed sandbox deployment on s: its
-// administration and node routes and openai_hosted Environments. Deployment
-// changes, reset and discovery need the Worker and are strict stand-ins. It
-// follows the option that enables Execution.
-func managedSandboxes(t testing.TB, s *Store) func(*api.Dependencies) {
-	return func(d *api.Dependencies) {
-		d.Sandboxes = &api.Sandboxes{
-			Deployment:             deploymentService(t, s),
-			NodeAllocations:        deploymentStore(s),
-			DeploymentChanges:      strictStandIn{t},
-			DeploymentReset:        strictStandIn{t},
-			ConfigurationDiscovery: strictStandIn{t},
-		}
-	}
 }
 
 // modelProviderDefaults resolves deployment model provider defaults with
@@ -300,4 +275,13 @@ func (s strictStandIn) StartSandboxReset(context.Context, deployment.ResetReques
 func (s strictStandIn) CancelSandboxReset(context.Context, uint64) (deployment.View, error) {
 	s.unexpected("CancelSandboxReset")
 	return deployment.View{}, nil
+}
+
+func (s strictStandIn) Configuration(context.Context) (workspacefs.Configuration, error) {
+	s.unexpected("WorkspaceStorage.Configuration")
+	return workspacefs.Configuration{}, nil
+}
+func (s strictStandIn) Configure(context.Context, workspacefs.Configuration) (workspacefs.Configuration, error) {
+	s.unexpected("WorkspaceStorage.Configure")
+	return workspacefs.Configuration{}, nil
 }

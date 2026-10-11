@@ -17,7 +17,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto/prototest"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgunit"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -77,6 +76,10 @@ func (p *fakeCheckpointProvider) Suspend(_ context.Context, q sandbox.SuspendReq
 	defer p.mu.Unlock()
 	state, ok := p.computes[q.Source.Name]
 	if !ok {
+		if snapshot, found := p.snapshots[q.OperationID]; found && q.ObserveOnly {
+			p.captureObservations++
+			return sandbox.ComputeState{Compute: q.Source, Snapshot: &snapshot, SourceStopped: true, Status: "suspended"}, nil
+		}
 		return sandbox.ComputeState{}, sandbox.ErrNotFound
 	}
 	if state.Compute.ID != q.Source.ID {
@@ -89,7 +92,7 @@ func (p *fakeCheckpointProvider) Suspend(_ context.Context, q sandbox.SuspendReq
 		if _, exists := p.snapshots[q.OperationID]; exists {
 			return sandbox.ComputeState{}, errors.New("capture replayed")
 		}
-		p.snapshots[q.OperationID] = sandbox.SnapshotIdentity{Reference: "snapshot-" + q.OperationID, ID: uuid.NewString(), Digest: "verified", CheckpointID: "checkpoint", CheckpointRoot: "private", OperationID: q.OperationID, SourceGeneration: q.Source.Generation, SourceName: q.Source.Name, SourceID: q.Source.ID}
+		p.snapshots[q.OperationID] = sandbox.SnapshotIdentity{Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}, Reference: "snapshot-" + q.OperationID, ID: uuid.NewString(), Digest: "verified", CheckpointID: "checkpoint", CheckpointRoot: "private", OperationID: q.OperationID, SourceGeneration: q.Source.Generation, SourceName: q.Source.Name, SourceID: q.Source.ID}
 		state.Status = "paused"
 		p.computes[q.Source.Name] = state
 		if p.loseCapture {
@@ -99,6 +102,10 @@ func (p *fakeCheckpointProvider) Suspend(_ context.Context, q sandbox.SuspendReq
 	}
 	if snapshot, exists := p.snapshots[q.OperationID]; exists {
 		state.Snapshot = &snapshot
+		state.SourceStopped = true
+		state.Status = "stopped"
+		p.computeKills++
+		delete(p.computes, q.Source.Name)
 	}
 	return state, nil
 }
@@ -261,6 +268,7 @@ type computeLifecycleFixture struct {
 	worker   *execution.Worker
 	stop     func()
 	key      string
+	node     string
 	policy   execution.RuntimeSuspensionPolicy
 }
 
@@ -280,28 +288,21 @@ func newComputeLifecycleFixture(t *testing.T, maxActive, maxRetained int) *compu
 		}
 		server.Close()
 	})
-	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: uuid.NewString(), policy: execution.RuntimeSuspensionPolicy{IdleTimeout: time.Second, Retention: time.Hour, MaxActive: maxActive, MaxRetained: maxRetained}}
+	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: webDeployment(t, s, "microsandbox"), policy: execution.RuntimeSuspensionPolicy{IdleTimeout: time.Second, Retention: time.Hour}}
+	view, err := deploymentService(t, s).View(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.node = enrollNode(t, s, view, deployment.Capacity{MaxActive: maxActive, MaxRetained: maxRetained}).NodeID
 	f.start()
 	return f
 }
 func (f *computeLifecycleFixture) start() {
 	t := f.t
 	t.Helper()
-	dispatcher := &execution.Dispatcher{Registry: f.provider.registry, ManagedRuntimes: &execution.RuntimeProvider{CoreURL: "http://core.invalid/api/v1", InstallationID: f.key, BackendFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Provider: f.provider, Suspension: &f.policy}}
-	// Closing the previous Worker's connection can return before PostgreSQL drops its advisory lock.
-	deadline := time.Now().Add(2 * time.Second)
-	var w *execution.Worker
-	var err error
-	for {
-		w, err = startWorkerErr(t.Context(), f.store, dispatcher)
-		if err == nil || !errors.Is(err, pgunit.ErrLeaseHeld) || !time.Now().Before(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	w := startWebWorker(t, f.store, f.provider.registry, f.key, f.provider, &f.policy)
+	// The Worker's claim starts a new owner epoch, in which the node reconnects.
+	onlineManagerNode(t, f.store, f.node)
 	var once sync.Once
 	stop := func() {
 		once.Do(func() { ctx, cancel := context.WithCancel(context.Background()); cancel(); _ = w.Run(ctx) })
@@ -356,7 +357,7 @@ func (f *computeLifecycleFixture) phase(tenant, environment, phase string) deplo
 func (f *computeLifecycleFixture) complete(owner deployment.Allocation) string {
 	id := uuid.NewString()
 	f.sql(`INSERT INTO turns(id,session_id,status,completed_at) VALUES($1,$2,'completed',clock_timestamp()-interval '2 minutes')`, id, owner.SessionID)
-	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
+	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes',compute_phase_changed_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
 	return id
 }
 func (f *computeLifecycleFixture) queued(owner deployment.Allocation) string {
@@ -368,12 +369,6 @@ func (f *computeLifecycleFixture) queued(owner deployment.Allocation) string {
 func TestRuntimeComputeLifecycleIdleSuspendAndQueuedSameSessionWake(t *testing.T) {
 	f := newComputeLifecycleFixture(t, 2, 4)
 	tenant, session, env, owner := f.create()
-	for range 3 {
-		f.phase(tenant, env.ID, "running")
-	}
-	if f.provider.captures != 0 {
-		t.Fatal("never-used Session suspended")
-	}
 	completed := f.complete(owner)
 	suspended := f.phase(tenant, env.ID, "suspended")
 	if f.provider.captures != 1 || f.provider.computeKills != 1 || len(f.provider.computes) != 0 || len(f.provider.snapshots) != 1 {
@@ -519,49 +514,5 @@ func TestRuntimeComputeLifecycleSuspendedDeletionAndExpiryCleanup(t *testing.T) 
 				t.Fatal("cleanup retained daemon authority", err)
 			}
 		})
-	}
-}
-
-func TestRuntimeComputeLifecycleCapacityBoundsActiveAndRetained(t *testing.T) {
-	f := newComputeLifecycleFixture(t, 1, 2)
-	tenant, _, env, owner := f.create()
-	tenant2, _, env2 := managedSession(t, f.store)
-	if _, err := f.worker.ProvisionEnvironment(t.Context(), tenant2, env2.ID, f.key); !errors.Is(err, execution.ErrExecutionUnavailable) {
-		t.Fatalf("active capacity ignored: %v", err)
-	}
-	if f.provider.creates != 1 {
-		t.Fatal("capacity rejection allocated compute")
-	}
-	f.complete(owner)
-	f.phase(tenant, env.ID, "suspended")
-	second, err := f.worker.ProvisionEnvironment(t.Context(), tenant2, env2.ID, f.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending := f.queued(owner)
-	for range 4 {
-		f.worker.ReconcileManagedRuntimes(t.Context())
-	}
-	first, err := deploymentStore(f.store).EnvironmentAllocation(t.Context(), deployment.AllocationKey{TenantID: tenant, EnvironmentID: env.ID})
-	if err != nil || first.ComputePhase != "suspended" || f.provider.restores != 0 {
-		t.Fatal("wake exceeded active capacity", err)
-	}
-	f.sql(`UPDATE turns SET status='cancelled',completed_at=clock_timestamp() WHERE id=$1`, pending)
-	f.provider.mu.Lock()
-	b := f.provider.bootstraps[second.ID]
-	f.provider.mu.Unlock()
-	if err := f.provider.connect(t.Context(), b); err != nil {
-		t.Fatal(err)
-	}
-	second = f.phase(tenant2, env2.ID, "running")
-	f.complete(second)
-	f.phase(tenant2, env2.ID, "suspended")
-	// Both retained allocations count even when their source VMs are gone.
-	tenant3, _, env3 := managedSession(t, f.store)
-	if _, err := f.worker.ProvisionEnvironment(t.Context(), tenant3, env3.ID, f.key); !errors.Is(err, execution.ErrExecutionUnavailable) {
-		t.Fatalf("retained capacity ignored: %v", err)
-	}
-	if f.provider.creates != 2 {
-		t.Fatal("retained limit created a third allocation")
 	}
 }

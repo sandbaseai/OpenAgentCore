@@ -7,12 +7,14 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment/placement"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
-func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.CheckpointProvider, owner deployment.Allocation, state runtimeCompute) error {
+func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute) (err error) {
+	defer func() { err = withObservationOwner(owner, err) }()
 	if state.Rollback {
 		if _, err := p.ResumeCompute(ctx, runtimeReference(owner), state.Current); err != nil {
 			return err
@@ -64,15 +66,30 @@ func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.Checkpoint
 	if err != nil {
 		return err
 	}
-	if err := r.deployment.ClearWake(ctx, next, owner.ComputeActivityAt); err != nil {
+	observedActivity := owner.ComputeActivityAt
+	owner = next
+	if err := r.deployment.ClearWake(ctx, next, observedActivity); err != nil {
 		return err
 	}
 	return r.observeConnection(ctx, next)
 }
 
-func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.CheckpointProvider, owner deployment.Allocation, state runtimeCompute) error {
+func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute) error {
 	if err := r.lease.CheckOwnership(ctx); err != nil {
 		return err
+	}
+	if owner.ComputePhase == "suspended" && state.Snapshot != nil && owner.NodeID != "" {
+		next, err := r.deployment.RelocateCleanup(ctx, owner, state.Snapshot.Compatibility)
+		if err != nil {
+			return err
+		}
+		if next.NodeID != r.nodeID {
+			if r.hintDestination != nil {
+				r.hintDestination(next.NodeID)
+			}
+			return nil
+		}
+		owner = next
 	}
 	// An uncommitted artifact is found by its persisted attempt, never a directory
 	// glob. The helper's allocation lock also waits for an earlier unknown call.
@@ -90,8 +107,10 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Checkpo
 			return err
 		}
 	}
-	if err := ignoreComputeAbsent(p.KillCompute(ctx, runtimeReference(owner), state.Current)); err != nil {
-		return err
+	if owner.ComputePhase != "suspended" && owner.ComputePhase != "restoring" {
+		if err := ignoreComputeAbsent(p.KillCompute(ctx, runtimeReference(owner), state.Current)); err != nil {
+			return err
+		}
 	}
 	if state.Snapshot != nil {
 		if err := ignoreComputeAbsent(p.DeleteSnapshot(ctx, runtimeReference(owner), *state.Snapshot)); err != nil {
@@ -104,46 +123,98 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Checkpo
 
 // waitRuntimeAwake is called only for live Environment file operations, before
 // entering the Worker's work queues. Persisted history/artifact reads bypass it.
-func (w *Worker) waitRuntimeAwake(ctx context.Context, environment sessions.Environment) error {
-	if w.runtimes == nil {
-		return nil
-	}
+func (w *Worker) waitRuntimeAwake(ctx context.Context, environment sessions.Environment) (err error) {
+	// A deadline can arrive inside a read as well as between polling ticks.
+	// Both paths report the same unavailable outcome to the live file caller.
+	defer func() {
+		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			err = ErrExecutionUnavailable
+		}
+	}()
 	key := deployment.AllocationKey{TenantID: environment.TenantID, EnvironmentID: environment.ID}
-	owner, err := w.dispatcher.DeploymentReader.EnvironmentAllocation(ctx, key)
-	if errors.Is(err, deployment.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if owner.SessionDeleted || owner.Expired || owner.State == "cleanup_pending" || owner.State == "released" {
-		return ErrExecutionUnavailable
-	}
-	if owner.ComputePhase == "disabled" {
-		return nil
-	}
-	if err := w.dispatcher.Deployment.TouchActivity(ctx, environment.TenantID, environment.ID); err != nil {
-		return err
-	}
-	timer := time.NewTicker(100 * time.Millisecond)
-	defer timer.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	touched := ""
 	for {
-		owner, err = w.dispatcher.DeploymentReader.EnvironmentAllocation(ctx, key)
+		owner, err := w.dispatcher.DeploymentReader.EnvironmentAllocation(ctx, key)
+		if errors.Is(err, deployment.ErrNotFound) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		if owner.SessionDeleted || owner.Expired || owner.State != "running" {
+		if owner.SessionDeleted {
 			return ErrExecutionUnavailable
 		}
-		if owner.ComputePhase == "running" {
-			return nil
+		if owner.State == "released" || owner.State == "cleanup_pending" || owner.Expired {
+			// Public archive and deletion remain terminal. A qualified compute-only
+			// expiry leaves the same Environment live while the old writer is fenced.
+			current, err := w.dispatcher.SessionsReader.GetEnvironment(ctx, environment.TenantID, environment.ID)
+			if err != nil {
+				return err
+			}
+			if current.Status == "failed" || current.Status == "expired" {
+				return ErrExecutionUnavailable
+			}
+			if owner.State == "released" {
+				qualified, err := w.dispatcher.DeploymentReader.RetainedNativeHistory(ctx, key)
+				if err != nil {
+					return err
+				}
+				if !qualified {
+					return ErrExecutionUnavailable
+				}
+				// A qualified released allocation retains the existing wake intent.
+				// The common placement scan orders it with pending Session input.
+				if touched != owner.ID {
+					if err := w.dispatcher.Deployment.TouchActivity(ctx, environment.TenantID, environment.ID); err != nil {
+						return err
+					}
+					touched = owner.ID
+					w.wakeScheduler()
+				}
+				next, err := w.ProvisionEnvironment(ctx, environment.TenantID, environment.ID, owner.ProviderKey)
+				if err != nil && next.ID == "" && !errors.Is(err, placement.ErrNodeUnavailable) && !errors.Is(err, placement.ErrNodesPreparing) && !errors.Is(err, deployment.ErrAllocationConflict) {
+					return err
+				}
+			}
+		} else if owner.State == "running" && owner.CreateSettled && (owner.ComputePhase == "disabled" || owner.ComputePhase == "running") {
+			// Bootstrap completion precedes daemon registration and its first
+			// capability declaration. File work must wait for both receipts.
+			peer, peerErr := w.dispatcher.authorizedPeer(ctx, owner.DeviceID)
+			if peerErr == nil {
+				session, err := w.dispatcher.SessionsReader.GetSession(ctx, environment.TenantID, environment.SessionID)
+				if err != nil {
+					return err
+				}
+				kind, found, known := peer.AgentKindStatus(session.Engine)
+				if known {
+					if !found || !kind.Available {
+						return ErrExecutionUnavailable
+					}
+					return nil
+				}
+			} else if !errors.Is(peerErr, sessions.ErrNotFound) && !errors.Is(peerErr, runtimegateway.ErrDeviceNotRegistered) && !errors.Is(peerErr, runtimegateway.ErrSessionClosed) {
+				return peerErr
+			}
+		} else if owner.State == "running" && touched != owner.ID {
+			if err = w.dispatcher.Deployment.TouchActivity(ctx, environment.TenantID, environment.ID); err != nil {
+				return err
+			}
+			touched = owner.ID
+			if w.runtimes != nil {
+				select {
+				case w.runtimes.hints(owner.NodeID) <- struct{}{}:
+				default:
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ErrExecutionUnavailable
 		case <-w.stopped:
 			return ErrExecutionUnavailable
-		case <-timer.C:
+		case <-ticker.C:
 		}
 	}
 }

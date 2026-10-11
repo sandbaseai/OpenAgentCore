@@ -27,10 +27,10 @@ func TestSandboxDeploymentWorkerActivatesWithoutRestart(t *testing.T) {
 		if err != nil || setup.Provider == "" {
 			return nil, err
 		}
-		return &execution.RuntimeProvider{InstallationID: setup.InstallationID, ProviderKind: setup.Provider, BackendFingerprint: setup.BackendFingerprint, CoreURL: "https://core.example/api/v1", Provider: p}, nil
+		return &execution.RuntimeProvider{InstallationID: setup.InstallationID, ProviderKind: setup.Provider, Mode: setup.Mode, BackendFingerprint: setup.BackendFingerprint, CoreURL: "https://core.example/api/v1", Provider: p}, nil
 	}, func(ctx context.Context, setup deployment.Setup) (execution.PreparedRuntimeDeployment, error) {
 
-		return execution.PreparedRuntimeDeployment{Config: &execution.RuntimeProvider{InstallationID: setup.InstallationID, ProviderKind: setup.Provider, Mode: setup.Mode, AdmissionPaused: setup.AdmissionPaused, CoreURL: "https://core.example/api/v1", BackendFingerprint: setup.BackendFingerprint, Provider: p}}, nil
+		return execution.PreparedRuntimeDeployment{Config: &execution.RuntimeProvider{InstallationID: setup.InstallationID, ProviderKind: setup.Provider, Mode: setup.Mode, CoreURL: "https://core.example/api/v1", BackendFingerprint: setup.BackendFingerprint, Provider: p}}, nil
 	})
 	start := func() (*execution.Worker, func()) {
 		t.Helper()
@@ -50,15 +50,19 @@ func TestSandboxDeploymentWorkerActivatesWithoutRestart(t *testing.T) {
 	if _, err := w.InitializeSandboxDeployment(t.Context(), sandbox.Selection{DeploymentSpec: SandboxDeploymentTestSpec("docker"), Provider: "docker"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateSession(t.Context(), uuid.NewString(), input); !errors.Is(err, placement.ErrNodeUnavailable) {
-		t.Fatal("zero-node deployment admitted Session", err)
+	queued, err := s.CreateSession(t.Context(), uuid.NewString(), input)
+	if err != nil {
+		t.Fatal("zero-node deployment rejected waiting Session", err)
+	}
+	if _, err := w.ProvisionEnvironment(t.Context(), queued.TenantID, queued.Environment.ID, id); !errors.Is(err, placement.ErrNodeUnavailable) {
+		t.Fatal("zero-node deployment provisioned compute", err)
 	}
 	token, err := EnrollmentTestToken(deployments.CreateEnrollment(t.Context(), deployment.Capacity{MaxActive: 4, MaxRetained: 16}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	nodeID := uuid.NewString()
-	if _, err := deployments.Enroll(t.Context(), token, deployment.Enrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("docker").Digest("docker"), NodeID: nodeID, Name: "Remote", Provider: "docker", Credential: strings.Repeat("x", 64), BackendFingerprint: strings.Repeat("b", 64)}); err != nil {
+	if _, err := deployments.Enroll(t.Context(), token, deployment.Enrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("docker").Digest("docker"), NodeID: nodeID, Name: "Remote", Provider: "docker", Credential: strings.Repeat("x", 64), BackendFingerprint: strings.Repeat("b", 64), CoreURL: s.placement.PublicURL()}); err != nil {
 		t.Fatal(err)
 	}
 	connect := func() {
@@ -68,7 +72,7 @@ func TestSandboxDeploymentWorkerActivatesWithoutRestart(t *testing.T) {
 		if err := deployments.ConnectNode(t.Context(), nodeID, connection, epoch); err != nil {
 			t.Fatal(err)
 		}
-		if err := deployments.Heartbeat(t.Context(), nodeID, connection, epoch, deployment.NodeHealth{ProviderReady: true}); err != nil {
+		if err := deployments.Heartbeat(t.Context(), nodeID, connection, epoch, deployment.NodeHealth{ProviderReady: true}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

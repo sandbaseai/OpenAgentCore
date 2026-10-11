@@ -8,7 +8,7 @@ This guide owns how to work in the repository: documentation ownership, the repo
 | --- | --- |
 | Design principles, public API fidelity, settings and data ownership, documentation rules | [AGENTS.md](AGENTS.md) |
 | Protocol code and documents at each component boundary | [Protocol map](AGENTS.md#protocols-at-every-boundary) |
-| Projects, keys, resource isolation, administrator authority, secrets and audit concepts | [Concepts and ownership](docs/concepts.md) |
+| Projects, keys, resource isolation, administrator authority, secrets and audit concepts | [Concepts](docs/concepts.md) |
 | Component responsibilities and Session flow | [Architecture](docs/architecture.md) |
 | Developer setup, repository map and focused checks | [Develop OpenAgentCore](docs/development.md) |
 | API callers, credentials and route inventory | [API index](docs/api/index.md) |
@@ -21,6 +21,7 @@ This guide owns how to work in the repository: documentation ownership, the repo
 | Harness registration, service qualification and acceptance | [Harness onboarding](contracts/agents-api/harness-onboarding.md) |
 | Harness capabilities by placement | [Harness capabilities](contracts/agents-api/harness-capabilities.md) |
 | Harness selection, model providers and native parameters | [Model execution](contracts/agents-api/model-execution.md) |
+| Independent workspace filesystem protocol and adapter behavior | [Workspace filesystem providers](docs/workspace-provider.md) |
 | Provider registration and lifecycle | [Sandbox Provider guide](docs/sandbox-provider.md) |
 | Sandbox deployment, selection and administrative transitions | [Sandbox deployment](contracts/agents-api/sandbox-deployment.md) |
 | Operator node tasks | [Nodes guide](docs/getting-started/nodes.md) |
@@ -111,11 +112,11 @@ The [CI selection policy](docs/maintainers.md#continuous-integration) names affe
 | `OAC_TEST_DATABASE_URL` | A dedicated test database. The full gate fails when it is missing. |
 | `OAC_TEST_OFFICIAL_SDK_PYTHON` | The pinned official SDK interpreter |
 
-The role needs `CREATE DATABASE`: tests of database-wide state, such as the execution lease and the provider identity, create and drop isolated `oac_*_tests` databases. Tests must not bypass the production provider-switch guard.
+The role needs `CREATE DATABASE`: tests of database-wide state, such as the execution lease and the provider identity, create and drop isolated `oac_*_tests` databases. They copy them from a migrated template, the test database's name with `_template` before `_tests`, which stays beside it. Tests must not bypass the production provider-switch guard.
 
 ### Contract and schema rules
 
-- `internal/harnessconfig/builtin/catalog.json` is the single authored public Harness registration list. `make generate-harness-catalog` generates Go configuration/profile registration, client identifiers/names and the reference; `make openapi` derives the matching enums. `make check-harness-catalog` verifies freshness in the full gate. Native configuration rules stay in their adapter declarations; Core qualification and Runtime availability stay separate.
+- `internal/harnessconfig/builtin/catalog.json` is the single authored public Harness registration list. `make generate-harness-catalog` generates Go configuration/profile registration, client identifiers/names and the reference, and projects the model-provider protocol names of `internal/modelprovider/config.go` to the client; `make openapi` derives the matching enums. `make check-harness-catalog` verifies freshness in the full gate. Native configuration rules stay in their adapter declarations; Core qualification and Runtime availability stay separate.
 - `make sqlc-generate` owns only `services/core/internal/db/sqlc` (sqlc v1.29.0). Do not rewrite landed migrations.
 - `make check-runtime-contract` is the focused Core–Runtime contract entry point; see [Contract verification](docs/runtime-protocol.md#contract-verification). It also runs through `check-go` and `check-core`.
 

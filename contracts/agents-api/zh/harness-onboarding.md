@@ -1,7 +1,7 @@
 ---
-title: "将原生 Harness 添加到 OpenAgentCore"
+title: "添加 Harness"
 source: contracts/agents-api/harness-onboarding.md
-source_hash: b74f627ac8d518e0b780f827b8ccc6d268056d33c151b9e9f51866d93faf05d2
+source_hash: 2fe919ec4fd2285cc9e54fed58ef66aebe66d132fd8fb5adc272e26b2e673774
 ---
 
 **Harness** 是一种运行模型和工具循环的原生代理引擎（Codex、Claude Code、MiniMax Code）。**Harness 适配器**将 Runtime 的 Executor 和 Turn 契约转换到该引擎的 SDK 或协议。本文档定义 Runtime–Harness 协议：适配器接口及其生命周期义务、注册、Core 资格认定和验收。[Harness capabilities](harness-capabilities.md) 记录了当前每个 Harness 支持的功能。
@@ -104,7 +104,7 @@ func (s *Session) SubmitFunctionResult(context.Context, proto.FunctionResultPayl
 
 Session 在其已连接的 Runtime 中拥有一个可复用的 Executor；Turn 拥有一次输入执行、其输出流和其取消操作。`agent.ExecutorFactory` 在没有模型输入的情况下准备固定配置，而 `Executor.StartTurn` 创建新的 `agent.Turn`，不替换健康的原生资源。正常完成仅结算 Turn。`Executor.Close` 在空闲过期、Environment 关闭或确认失效时释放原生资源；它既不释放 Environment 分配，也不释放工作区。Core 不保留第二套 Executor 缓存。相同的生命周期适用于托管、自托管和 `none` 放置方式。
 
-**绑定。** Runtime 将其 Executor 记录绑定到 Session、Environment、连接和不可变执行配置。恢复身份和先前 Turn 恢复标志是连续性断言，而不是配置更改。提供的原生身份必须与保留的所有者匹配；当需要现有历史时，恢复绝不能启动新的根。配置冲突属于错误，而不是热切换。连接丢失会让其所有者和句柄退役；旧计时器、输出和取消操作不能影响替代对象。
+**绑定。** Runtime 将其 Executor 记录绑定到 Session、Environment、连接和不可变执行配置。恢复身份和先前 Turn 恢复标志是连续性断言，而不是配置更改。提供的原生身份必须与保留的所有者匹配；当需要现有历史时，恢复绝不能启动新的根。配置冲突属于错误，而不是热切换。普通连接丢失会让其所有者和句柄退役；[计划性挂起](../../../docs/zh/runtime-protocol.md#preparation-and-execution-order) 则保留已结算的空闲所有者，直至精确匹配且已认证的恢复完成。旧计时器、输出和取消操作不能影响替代所有者。
 
 **每 Turn 状态。** 每个 Turn 都会获得全新的包装器、输出通道和回执状态。引导和函数接口均属于该 Turn。原生回调必须在异步工作开始前捕获来源 Turn，因此迟到事件绝不会被归到当前活动的 Turn 上。原生进程、query 或传输连接、固定能力配置和原生 session 身份均属于 Executor。不要重置已完成的 `sync.Once` 值，也不要复用旧 Turn 对象。
 
@@ -149,7 +149,9 @@ MCP、公共函数、延迟函数发现、结构化输出、图像输入、详�
 
 ## 注册适配器 {#register-the-adapter}
 
-注册是静态的，并且需要构建。从 `apps/daemon/internal/agent/<kind>/declaration.go` 导出一个 `agent.Declaration`，然后将其添加到 [`cli/agent_discovery.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/apps/daemon/internal/cli/agent_discovery.go) 的 `harnessDeclarations` 中。声明包含 kind、完整能力描述符、共享模型 `Configuration` 和 `Discover` 函数。发现过程接收 profile 和诊断写入器，负责原生配置和可用性检查，并返回已安装的 `agent.Runtime` 及其描述符和 Executor 工厂。未配置适配器时返回 nil；已配置的前置条件失败时，返回不带工厂的不可用描述符。将版本门控和工厂选择条件保留在适配器内部。
+注册是静态的，并且需要构建。从 `apps/daemon/internal/agent/<kind>/declaration.go` 导出一个 `agent.Declaration`，然后将其添加到 [`cli/agent_discovery.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/apps/daemon/internal/cli/agent_discovery.go) 的 `harnessDeclarations` 中。声明包含 kind、完整能力描述符、共享模型 `Configuration` 和 `Discover` 函数。发现过程接收 profile、诊断写入器以及 Runtime 解析后的 `DiscoveryOptions.StateRoot` 和实例私有的 `DiscoveryOptions.RuntimeRoot`，负责原生配置和可用性检查，并返回已安装的 `agent.Runtime` 及其描述符和 Executor 工厂。未配置适配器时返回 nil；已配置的前置条件失败时，返回不带工厂的不可用描述符。将版本门控和工厂选择条件保留在适配器内部。
+
+Runtime 统一解析[状态目录](../../../docs/zh/configuration.md#runtime-resource-directories)，并显式传给每个适配器。支持保留原生历史的适配器在该根目录下按各自的命名空间布局存放历史，不从环境变量选择回退根目录，也不把历史放进工作区。不支持该能力的适配器将原生状态保持为实例私有，不能仅因收到状态根目录就宣称历史可迁移。私有启动主目录、临时数据及实例私有原生状态使用传入的 `DiscoveryOptions.RuntimeRoot`。设备凭据和连接身份必须留在保留状态之外。仅有状态路径并不意味着计算资源替换后的原生续接已通过资格验证：适配器必须保持原生所有权，在提交模型输入之前拒绝缺失或外来历史，并在另一个写入者挂载前完成原生关闭。
 
 [`cli/agent_registration.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/apps/daemon/internal/cli/agent_registration.go) 遍历已发现的 Runtime，并调用 `agent/harness.go` 中的 `Registry.Register`。它验证发现过程是否保留了声明的 kind，并按以下顺序注册该 Runtime：
 

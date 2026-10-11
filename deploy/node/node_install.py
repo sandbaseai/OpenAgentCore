@@ -279,11 +279,54 @@ def micro_home(installation_id):
     return directory
 
 
-def provider_config(root, args, manifest, runtime_image):
+def checkpoint_root(args):
+    return getattr(args, "checkpoint_root", None) or Path.home() / ".oac/checkpoints" / hashlib.sha256(args.installation_id.encode()).hexdigest()[:12]
+
+
+def prepare_checkpoint_root(directory, *, initialize=True):
+    directory = Path(directory)
+    if not directory.is_absolute() or directory.resolve() != directory:
+        raise InstallError("Checkpoint root must be a canonical absolute directory")
+    if not initialize and not directory.is_dir():
+        raise InstallError("Retained checkpoint root is missing")
+    safe_directory(directory)
+    marker = directory / ".oac-checkpoint-store"
+    if not existing_file(marker):
+        if not initialize:
+            raise InstallError("Retained checkpoint store identity is missing")
+        if any(directory.iterdir()):
+            raise InstallError("Checkpoint root contains unowned state")
+        try:
+            descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(descriptor, "w") as output:
+                output.write(str(uuid.uuid4()) + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+    existing_file(marker)
+    value = marker.read_text()
+    try:
+        identity = uuid.UUID(value.rstrip("\n"))
+    except ValueError:
+        raise InstallError("Invalid checkpoint store identity") from None
+    if identity.int == 0 or value != str(identity) + "\n":
+        raise InstallError("Invalid checkpoint store identity")
+    with marker.open("rb") as source:
+        os.fsync(source.fileno())
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def provider_config(root, args, runtime_image):
     result = {"installation_id": args.installation_id, "provider": args.provider, "core_url": args.core_url + "/api/v1",
               "specification": args.configuration["specification"], "generation": args.configuration["generation"]}
     if args.provider == "docker":
-        result["docker"] = {"host": "unix:///var/run/docker.sock", "image": runtime_image,
+        result["native"] = {"host": "unix:///var/run/docker.sock", "image": runtime_image,
                             "network": "oac-node-" + args.installation_id,
                             "seccomp_file": str(root / "runtime/seccomp.json"), "nested_sandbox": True}
     else:
@@ -291,11 +334,10 @@ def provider_config(root, args, manifest, runtime_image):
         port = endpoint.port or (443 if endpoint.scheme == "https" else 80)
         addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(endpoint.hostname, port, type=socket.SOCK_STREAM)})
         core_rules = [{"action": "allow", "direction": "egress", "destination": address, "protocol": "tcp", "port": str(port)} for address in addresses]
-        result["microsandbox"] = {
+        result["native"] = {
             "helper_path": str(root / MICRO[0]), "runtime_path": str(root / MICRO[1]), "firmware_path": str(root / MICRO[2]),
-            "runtime_sha256": manifest["microsandbox"]["runtime_sha256"], "firmware_sha256": manifest["microsandbox"]["firmware_sha256"],
-            "runtime_home": str(getattr(args, "runtime_home", micro_home(args.installation_id))), "image": manifest["runtime_ref"],
-            **args.configuration["specification"]["resources"],
+            "runtime_home": str(getattr(args, "runtime_home", micro_home(args.installation_id))),
+            "checkpoint_root": str(checkpoint_root(args)),
             "network": {"default_egress": "deny", "default_ingress": "deny", "rules": core_rules + [
                 {"action": "allow", "direction": "egress", "destination": "public"},
                 {"action": "allow", "direction": "egress", "destination": "host", "protocol": "udp", "port": "53"},
@@ -350,8 +392,17 @@ def configure_node(root, args, token):
     args.configuration = node_spec.fetch(args, token, retained, open_request, allow_enrollment=not (root / "registered.json").exists())
     args.provider = args.configuration["provider"]
     preflight(args.provider)
+    if args.provider != "microsandbox" and getattr(args, "checkpoint_root", None) is not None:
+        raise InstallError("Checkpoint root applies only to microsandbox nodes")
     if args.provider == "microsandbox":
+        retained_provider = private_json(root / "provider.json")
+        if retained_provider:
+            retained_root = Path(retained_provider["native"]["checkpoint_root"])
+            if getattr(args, "checkpoint_root", None) not in (None, retained_root):
+                raise InstallError("Retained checkpoint root differs; preserve its state")
+            args.checkpoint_root = retained_root
         runtime_home = micro_home(args.installation_id)
+        prepare_checkpoint_root(checkpoint_root(args), initialize=retained_provider is None)
         safe_directory(runtime_home)
         owner = runtime_home / "oac-installation.json"
         if not owner.exists() and any(runtime_home.iterdir()):
@@ -417,7 +468,7 @@ def register_node(root, args, token, helper_archive=None, *, secret_path):
     runtime_image = prepare_runtime(root, args, manifest)
     # Retain the original network policy when recovering a partial installation.
     if not existing_file(root / "provider.json"):
-        write_once(root / "provider.json", json_text(provider_config(root, args, manifest, runtime_image)))
+        write_once(root / "provider.json", json_text(provider_config(root, args, runtime_image)))
     else:
         node_spec.verify_provider(json.loads((root / "provider.json").read_text()), args.configuration, runtime_image)
     marker = root / "registered.json"
@@ -1092,7 +1143,7 @@ def remove_node_files(root, installation_id):
     Runs as the node's own user, so a link it planted can never reach another user's files."""
     no_links(root)
     provider = private_json(root / "provider.json") or {}
-    image = (provider.get("docker") or {}).get("image")
+    image = (provider.get("native") or {}).get("image")
     runtime_home = micro_home(installation_id)
     if root.exists():
         shutil.rmtree(root)
@@ -1246,6 +1297,7 @@ def main(argv=None):
     parser.add_argument("--core-url", type=origin)
     parser.add_argument("--provider", choices=("docker", "microsandbox"), help="Optional assertion; Core owns provider selection")
     parser.add_argument("--installation-id", required=True)
+    parser.add_argument("--checkpoint-root", type=Path, help="Private microsandbox checkpoint directory, shared across compatible nodes when configured")
     parser.add_argument("--enrollment-token-stdin", action="store_true", help="Read the one-time enrollment token from standard input")
     parser.add_argument("--generation-action", choices=("prepare", "collect"), help=argparse.SUPPRESS)
     parser.add_argument("--generation", type=int, help=argparse.SUPPRESS)
@@ -1274,7 +1326,7 @@ def main(argv=None):
     if os.geteuid() != 0:
         raise InstallError("Node installation and removal require root. Run this command with sudo.")
     if args.uninstall:
-        if args.source_url or args.bundle or args.core_url or args.provider or args.enrollment_token_stdin:
+        if args.source_url or args.bundle or args.core_url or args.provider or args.enrollment_token_stdin or args.checkpoint_root:
             parser.error("--uninstall takes only --installation-id and --force")
         uninstall_system(args)
         return

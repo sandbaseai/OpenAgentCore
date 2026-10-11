@@ -43,12 +43,12 @@ openapi:
 	output=$$(mktemp -d "$$root/core-openapi.XXXXXX"); trap 'rm -rf "$$output"' EXIT; \
 	python3 scripts/generate-public-api.py $(OPENAPI_FLAGS) --swag-roots "$$output/roots.go"; \
 	$(SWAG) init \
-	    -g cmd/server/main.go --dir "./services/core,./contracts/agents-api/v1,$$output" \
+	    -g cmd/server/main.go --dir "./services/core,./contracts/agents-api/v1,./internal/modelprovider,$$output" \
 	    --output "$$output" \
 	    --outputTypes yaml --parseInternal; \
 	python3 scripts/patch-agents-openapi.py "$$output/swagger.yaml"; \
-	go run ./scripts/openapi-split $(OPENAPI_FLAGS) "$$output/swagger.yaml" "$$output/extensions.json" contracts/agents-api/core.openapi.yaml contracts/agents-api/runtime.openapi.yaml; \
-	python3 scripts/generate-public-api.py $(OPENAPI_FLAGS) --extensions "$$output/extensions.json"
+	go run ./scripts/openapi-split $(OPENAPI_FLAGS) "$$output/swagger.yaml" "$$output/extensions.json" "$$output/core.json" contracts/agents-api/core.openapi.yaml contracts/agents-api/runtime.openapi.yaml; \
+	python3 scripts/generate-public-api.py $(OPENAPI_FLAGS) --extensions "$$output/extensions.json" --core "$$output/core.json"
 
 check-sqlc:
 	python3 scripts/check-sqlc.py
@@ -166,23 +166,20 @@ build-mcode-runtime:
 
 .PHONY: build-microsandbox-provider check-microsandbox-provider
 build-microsandbox-provider:
-	@test "$$(go env GOOS)" = linux || { echo 'The microsandbox provider helper requires Linux' >&2; exit 1; }
-	@set -e; output="$${OAC_DEV_HOME:-$$HOME/.oac}/build/microsandbox-provider"; \
-	[[ "$$output" == /* ]] || { echo 'Provider output directory must be absolute' >&2; exit 1; }; \
-	mkdir -p "$$output"; \
-	cd services/core/tools/microsandbox-provider; \
-	GOWORK=off CGO_ENABLED=1 go build -mod=readonly -trimpath -o "$$output/oac-microsandbox-provider" .
+	python3 scripts/build-microsandbox-provider.py build "$${OAC_DEV_HOME:-$$HOME/.oac}/build/microsandbox-provider/oac-microsandbox-provider"
 
 check-microsandbox-provider:
+	python3 scripts/build-microsandbox-provider.test.py
 	go test -mod=readonly ./services/core/internal/sandbox/microsandbox/... -count=1
 	@if [[ "$$(go env GOOS)" == linux ]]; then \
-	    cd services/core/tools/microsandbox-provider && GOWORK=off CGO_ENABLED=1 go test -mod=readonly ./... -count=1; \
+	    python3 scripts/build-microsandbox-provider.py test; \
 	else \
 	    printf 'Skipping the Linux-only microsandbox SDK helper tests; the full Linux gate is required before release.\n'; \
 	fi
 
 .PHONY: check-distribution build-core-distribution
 check-distribution:
+	PYTHONDONTWRITEBYTECODE=1 python3 services/core/deploy/runtime_profile_test.py
 	node --test scripts/build-native-catalog.test.mjs
 	go test ./services/web ./services/core/cmd/oac -count=1
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/node -p 'test_*.py'

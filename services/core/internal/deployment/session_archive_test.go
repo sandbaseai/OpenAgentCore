@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"slices"
 	"strings"
 	"testing"
@@ -14,14 +15,13 @@ import (
 )
 
 func TestCheckArchiveDeployment(t *testing.T) {
-	managed := Record{InstallationID: "installation", WebManaged: true, Provider: "docker", Generation: 4}
+	managed := Record{InstallationID: "installation", Provider: "docker", Generation: 4}
 	for name, test := range map[string]struct {
 		change func(*Record)
 		want   error
 	}{
 		"current":          {func(*Record) {}, nil},
-		"stale generation": {func(d *Record) { d.Generation = 5; d.WebManaged = false }, &GenerationStaleError{CurrentGeneration: 5}},
-		"process managed":  {func(d *Record) { d.WebManaged = false; d.Provider = "" }, ErrConflict},
+		"stale generation": {func(d *Record) { d.Generation = 5; d.InstallationID = "" }, &GenerationStaleError{CurrentGeneration: 5}},
 		"no installation":  {func(d *Record) { d.InstallationID = "" }, ErrConflict},
 		"no provider":      {func(d *Record) { d.Provider = "" }, ErrNotConfigured},
 	} {
@@ -52,9 +52,9 @@ func TestCheckArchiveReset(t *testing.T) {
 		reset *ResetState
 		want  error
 	}{
-		"running reset":   {&ResetState{Clear: ResetAuto, RequestedAt: requested}, nil},
+		"running reset":   {&ResetState{Clear: string(ResetAuto), RequestedAt: requested}, nil},
 		"no reset":        {nil, ErrConflict},
-		"another request": {&ResetState{Clear: ResetAuto, RequestedAt: requested.Add(time.Second)}, ErrConflict},
+		"another request": {&ResetState{Clear: string(ResetAuto), RequestedAt: requested.Add(time.Second)}, ErrConflict},
 	} {
 		if err := checkArchiveReset(Record{Reset: test.reset}, requested); !errors.Is(err, test.want) {
 			t.Errorf("%s: got %v, want %v", name, err, test.want)
@@ -217,7 +217,7 @@ func archiveOperations(t *testing.T, tx *fakeArchiveTx, locked sessions.LockedSe
 		}
 		return apply(ctx, locked, tx)
 	}}
-	operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage)
+	operations, err := NewExecutionOperations(newService(t, &fakeStorage{t: t}, &fakeReader{t: t}, testPublicURL), storage, engine.Catalog{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func archiveOperations(t *testing.T, tx *fakeArchiveTx, locked sessions.LockedSe
 }
 
 func TestArchiveSession(t *testing.T) {
-	managed := Record{InstallationID: "installation", WebManaged: true, Provider: "docker", Generation: 1}
+	managed := Record{InstallationID: "installation", Provider: "docker", Generation: 1}
 	hosted := &sessions.Environment{ID: "environment", Status: "connected", Configuration: json.RawMessage(`{"type":"openai_hosted"}`)}
 	expired := &sessions.Environment{ID: "environment", Status: "expired", Configuration: hosted.Configuration}
 	live := &Allocation{ID: "allocation", DeviceID: "device", ProviderKey: "installation", State: "running"}
@@ -251,7 +251,7 @@ func TestArchiveSession(t *testing.T) {
 			join(head, expire, []string{"RequestArchiveCleanup device allocation", "RecordArchiveAudit", "LoadArchive"})},
 		{"no allocation", sessions.LockedSession{}, hosted, nil, nil, join(head, expire, []string{"ReleasePlacement", "RecordArchiveAudit", "LoadArchive"})},
 		{"released allocation", sessions.LockedSession{}, hosted, &Allocation{ID: "allocation", ProviderKey: "previous", State: "released"}, nil,
-			join(head, expire, []string{"RecordArchiveAudit", "LoadArchive"})},
+			join(head, expire, []string{"ReleasePlacement", "RecordArchiveAudit", "LoadArchive"})},
 		{"ended Environment", sessions.LockedSession{}, expired, live, nil,
 			join(head, settle, []string{"RequestArchiveCleanup device allocation", "RecordArchiveAudit", "LoadArchive"})},
 		{"allocation of another installation", sessions.LockedSession{}, hosted, &Allocation{ID: "allocation", ProviderKey: "previous", State: "running"}, ErrConflict, head},
@@ -280,8 +280,8 @@ func TestArchiveSession(t *testing.T) {
 
 func TestArchiveResetSession(t *testing.T) {
 	requested := time.Unix(100, 0)
-	resetting := func(clear string) Record {
-		return Record{InstallationID: "installation", WebManaged: true, Provider: "docker", Generation: 1, Reset: &ResetState{Clear: clear, RequestedAt: requested}}
+	resetting := func(clear ResetMode) Record {
+		return Record{InstallationID: "installation", Provider: "docker", Generation: 1, Reset: &ResetState{Clear: string(clear), RequestedAt: requested}}
 	}
 	hosted := &sessions.Environment{ID: "environment", Status: "connected", Configuration: json.RawMessage(`{"type":"openai_hosted"}`)}
 	failed := &sessions.Environment{ID: "environment", Status: "failed", Configuration: hosted.Configuration}

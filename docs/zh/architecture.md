@@ -1,10 +1,12 @@
 ---
 title: "架构"
 source: docs/architecture.md
-source_hash: b8a00701caa83314115f28c3fa754291e8eaf734e88de8e0012e45d8b1893338
+source_hash: 061593c891cc4dd8b9077311bec8b8b93051c1cba9e387fb7db40a7ffc3a3de5
 ---
 
-OpenAgentCore 将编排、计算资源和原生执行分开。Core 负责 API 和持久状态。Sandbox Provider 管理计算资源。Runtime daemon 准备 Environment 并运行选定的 Harness；Harness 的原生 SDK 或协议负责模型与工具循环。
+OpenAgentCore 是 Agent 运行平台，通过可替换的协议实现统一组织 Harness、模型、工具、Session 和执行环境。它将编排、计算资源和原生执行分开。Core 负责 API 和持久状态。Sandbox Provider 管理计算资源。独立工作区文件系统 adapter 通过单独的协议管理 Environment 持久存储。Runtime daemon 准备 Environment 并运行选定的 Harness；Harness 的原生 SDK 或协议负责模型与工具循环。
+
+推荐的部署选择是 E2B 托管计算，以及 microsandbox 配合独立持久化工作区存储的自部署方案。两者使用相同的 Core 编排和能力检查。Docker 仍是可用的 Provider。计算和文件系统 adapter 声明其支持的组合；部署选择不会引入独立的 Agent 执行流程。具体契约和支持能力见 [Sandbox Provider](./sandbox-provider.md) 和[工作区文件系统 Provider](./workspace-provider.md)。
 
 ```mermaid
 flowchart TB
@@ -34,13 +36,14 @@ flowchart TB
 | --- | --- | --- |
 | Core | 认证调用方，解析并冻结配置，调度 Turn，处理取消和待处理交互，将资源与执行事实持久化到 PostgreSQL | [Core 服务](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md) |
 | Sandbox Provider | 创建、观察、续期和回收计算资源；提供 Runtime 启动输入 | [Sandbox Provider](sandbox-provider.md)、[Runtime 引导](runtime-bootstrap.md) |
+| Workspace filesystem adapter | 创建、观察和删除 Environment 持久存储；验证并解析计算资源所需的挂载 | [工作区文件系统 Provider](workspace-provider.md) |
 | Sandbox node | 运行 Docker 或 microsandbox 主机，协调分配给它的 generation 与 allocation | [Sandbox node 协议](../../contracts/agents-api/zh/node-generation-protocol.md) |
 | Runtime | 准备工作区和能力，管理 Session Executor，执行 Turn 并报告事件与回执 | [Core–Runtime 协议](runtime-protocol.md) |
 | Harness adapter | 验证原生配置，调用上游 SDK 或协议，转换事件并确认原生清理完成 | [Harness 接入](../../contracts/agents-api/zh/harness-onboarding.md) |
 | Model provider | 提供 Harness 选定的模型协议 | [模型执行](../../contracts/agents-api/zh/model-execution.md) |
 | Web | 让管理员通过服务端 Core API 连接配置与观察安装实例 | [控制台服务端](web/console-server.md) |
 
-[仓库地图](development.md#repository-map) 标出这些组件的位置。[概念与所有权](concepts.md) 解释 Project 边界、管理员权限和工具隔离。
+[仓库地图](development.md#repository-map) 标出这些组件的位置。[概念](concepts.md) 解释 Project 边界、管理员权限和工具隔离。
 
 ## Session 的完整流程 {#a-session-end-to-end}
 
@@ -48,4 +51,4 @@ flowchart TB
 
 daemon 连接后，Core 检查可用 Harness 和请求的能力。Runtime 准备工作区 Environment 及其能力快照，然后准备或复用 Session Executor。每个 Turn 通过原生 Harness 运行。Core 持久化输出、工具交互和回执，供应用读取和接收事件。完成或取消使 Turn 结算；健康的 Executor 可以在同一 Environment 中执行下一个 Turn。
 
-执行与计算资源拥有独立生命周期：关闭 Executor 后，其 allocation 和工作区保留到 Provider 回收为止。准备、连接和执行就绪具有不同状态。[Environment 契约](../../contracts/agents-api/zh/environments.md) 负责准备规则，[Core–Runtime 协议](runtime-protocol.md) 负责顺序、回执和故障处理。
+执行、计算资源和独立工作区存储拥有不同的生命周期。关闭 Executor 本身不会删除存储。[工作区文件系统契约](workspace-provider.md#lifetime-and-filesystem-scope) 负责持久存储保留及显式删除规则；计算快照到期不授权回收工作区存储。准备、连接和执行就绪具有不同状态。[Environment 契约](../../contracts/agents-api/zh/environments.md) 负责准备规则，[Core–Runtime 协议](runtime-protocol.md) 负责顺序、回执和故障处理。

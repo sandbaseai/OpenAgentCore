@@ -5,9 +5,11 @@ import (
 	"errors"
 )
 
-// MarshalJSON renders the wire shape. Messages always carry content and a
-// nullable phase, function results a nullable output and error, and web search
-// a nullable action. Other variants use the stored encoding.
+// MarshalJSON renders the wire shape, which is also the stored encoding.
+// Messages always carry content and a nullable phase, function results a
+// nullable output and error, commands a nullable cwd, output, exit code and
+// duration, and web search a nullable action. Coordination and reasoning
+// variants keep their required fields and nulls.
 func (i Item) MarshalJSON() ([]byte, error) {
 	type wire Item
 	switch i.Type {
@@ -25,6 +27,14 @@ func (i Item) MarshalJSON() ([]byte, error) {
 			Phase   *string       `json:"phase"`
 			Content []ItemContent `json:"content"`
 		}{wire(i), phase, content})
+	case "command_execution":
+		return json.Marshal(struct {
+			wire
+			Cwd        *string `json:"cwd"`
+			Output     any     `json:"output"`
+			ExitCode   *int64  `json:"exit_code"`
+			DurationMS *int64  `json:"duration_ms"`
+		}{wire(i), i.Cwd, i.Output, i.ExitCode, i.DurationMS})
 	case "web_search_call":
 		return json.Marshal(struct {
 			wire
@@ -36,23 +46,6 @@ func (i Item) MarshalJSON() ([]byte, error) {
 			Output any `json:"output"`
 			Error  any `json:"error"`
 		}{wire(i), i.Output, i.Error})
-	}
-	return i.MarshalStored()
-}
-
-// MarshalStored encodes a persisted Item payload. It keeps the encoding used
-// before the wire nulls above, so stored payloads and the byte comparison of
-// replayed child Items do not change. Coordination variants keep their
-// required fields and nulls in both forms.
-func (i Item) MarshalStored() ([]byte, error) {
-	switch i.Type {
-	case "web_search_call":
-		type wire Item
-		type storedAction WebSearchAction
-		return json.Marshal(struct {
-			wire
-			Action *storedAction `json:"action,omitempty"`
-		}{wire(i), (*storedAction)(i.Action)})
 	case "create_subagent_call", "send_subagent_input_call", "agent_message":
 		content, err := coordinationContent(i.Content)
 		if err != nil {
@@ -84,10 +77,8 @@ func (i Item) MarshalStored() ([]byte, error) {
 			summary = []SummaryText{}
 		}
 		return json.Marshal(ReasoningItem{ID: i.ID, TurnID: i.TurnID, Type: i.Type, Status: status, Summary: summary})
-	default:
-		type wire Item
-		return json.Marshal(wire(i))
 	}
+	return json.Marshal(wire(i))
 }
 
 func coordinationContent(parts []ItemContent) ([]AgentContent, error) {
