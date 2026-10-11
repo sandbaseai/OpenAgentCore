@@ -31,18 +31,18 @@ func TestCreateObservationsRejectUnsafeDiagnostics(t *testing.T) {
 		valid + `{}`,
 		strings.Repeat(" ", 256) + valid,
 	} {
-		if got := parseCreateObservations([]byte(bad)); len(got) != 0 {
+		if got := parseStageObservations([]byte(bad), "e2b_create_stage"); len(got) != 0 {
 			t.Fatalf("unsafe diagnostic accepted: %q", bad)
 		}
 	}
-	got := parseCreateObservations([]byte("private SDK diagnostic\n" + valid + "\n" + valid))
+	got := parseStageObservations([]byte("private SDK diagnostic\n"+valid+"\n"+valid), "e2b_create_stage")
 	if len(got) != 1 || *got[0].DurationUS != 1250 || !*got[0].Completed {
 		t.Fatalf("valid timing lost or duplicated: %+v", got)
 	}
 }
 
 func TestCreateObservationsRetainFailedStage(t *testing.T) {
-	got := parseCreateObservations([]byte(`{"event":"e2b_create_stage","stage":"bootstrap_run","duration_us":0,"completed":false}`))
+	got := parseStageObservations([]byte(`{"event":"e2b_create_stage","stage":"bootstrap_run","duration_us":0,"completed":false}`), "e2b_create_stage")
 	if len(got) != 1 || *got[0].Completed {
 		t.Fatal("failed stage discarded")
 	}
@@ -51,7 +51,7 @@ func TestCreateObservationsRetainFailedStage(t *testing.T) {
 func TestCreateObservationsAcceptBoundedGuestStages(t *testing.T) {
 	for _, stage := range []string{"bootstrap_claim", "bootstrap_protection", "bootstrap_layout", "bootstrap_credentials", "bootstrap_spawn", "bootstrap_receipt"} {
 		raw := `{"event":"e2b_create_stage","stage":"` + stage + `","duration_us":42,"completed":false}`
-		got := parseCreateObservations([]byte(raw + "\n" + raw))
+		got := parseStageObservations([]byte(raw+"\n"+raw), "e2b_create_stage")
 		if len(got) != 1 || got[0].Stage != stage || *got[0].Completed || *got[0].DurationUS != 42 {
 			t.Fatal(got)
 		}
@@ -84,7 +84,7 @@ func TestProcessCreateObservationsReachLogger(t *testing.T) {
 			defer slog.SetDefault(previous)
 			_, err := (&ProcessCaller{}).Call(context.Background(), q)
 			if overflow {
-				if err == nil || logs.Len() != 0 {
+				if err == nil || strings.Contains(logs.String(), `"msg":"e2b create stage"`) || strings.Contains(logs.String(), `"msg":"e2b helper stage"`) || !strings.Contains(logs.String(), `"status":"error"`) {
 					t.Fatal("stderr overflow changed failure semantics or exported truncated diagnostics")
 				}
 				return
@@ -93,7 +93,7 @@ func TestProcessCreateObservationsReachLogger(t *testing.T) {
 				t.Fatal(err)
 			}
 			var record map[string]any
-			if json.Unmarshal(logs.Bytes(), &record) != nil || record["allocation_id"] != ref.AllocationID || record["environment_id"] != ref.EnvironmentID || record["duration_ms"] != 1.25 || record["msg"] != "e2b create stage" {
+			if json.Unmarshal(bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))[0], &record) != nil || record["allocation_id"] != ref.AllocationID || record["environment_id"] != ref.EnvironmentID || record["duration_ms"] != 1.25 || record["msg"] != "e2b create stage" {
 				t.Fatalf("stage did not reach correlated logger: %s", logs.Bytes())
 			}
 			if strings.Contains(logs.String(), "private") {

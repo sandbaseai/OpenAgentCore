@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
@@ -19,10 +22,24 @@ var errHelperNotStarted = errors.New("helper did not start")
 
 type ProcessCaller struct{ Fence *sandbox.CallFence }
 
-func (p *ProcessCaller) Call(ctx context.Context, q Request) (Response, error) {
+func (p *ProcessCaller) Call(ctx context.Context, q Request) (response Response, callErr error) {
 	if q.Validate() != nil {
 		return Response{}, errHelperNotStarted
 	}
+	started := time.Now()
+	helperStarted := false
+	defer func() {
+		status := "ok"
+		switch {
+		case errors.Is(callErr, context.Canceled):
+			status = "cancelled"
+		case errors.Is(callErr, context.DeadlineExceeded):
+			status = "timeout"
+		case callErr != nil || response.ErrorCode != "":
+			status = "error"
+		}
+		obslog.Ctx(ctx).Info("e2b helper call", "operation", q.Operation, "duration_ms", float64(time.Since(started).Microseconds())/1000, "status", status, "helper_started", helperStarted, "environment_id", q.Reference.EnvironmentID, "allocation_id", q.Reference.AllocationID)
+	}()
 	data, err := json.Marshal(q)
 	if err != nil || len(data) > MaxRequestBytes {
 		return Response{}, errHelperNotStarted
@@ -44,6 +61,7 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (Response, error) {
 	if cmd.Start() != nil {
 		return Response{}, errHelperNotStarted
 	}
+	helperStarted = true
 	finished := func() {}
 	if p.Fence != nil {
 		finished = p.Fence.ChildStarted()
@@ -55,7 +73,7 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (Response, error) {
 		return Response{}, ctx.Err()
 	case err = <-done:
 		if !stderr.exceeded {
-			observeHelperCreate(ctx, q, stderr.Bytes())
+			observeHelperStages(ctx, q, stderr.Bytes())
 		}
 		if err != nil || stdout.exceeded || stderr.exceeded {
 			return Response{}, errors.New("helper result unconfirmed")

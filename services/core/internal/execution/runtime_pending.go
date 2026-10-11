@@ -12,8 +12,19 @@ import (
 
 // provisionPending shares the existing lifecycle owner and serial gate. This
 // also recovers idle Session creation interrupted after its database commit.
-func (r *runtimeLifecycle) provisionPending(ctx context.Context) error {
+func (r *runtimeLifecycle) provisionPending(ctx context.Context) (pendingErr error) {
+	started := time.Now()
+	attempted := 0
+	var candidateCount any
+	defer func() {
+		observeExecutionStage(ctx, "runtime_pending", started, pendingErr, "node_id", r.nodeID, "candidate_count", candidateCount, "attempted_count", attempted)
+	}()
+	inventoryAt := time.Now()
 	rows, err := r.reader.UnallocatedEnvironments(ctx, r.nodeID, r.pendingCursor)
+	if err == nil {
+		candidateCount = len(rows)
+	}
+	observeExecutionStage(ctx, "runtime_pending_inventory", inventoryAt, err, "node_id", r.nodeID, "candidate_count", candidateCount)
 	if err != nil {
 		return err
 	}
@@ -22,6 +33,7 @@ func (r *runtimeLifecycle) provisionPending(ctx context.Context) error {
 		return nil
 	}
 	for _, environment := range rows {
+		attempted++
 		r.pendingCursor = environment.ID
 		provider := r.config.InstallationID
 		operation, cancel := context.WithTimeout(ctx, 30*time.Second)

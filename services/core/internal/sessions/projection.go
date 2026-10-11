@@ -9,6 +9,7 @@ import (
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/items"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 )
 
 // Source is an observation the Session projects: an entry of a Turn's journal,
@@ -114,5 +115,5 @@ func projectItem(ctx context.Context, tx ItemProjectionTx, source Source, update
 	if err != nil {
 		return err
 	}
-	return tx.AppendChanges(ctx, ItemChanges(change, index)...)
+	return tx.AppendChanges(textobs.Source(ctx, source.Turn, source.Sequence), ItemChanges(change, index)...)
 }
