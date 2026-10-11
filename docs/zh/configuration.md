@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: 1b65cd5670b441953c899b5ca1753294ed3d7bee9c4f4de6e7f0a1bfd419b640
+source_hash: 9b8fbf0b986794b5f56474668dfdee67fb39b28708c3ca0a0290b60a7dec496a
 ---
 
 Core 安装的每项设置都恰好只有一个归属位置，分属以下三类：
@@ -78,6 +78,20 @@ Web 的 **System** 页面显示该安装的地址、默认模型和沙箱配置�
 | `insecure` | `false` | `http` 端点必须设为 `true`，`https` 端点不允许设为 `true` |
 | `headers` | 无 | 发往端点的请求标头。`Host`、`Content-Length`、`Content-Type` 和 `Content-Encoding` 为保留标头 |
 
+### Runtime 资源目录 {#runtime-resource-directories}
+
+Runtime 在发现 Harness 适配器之前解析资源目录。`<RuntimeHome>` 是由 `OAC_RUNTIME_HOME` 选择的 Runtime 主目录。`OAC_RUNTIME_STATE_DIRECTORY` 仅在未设置时采用默认值；显式空值、相对路径或非规范路径会被拒绝。目录设置没有其他文件或环境变量回退来源。
+
+| Runtime 进程设置 | 默认值 | 打包的 Linux 镜像 |
+| --- | --- | --- |
+| `OAC_RUNTIME_INITIALIZATION_DIRECTORY` | `<RuntimeHome>/initialization` | `/environment/initialization` |
+| `OAC_RUNTIME_PACKAGE_DIRECTORY` | `<RuntimeHome>/packages` | `/environment/packages` |
+| `OAC_RUNTIME_STATE_DIRECTORY` | `<RuntimeHome>` | `/environment/runtime-state` |
+
+状态目录包含保留的原生 Harness 历史和能力安装完成记录，与声明的工作区目录分开。选择独立状态目录不会将 Runtime 设备凭据或连接身份移出 Runtime 主目录中的实例私有路径；不得随原生历史复制这些数据。[Harness 接入指南](../../contracts/agents-api/zh/harness-onboarding.md#register-the-adapter)定义适配器边界，[Environment 准备](../../contracts/agents-api/zh/environments.md)负责初始化和包的行为。
+
+将状态放在独立文件系统上，可以在替换计算资源时保留这些文件。原生续接仍要求 Harness 已通过资格验证、所有权匹配，并确认前一个写入者已停止。这不保留进程内存或计算资源根磁盘上的任意文件。
+
 ## 运行时设置：Web {#runtime-settings-web}
 
 运行时设置存储在 Core 的数据库中。请在 Web 中修改；脚本使用同一个 Core API 和 Core 密钥。
@@ -99,7 +113,7 @@ Web 的 **System** 页面显示该安装的地址、默认模型和沙箱配置�
 
 ### 独立工作区存储 {#independent-workspace-storage}
 
-首个支持的独立文件系统组合是 microsandbox 与[内核 NFS 适配器](./workspace-provider.md#kernel-nfs-adapter)。启动服务前，在 Linux Core 主机和所有参与节点上将同一个 NFSv4.2 导出挂载到相同的绝对路径，例如 `/srv/oac-workspaces`。运维人员负责导出、挂载可用性和服务启动顺序。使用带有 `root_squash` 的受信任客户端 AUTH_SYS 导出；不要启用 `no_root_squash` 或放宽权限来使检查通过。按照适配器的[所有权要求](./workspace-provider.md#kernel-nfs-adapter)准备命名空间和服务身份。
+首个支持的独立文件系统组合是 microsandbox 与[内核 NFS 适配器](./workspace-provider.md#kernel-nfs-adapter)。新安装应先准备存储和服务账户，再向 Core 暴露挂载、选择存储、配置 microsandbox，最后注册节点。启动服务前，在 Linux Core 主机和所有参与节点上将同一个 NFSv4.2 导出挂载到相同的绝对路径，例如 `/srv/oac-workspaces`。运维人员负责导出、挂载可用性和服务启动顺序。使用带有 `root_squash` 的受信任客户端 AUTH_SYS 导出；不要启用 `no_root_squash` 或放宽权限来使检查通过。按照适配器的[所有权要求](./workspace-provider.md#kernel-nfs-adapter)准备命名空间和服务身份。
 
 Core 的 Compose 服务已使用 UID 65532 运行。添加节点前，创建同 UID 的 `oac-node`，主目录为 `/var/lib/oac-node`，使用 nologin shell 和非零主组。附加组只能包含其主组、`docker` 和 `kvm`；已有主目录必须属于该账户。安装器会接管此账户。如果没有预创建账户，安装器分配的系统 UID 不一定与 Core 一致。注册前应通过主机管理流程解决已有 UID 或账户冲突；修改运行中账户的 UID 不属于存储配置步骤。
 
@@ -117,7 +131,7 @@ services:
           create_host_path: false
 ```
 
-按[管理 API](../../contracts/agents-api/zh/admin-api.md#workspace-storage)说明，使用 Core key 调用 `PUT /core/v1/workspace-storage` 选择存储。分别为不可变配置 `id` 和命名空间标记生成规范 UUID，然后使用实际值提交以下结构：
+按[管理 API](../../contracts/agents-api/zh/admin-api.md#workspace-storage)说明，使用 Core key 调用 `PUT /core/v1/workspace-storage` 选择存储。首次设置时，分别为不可变配置 `id` 和命名空间标记生成规范 UUID，然后使用实际值提交以下结构。恢复时保留已有标识。选择操作会在 Core 中运行适配器的可用性、所有权和 xattr 检查；它不证明每个节点均能解析该挂载：
 
 ```json
 {
@@ -131,7 +145,7 @@ services:
 }
 ```
 
-随后通过[沙箱部署 API](../../contracts/agents-api/zh/sandbox-deployment.md#routes)创建或更新 microsandbox 部署，将 `resources.environment_disk_mib` 设为 `0`，并保留所需计算资源、Runtime 和 Provider 配置。正数表示请求配额，本适配器不实施此配额，因此会拒绝。部署的工作区要求和每个 Session 的挂载凭据均从已选数据库配置派生；不要向部署添加文件系统字段，也不要在节点文件中添加第二份存储配置。Web 没有工作区存储编辑器。
+随后通过[沙箱部署 API](../../contracts/agents-api/zh/sandbox-deployment.md#routes)创建或更新 microsandbox 部署，将 `resources.environment_disk_mib` 设为 `0`，并保留所需计算资源、Runtime 和 Provider 配置。正数表示请求配额，本适配器不实施此配额，因此会拒绝。部署的工作区要求和每个 Session 的挂载凭据均从已选数据库配置派生；不要向部署添加文件系统字段，也不要在节点文件中添加第二份存储配置。Web 没有工作区存储编辑器。选择文件系统和部署后，通过 **Nodes → Add node** 注册已准备的主机。计算资源已连接且就绪并不足以证明外部文件系统具备资格；准入应用流量前，通过每个参与节点验证实际 Session 创建和访问。将独立命名空间纳入[停止写入后的备份恢复流程](./getting-started/operations.md#back-up)。
 
 ### 节点容量 {#node-capacity}
 
@@ -203,7 +217,7 @@ Core 读取进程环境。Compose 将 `.env` 插值到环境中，并把机密�
 | `OAC_CREDENTIAL_KEY_FILE` | 必填。`/run/oac/credential.key`：Base64 编码的 32 字节随机密钥。Core 用它加密存储的凭据 |
 | `OAC_CORE_KEY_DIGESTS_FILE` | 必填。`/run/oac/core-key-digests.json`：一个包含 Core 密钥 SHA-256 的 JSON 数组 |
 | `OAC_INSTALLATION_ID_FILE` | 必填。`/run/oac/installation.id`：安装 ID，采用规范 UUID 格式。如果 ID 与数据库记录的 ID 不一致，Core 会拒绝它 |
-| `OAC_EXECUTION_CONCURRENCY`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
+| `OAC_SANDBOX_MAX_ACTIVE`、`OAC_SANDBOX_MAX_RETAINED`、`OAC_EXECUTION_CONCURRENCY`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
 | `OAC_PROVIDER_ROOT` | 适配器构件的绝对根目录。Core 镜像设置为 `/opt/oac`。每个适配器都拥有此根目录下的辅助路径。当其中的 `native-installers/` 目录包含 `catalog.json` 时，Core 在核对该目录清单与自身发行版后提供自托管守护进程安装程序。适配器状态位于 `/state`，即数据卷的 [`state/`](#compose-installations) |
 
 Core 会记录所加载的历史文件路径，但绝不记录环境变量的值或文件内容。

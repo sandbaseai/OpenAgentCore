@@ -15,6 +15,7 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto/prototest"
+	db "github.com/MiniMax-AI/OpenAgentCore/services/core/internal/db/sqlc"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
@@ -93,7 +94,7 @@ func (p *fakeSuspensionProvider) Suspend(_ context.Context, q sandbox.SuspendReq
 		if _, exists := p.snapshots[q.OperationID]; exists {
 			return sandbox.ComputeState{}, errors.New("capture replayed")
 		}
-		p.snapshots[q.OperationID] = sandbox.RetainedState{Reference: "snapshot-" + q.OperationID, ID: uuid.NewString(), Data: "verified-native-state", OperationID: q.OperationID, SourceGeneration: q.Source.Generation, SourceName: q.Source.Name, SourceID: q.Source.ID}
+		p.snapshots[q.OperationID] = sandbox.RetainedState{Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}, Reference: "snapshot-" + q.OperationID, ID: uuid.NewString(), Data: "verified-native-state", OperationID: q.OperationID, SourceGeneration: q.Source.Generation, SourceName: q.Source.Name, SourceID: q.Source.ID}
 		state.Status = "paused"
 		p.computes[q.Source.Name] = state
 		if p.loseCapture {
@@ -371,7 +372,7 @@ func (f *computeLifecycleFixture) phase(tenant, environment, phase string) deplo
 func (f *computeLifecycleFixture) complete(owner deployment.Allocation) string {
 	id := uuid.NewString()
 	f.sql(`INSERT INTO turns(id,session_id,status,completed_at) VALUES($1,$2,'completed',clock_timestamp()-interval '2 minutes')`, id, owner.SessionID)
-	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
+	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes',compute_phase_changed_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
 	return id
 }
 func (f *computeLifecycleFixture) queued(owner deployment.Allocation) string {
@@ -414,7 +415,7 @@ func TestRuntimeComputeLifecycleIdleSuspendAndQueuedSameSessionWake(t *testing.T
 func TestRuntimeComputeLifecycleUnusedSessionSuspendsAndExpires(t *testing.T) {
 	f := newComputeLifecycleFixture(t, 1, 2)
 	tenant, session, env, owner := f.create()
-	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
+	f.sql(`UPDATE runtime_allocations SET compute_activity_at=clock_timestamp()-interval '2 minutes',compute_phase_changed_at=clock_timestamp()-interval '2 minutes' WHERE id=$1`, owner.ID)
 	suspended := f.phase(tenant, env.ID, "suspended")
 	if suspended.ComputeRetainedUntil == nil || f.provider.captures != 1 || f.provider.computeKills != 1 || len(f.provider.computes) != 0 || len(f.provider.snapshots) != 1 {
 		t.Fatal("unused Session did not suspend and release active compute")
@@ -614,21 +615,41 @@ func TestRuntimeComputeProtocolUpgradeRefusesOldReceiptsBeforeCleanup(t *testing
 	f.complete(owner)
 	retained := f.phase(tenant, env.ID, "suspended")
 	f.stop()
-	f.sql(`UPDATE runtime_allocations SET compute_state=(compute_state-'protocol_version'-'retained') || jsonb_build_object('snapshot',compute_state->'retained') WHERE id=$1`, owner.ID)
-	deletes := f.provider.snapshotDeletes
-	w, err := startNextWorker(t, t.Context(), f.store, &execution.Dispatcher{Registry: f.provider.registry, ManagedRuntimes: webRuntimes(t, f.store, f.key, f.provider, &f.policy)})
-	if err == nil || w != nil || !strings.Contains(err.Error(), "previous release") {
-		t.Fatalf("incompatible state activated: %v", err)
+	for _, versioned := range []bool{false, true} {
+		f.sql(`UPDATE runtime_allocations SET compute_state=($2::jsonb-'retained') || jsonb_build_object('snapshot',$2::jsonb->'retained') WHERE id=$1`, owner.ID, retained.ComputeState)
+		if !versioned {
+			f.sql(`UPDATE runtime_allocations SET compute_state=compute_state-'protocol_version' WHERE id=$1`, owner.ID)
+		}
+		deletes := f.provider.snapshotDeletes
+		w, err := startNextWorker(t, t.Context(), f.store, &execution.Dispatcher{Registry: f.provider.registry, ManagedRuntimes: webRuntimes(t, f.store, f.key, f.provider, &f.policy)})
+		if err == nil || w != nil || !strings.Contains(err.Error(), "previous release") {
+			t.Fatalf("incompatible state activated: %v", err)
+		}
+		if f.provider.snapshotDeletes != deletes || len(f.provider.snapshots) != 1 {
+			t.Fatal("upgrade lost owned artifact")
+		}
+		var state []byte
+		if err := f.store.pool.QueryRow(t.Context(), `SELECT compute_state FROM runtime_allocations WHERE id=$1`, owner.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(state), `"snapshot"`) {
+			t.Fatal("old receipt was rewritten")
+		}
 	}
-	if f.provider.snapshotDeletes != deletes || len(f.provider.snapshots) != 1 {
-		t.Fatal("upgrade lost owned artifact")
+	// A consumed legacy snapshot can survive only in current/target provenance.
+	for _, field := range []string{"current", "target"} {
+		f.sql(`UPDATE runtime_allocations SET compute_state=$2::jsonb || jsonb_build_object($3::text, jsonb_build_object('RestoredFrom', jsonb_build_object('Digest', 'legacy'))) WHERE id=$1`, owner.ID, retained.ComputeState, field)
+		incompatible, err := db.New(f.store.pool).HasIncompatibleRuntimeComputeState(t.Context(), sandbox.SuspensionStateVersion)
+		if err != nil || !incompatible {
+			t.Fatalf("legacy %s provenance accepted: incompatible=%v err=%v", field, incompatible, err)
+		}
 	}
-	var state []byte
-	if err := f.store.pool.QueryRow(t.Context(), `SELECT compute_state FROM runtime_allocations WHERE id=$1`, owner.ID).Scan(&state); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(state), `"snapshot"`) {
-		t.Fatal("old receipt was rewritten")
+	// Adapter-owned data may contain any private field names. The activation
+	// fence must inspect only the shared envelope, never this opaque string.
+	f.sql(`UPDATE runtime_allocations SET compute_state=jsonb_set($2::jsonb, '{retained,Data}', to_jsonb($3::text)) WHERE id=$1`, owner.ID, retained.ComputeState, `{"snapshot":{"Digest":"private","CheckpointID":"native","CheckpointRoot":"owned"}}`)
+	incompatible, err := db.New(f.store.pool).HasIncompatibleRuntimeComputeState(t.Context(), sandbox.SuspensionStateVersion)
+	if err != nil || incompatible {
+		t.Fatalf("opaque native payload affected activation: incompatible=%v err=%v", incompatible, err)
 	}
 	f.sql(`UPDATE runtime_allocations SET compute_state=$2::jsonb WHERE id=$1`, owner.ID, retained.ComputeState)
 	f.start()

@@ -464,10 +464,9 @@ func TestEnvironmentCreationReservesItsInitialInput(t *testing.T) {
 }
 
 // Hosted creation checks admission on the locked deployment, so it sees a
-// reset committed while it waited, and places after creating the
-// Environment, rolling both back when no node is available. A retry admits
-// nothing and still returns its Session.
-func TestHostedCreationAdmitsAndPlacesUnderTheDeploymentLock(t *testing.T) {
+// reset committed while it waited. Accepted Environments wait for compute
+// without a placement; a retry admits nothing and returns its Session.
+func TestHostedCreationAdmitsUnderDeploymentLockAndLeavesComputeUnreserved(t *testing.T) {
 	pool := pgtest.OpenIsolated(t, nil)
 	_, service := creationService(t, pool)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -518,11 +517,18 @@ func TestHostedCreationAdmitsAndPlacesUnderTheDeploymentLock(t *testing.T) {
 		t.Fatal("retry ran admission", retry, err)
 	}
 	exec(t, pool, "UPDATE runtime_deployment SET reset_clear=NULL, reset_requested_at=NULL, reset_forced_at=NULL, reset_audit=NULL")
-	if _, err := service.CreateSession(ctx, tenant, hosted("unplaced")); !errors.Is(err, placement.ErrNodeUnavailable) {
-		t.Fatal("placement without a node", err)
+	queued, err := service.CreateSession(ctx, tenant, hosted("unplaced"))
+	if err != nil || !queued.Created {
+		t.Fatal("creation without available compute was not accepted", queued, err)
 	}
-	if count := countRows(t, pool, "SELECT count(*) FROM sessions s JOIN environments e ON e.session_id=s.id WHERE s.tenant_id=$1", tenant); count != 1 {
-		t.Fatal("failed hosted creation left work", count)
+	if count := countRows(t, pool, "SELECT count(*) FROM sessions s JOIN environments e ON e.session_id=s.id WHERE s.tenant_id=$1", tenant); count != 2 {
+		t.Fatal("accepted hosted creation did not preserve both Sessions", count)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM runtime_placements WHERE environment_id=$1", queued.Session.Environment.ID); count != 0 {
+		t.Fatal("creation reserved a node", count)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM runtime_allocations WHERE environment_id=$1", queued.Session.Environment.ID); count != 0 {
+		t.Fatal("creation allocated compute", count)
 	}
 }
 
@@ -643,4 +649,66 @@ func TestCreationAudit(t *testing.T) {
 	if rows.Err() != nil || !reflect.DeepEqual(owned, []string{"environment", "session"}) {
 		t.Fatal("created resources", owned, rows.Err())
 	}
+}
+
+// Profile admission uses the deployment selected while holding its lock, so a
+// storage-mode update cannot race a preflight check and persist unsupported work.
+func TestHostedExternalHistoryAdmissionRollsBackAfterDeploymentChange(t *testing.T) {
+	pool := pgtest.OpenIsolated(t, nil)
+	store, _ := creationService(t, pool)
+	rules, err := placement.NewRules(externalAdmissionDeclarations{}, "https://core.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := sessions.NewService(store, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	tenant := uuid.NewString()
+	exec(t, pool, `UPDATE runtime_deployment SET installation_id=$1, backend_fingerprint=$2, provider_kind='test-direct', mode='direct', generation=1, specification='{"resources":{"cpus":2,"memory_mib":2048}}'`, uuid.New(), strings.Repeat("a", 64))
+	input := sessions.CreateSession{Creator: creator, Engine: "codex", IdempotencyKey: "raced", Configuration: json.RawMessage(`{"agent":{"model":"m"},"environment":{"type":"openai_hosted"}}`)}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	var holder int32
+	if err = tx.QueryRow(ctx, "SELECT pg_backend_pid() FROM runtime_deployment FOR UPDATE").Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := service.CreateSession(ctx, tenant, input); done <- err }()
+	awaitBlocked(ctx, t, pool, holder)
+	if _, err = tx.Exec(ctx, `UPDATE runtime_deployment SET specification=jsonb_set(specification,'{workspace}','{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; !errors.Is(err, sessions.ErrInvalidInput) {
+		t.Fatal("external combination admitted", err)
+	}
+	if count := countRows(t, pool, "SELECT count(*) FROM sessions WHERE tenant_id=$1", tenant); count != 0 {
+		t.Fatal("rejected admission persisted Session", count)
+	}
+	input.SupportsRetainedNativeHistory = true
+	created, err := service.CreateSession(ctx, tenant, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SupportsRetainedNativeHistory = false
+	retry, err := service.CreateSession(ctx, tenant, input)
+	if err != nil || retry.Created || retry.Session.ID != created.Session.ID {
+		t.Fatal("trusted admission input changed retry identity", retry, err)
+	}
+}
+
+// This fixture declares a direct provider supporting both storage modes.
+type externalAdmissionDeclarations struct{}
+
+func (externalAdmissionDeclarations) RequiresPublicOrigin(string) (bool, error) { return false, nil }
+func (externalAdmissionDeclarations) ValidateSpecification(string, sandbox.DeploymentSpec) error {
+	return nil
 }

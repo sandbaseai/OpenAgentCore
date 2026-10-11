@@ -129,7 +129,7 @@ def initialize():
     write_private(ROOT / 'launch.json', identity)
     environment = prepare_runtime()
     # Application-owned startup does not participate in Core-managed suspension.
-    environment.pop("OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE", None)
+    environment.pop('OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE', None)
     credential = PROFILE.parent / 'executor-key.json'
     write_private(credential, payload['executor_key'], owner=1000)
     source.unlink()

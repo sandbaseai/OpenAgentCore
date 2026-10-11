@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"sync"
@@ -62,6 +63,7 @@ type runtimeLifecycle struct {
 	pendingCursor   string
 	connections     map[string]*runtimeConnection
 	wakeHints       chan struct{}
+	hintDestination func(string)
 }
 
 func newRuntimeManager(owner Owner, deployments *deployment.Service, deploymentReader deployment.Reader, sessionReader sessions.Reader, registry *runtimegateway.Registry, config *RuntimeProvider) (*runtimeManager, error) {
@@ -73,7 +75,7 @@ func newRuntimeManager(owner Owner, deployments *deployment.Service, deploymentR
 		return nil, sandbox.ErrInvalid
 	}
 	ctx, stop := context.WithCancel(context.Background())
-	return &runtimeManager{workspaces: owner.Workspaces, workspaceGate: make(chan struct{}, 1), sessions: sessionReader, sessionExecution: owner.Sessions, deployment: owner.Deployment, deploymentService: deployments, deploymentReader: deploymentReader, lease: owner.Lease, registry: registry, setupInstallationID: config.InstallationID, loadDeployment: config.loadDeployment, prepareDeployment: config.prepareDeployment, publishUnconfigured: config.PublishUnconfigured, setupGate: make(chan struct{}, 1), mutationGate: make(chan struct{}, 1), ctx: ctx, cancel: stop, nodes: make(map[string]*runtimeNode), failed: make(chan error, 1), inventory: make(chan struct{}, 1)}, nil
+	return &runtimeManager{workspaces: owner.Workspaces, workspaceGate: make(chan struct{}, 1), sessions: sessionReader, sessionExecution: owner.Sessions, deployment: owner.Deployment, deploymentService: deployments, deploymentReader: deploymentReader, lease: owner.Lease, registry: registry, setupInstallationID: config.InstallationID, loadDeployment: config.loadDeployment, prepareDeployment: config.prepareDeployment, publishUnconfigured: config.PublishUnconfigured, setupGate: make(chan struct{}, 1), mutationGate: make(chan struct{}, 1), ctx: ctx, cancel: stop, nodes: make(map[string]*runtimeNode), failed: make(chan error, 1), inventory: make(chan struct{}, 1), placementWake: make(chan struct{}, 1)}, nil
 }
 
 func validatedRuntimeProvider(config *RuntimeProvider, registry *runtimegateway.Registry) (RuntimeProvider, error) {
@@ -149,6 +151,17 @@ func (w *Worker) ProvisionEnvironment(ctx context.Context, tenant, environment, 
 	if !ready {
 		return deployment.Allocation{}, ErrExecutionUnavailable
 	}
+	key := deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}
+	existing, lookupErr := w.runtimes.deploymentReader.EnvironmentAllocation(ctx, key)
+	if lookupErr != nil && !errors.Is(lookupErr, deployment.ErrNotFound) {
+		return deployment.Allocation{}, lookupErr
+	}
+	if errors.Is(lookupErr, deployment.ErrNotFound) || existing.State == "released" {
+		// The common ordered inventory is the only placement entry point.
+		if _, err := w.runtimes.syncNodes(ctx); err != nil {
+			return deployment.Allocation{}, err
+		}
+	}
 	nodeID, err := w.runtimes.deploymentService.LifecycleNode(ctx, tenant, environment)
 	if err != nil {
 		return deployment.Allocation{}, err
@@ -184,7 +197,8 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 		return deployment.Allocation{}, sandbox.ErrInvalid
 	}
 	key := deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}
-	if _, err := r.reader.EnvironmentAllocation(ctx, key); errors.Is(err, deployment.ErrNotFound) {
+	existing, lookupErr := r.reader.EnvironmentAllocation(ctx, key)
+	if errors.Is(lookupErr, deployment.ErrNotFound) || (lookupErr == nil && existing.State == "released") {
 		if r.config.Generation == 0 {
 			return deployment.Allocation{}, ErrExecutionUnavailable
 		}
@@ -200,25 +214,37 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 				return deployment.Allocation{}, ErrExecutionUnavailable
 			}
 		}
-	} else if err != nil {
+	} else if lookupErr != nil {
+		return deployment.Allocation{}, lookupErr
+	}
+	spec, err := r.workspaceSpecification(ctx, deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}, "")
+	if err != nil {
 		return deployment.Allocation{}, err
 	}
+	if environmentValue.ExternalWorkspace && spec.Workspace == nil {
+		return deployment.Allocation{}, workspacefs.ErrUnsupported
+	}
 	var workspace *workspacefs.Binding
-	if r.config.Workspace != nil {
-		if r.workspaces == nil {
-			return deployment.Allocation{}, workspacefs.ErrUnavailable
-		}
+	if spec.Workspace != nil {
 		existing, lookupErr := r.reader.EnvironmentAllocation(ctx, deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment})
 		if lookupErr != nil && !errors.Is(lookupErr, deployment.ErrNotFound) {
 			return deployment.Allocation{}, lookupErr
 		}
 		if errors.Is(lookupErr, deployment.ErrNotFound) {
-			workspace, err = r.workspaces.Ensure(ctx, tenant, environment, r.config.WorkspaceRequirements, r.config.Resources.EnvironmentDiskMiB)
+			workspace, err = r.workspaces.Ensure(ctx, tenant, environment, r.config.WorkspaceRequirements, spec.Resources.EnvironmentDiskMiB)
 			if err == nil && workspace == nil {
 				err = workspacefs.ErrUnavailable
 			}
 			if err != nil {
 				return deployment.Allocation{}, err
+			}
+		} else if existing.State == "released" {
+			workspace, err = r.workspaces.GetReady(ctx, tenant, environment, r.config.WorkspaceRequirements, spec.Resources.EnvironmentDiskMiB)
+			if err != nil {
+				return deployment.Allocation{}, err
+			}
+			if workspace == nil {
+				return deployment.Allocation{}, workspacefs.ErrNotFound
 			}
 		} else if existing.NodeID != r.nodeID {
 			return existing, sandbox.ErrOwnership
@@ -466,4 +492,29 @@ func (r *runtimeLifecycle) computeFreshCapacity(ctx context.Context, key string)
 		return nil
 	}
 	return r.computeCapacity(ctx, key)
+}
+
+// workspaceSpecification reads the immutable generation selected for this
+// Environment. A restore also fences the exact allocation before native I/O.
+func (r *runtimeLifecycle) workspaceSpecification(ctx context.Context, key deployment.AllocationKey, allocationID string) (sandbox.DeploymentSpec, error) {
+	target, err := r.reader.LifecyclePlacement(ctx, key)
+	if err != nil {
+		return sandbox.DeploymentSpec{}, err
+	}
+	if allocationID != "" && target.AllocationID != allocationID {
+		return sandbox.DeploymentSpec{}, sandbox.ErrOwnership
+	}
+	var spec sandbox.DeploymentSpec
+	if err := json.Unmarshal(target.Specification, &spec); err != nil {
+		return sandbox.DeploymentSpec{}, sandbox.ErrInvalid
+	}
+	if spec.Workspace != nil {
+		if r.workspaces == nil || r.config.WorkspaceRequirements == nil {
+			return sandbox.DeploymentSpec{}, workspacefs.ErrUnavailable
+		}
+		if err := workspacefs.ValidateCombination(*r.config.WorkspaceRequirements, *spec.Workspace, spec.Resources.EnvironmentDiskMiB); err != nil {
+			return sandbox.DeploymentSpec{}, err
+		}
+	}
+	return spec, nil
 }

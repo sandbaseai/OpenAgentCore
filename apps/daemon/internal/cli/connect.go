@@ -99,10 +99,6 @@ func runConnect(ctx *runContext, args []string) error {
 	}
 
 	initializeRuntimeObservations(ctx)
-	discover := func(parent context.Context) (agentCLIDiscovery, error) {
-		return preflightAgentCLIs(parent, ctx, *profile)
-	}
-
 	var prof auth.Profile
 	if bootstrapped != nil {
 		prof = *bootstrapped
@@ -113,7 +109,7 @@ func runConnect(ctx *runContext, args []string) error {
 		}
 	}
 
-	return mainLoopRemoteWithDiscovery(context.Background(), ctx, *profile, prof, "", discover)
+	return mainLoop(ctx, *profile, prof)
 }
 
 // spawnBackground forks the daemon into the background. Parent
@@ -193,7 +189,6 @@ func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof
 		return preflightAgentCLIs(ctx, rc, profile)
 	})
 }
-
 func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile string, prof auth.Profile, remote string, discover func(context.Context) (agentCLIDiscovery, error)) error {
 	// Route through obs/log so daemon log lines pick up the same
 	// trace_id / span_id auto-injection as the server side — when the
@@ -209,20 +204,20 @@ func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile
 	rootCtx, cancel := daemonize.NotifyContext(parent)
 	defer cancel()
 
-	boot, agentCLIs, err := prepareConnection(rootCtx, discover,
-		func(ctx context.Context) (boot *transport.BootstrapResponse, err error) {
-			started := time.Now()
-			defer func() { observeRuntimeStartup(ctx, "bootstrap", started, err) }()
-			bootCtx, stop := context.WithTimeout(ctx, bootstrapTimeout)
-			defer stop()
-			if remote != "" {
-				return environmentBootstrap(bootCtx, prof, remote)
-			}
-			return transport.Bootstrap(bootCtx, prof.ServerURL, prof.RuntimeID, prof.RunnerCredential, Version)
-		})
+	boot, agentCLIs, err := prepareConnection(rootCtx, discover, func(ctx context.Context) (boot *transport.BootstrapResponse, err error) {
+		started := time.Now()
+		defer func() { observeRuntimeStartup(ctx, "bootstrap", started, err) }()
+		bootCtx, stop := context.WithTimeout(ctx, bootstrapTimeout)
+		defer stop()
+		if remote != "" {
+			return environmentBootstrap(bootCtx, prof, remote)
+		}
+		return transport.Bootstrap(bootCtx, prof.ServerURL, prof.RuntimeID, prof.RunnerCredential, Version)
+	})
 	if err != nil {
 		return err
 	}
+
 	wsURL, err := transport.DeriveWSURL(*boot, prof.ServerURL)
 	if err != nil {
 		return fmt.Errorf("connect: derive ws url: %w", err)

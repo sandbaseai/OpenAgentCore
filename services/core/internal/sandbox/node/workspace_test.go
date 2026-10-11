@@ -30,22 +30,29 @@ func TestWorkspaceWireBindsConfigurationAndEnvironment(t *testing.T) {
 			case "object":
 				b.Attachment.Reference.ObjectID = "invalid"
 			}
-			q := request{DeploymentGeneration: 1, Sequence: 1, OwnerEpoch: 1, ConnectionID: ref.TenantID, ID: ref.AllocationID, Reference: ref, Operation: "create", TimeoutMillis: 1000, Bootstrap: &sandbox.Bootstrap{Reference: ref, Harness: "codex", Workspace: &b}}
+			q := request{ID: ref.AllocationID, Reference: ref, Operation: "create", TimeoutMillis: 1000, Bootstrap: &sandbox.Bootstrap{Harness: "codex", Reference: ref, Workspace: &b}}
 			if (q.validate() == nil) != (fault == "match") {
 				t.Fatal("invalid create binding forwarding", fault)
 			}
-			raw, err := json.Marshal(frame{Version: ProtocolVersion, Type: "request", Request: &q})
-			if err != nil {
-				t.Fatal(err)
+			for _, external := range []bool{false, true} {
+				wireRequest := q
+				bootstrap := *q.Bootstrap
+				wireRequest.Bootstrap = &bootstrap
+				if !external {
+					bootstrap.Workspace = nil
+				}
+				wireRequest.DeploymentGeneration, wireRequest.Sequence, wireRequest.OwnerEpoch = 1, 1, 1
+				wireRequest.ConnectionID = ref.TenantID
+				raw, err := json.Marshal(frame{Version: ProtocolVersion, Type: "request", Request: &wireRequest})
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, err := decodeFrame(raw)
+				want := !external || fault == "match"
+				if (err == nil && decoded.Request.validate() == nil) != want {
+					t.Fatalf("workspace wire external=%v fault=%s: %v", external, fault, err)
+				}
 			}
-			decoded, err := decodeFrame(raw)
-			if err != nil {
-				t.Fatal("workspace bootstrap rejected by strict wire", err)
-			}
-			if (decoded.Request.validate() == nil) != (fault == "match") {
-				t.Fatal("workspace binding lost on wire", fault)
-			}
-
 			q.Operation = "resume"
 			q.Bootstrap = nil
 			q.Resume = &sandbox.ResumeRequest{Reference: ref, Workspace: &b}
@@ -80,14 +87,14 @@ func (c *workspaceRefusalCaller) Call(context.Context, microsandbox.Request) (mi
 func TestActualWorkspaceRefusalKeepsSettledAbsenceOnWire(t *testing.T) {
 	ref := reference()
 	caller := new(workspaceRefusalCaller)
-	config := microsandbox.Config{ExternalWorkspace: true, InstallationID: "11111111-1111-4111-8111-111111111111", HelperPath: "/helper", RuntimeHome: "/runtime", RuntimePath: "/runtime/msb", FirmwarePath: "/runtime/firmware", RuntimeSHA256: strings.Repeat("a", 64), FirmwareSHA256: strings.Repeat("b", 64), Image: "image@sha256:" + strings.Repeat("c", 64), CPUs: 2, MemoryMiB: 2048, RootDiskMiB: 4096, Network: microsandbox.NetworkPolicy{DefaultEgress: "deny", DefaultIngress: "deny"}}
+	config := microsandbox.Config{ExternalWorkspace: true, InstallationID: "11111111-1111-4111-8111-111111111111", HelperPath: "/helper", RuntimeHome: "/runtime", CheckpointRoot: "/checkpoints", RuntimePath: "/runtime/msb", FirmwarePath: "/runtime/firmware", RuntimeSHA256: strings.Repeat("a", 64), FirmwareSHA256: strings.Repeat("b", 64), Image: "image@sha256:" + strings.Repeat("c", 64), CPUs: 2, MemoryMiB: 2048, RootDiskMiB: 4096, Network: microsandbox.NetworkPolicy{DefaultEgress: "deny", DefaultIngress: "deny"}}
 	provider, err := microsandbox.NewWithCaller(config, caller)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fsConfig := workspacefs.Configuration{ID: "44444444-4444-4444-8444-444444444444", Adapter: "fixture", Parameters: json.RawMessage(`{}`)}
 	binding := &workspacefs.Binding{Configuration: fsConfig, Attachment: workspacefs.Attachment{Reference: workspacefs.Reference{TenantID: ref.TenantID, EnvironmentID: ref.EnvironmentID, ObjectID: "55555555-5555-4555-8555-555555555555"}, ConfigurationID: fsConfig.ID, Kind: workspacefs.AttachmentHostDirectory, Native: json.RawMessage(`{}`)}}
-	bootstrap := sandbox.Bootstrap{Reference: ref, SessionID: ref.TenantID, DeviceID: ref.EnvironmentID, CoreURL: "https://core.example/api/v1", Credential: "fixture", NetworkAccess: "disabled", Harness: "codex", Workspace: binding}
+	bootstrap := sandbox.Bootstrap{Harness: "codex", Reference: ref, SessionID: ref.TenantID, DeviceID: ref.EnvironmentID, CoreURL: "https://core.example/api/v1", Credential: "fixture", NetworkAccess: "disabled", Workspace: binding}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	out := execute(ctx, provider, request{ID: ref.AllocationID, ConnectionID: ref.TenantID, Reference: ref, Operation: "create", TimeoutMillis: 1000, Bootstrap: &bootstrap})
