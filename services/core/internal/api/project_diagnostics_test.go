@@ -21,7 +21,7 @@ func TestProjectDiagnosticsSafeProjection(t *testing.T) {
 	key := callerBinding()
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
 	serveDiagnostics(diagnosticSnapshotStore{session: session})(&deps, fakes)
-	fakes.sessions.getSession = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
+	fakes.sessionAdmin.getSessionDiagnosticsSnapshot = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
 	h := newTestHandler(t, deps)
 	for _, suffix := range []string{"/diagnostics", "/turns/" + turn + "/diagnostics"} {
 		path := "/v1/agents/sessions/" + id + suffix
@@ -51,7 +51,7 @@ func TestProjectDiagnosticsReadErrorIsNotExecutionFailure(t *testing.T) {
 		deps, fakes := testDependencies(t)
 		key := callerBinding()
 		fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
-		fakes.sessions.getSession = func(_ context.Context, tenant, id string) (sessions.Session, error) {
+		fakes.sessionAdmin.getSessionDiagnosticsSnapshot = func(_ context.Context, tenant, id string) (sessions.Session, error) {
 			if tenant != key.TenantID {
 				t.Fatal("wrong tenant")
 			}
@@ -134,7 +134,7 @@ func TestProjectTurnDiagnosticsWaiting(t *testing.T) {
 	deps, fakes := testDependencies(t)
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, callerBinding()).ResolveAPIKey
 	serveDiagnostics(diagnosticSnapshotStore{session: session})(&deps, fakes)
-	fakes.sessions.getSession = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
+	fakes.sessionAdmin.getSessionDiagnosticsSnapshot = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
 	w := diagnosticRequest(newTestHandler(t, deps), "/v1/agents/sessions/"+id+"/turns/"+turn+"/diagnostics", "Bearer caller")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"waiting"`) || !strings.Contains(w.Body.String(), `"diagnostic":null`) {
 		t.Fatal(w.Code, w.Body)

@@ -22,7 +22,7 @@ import (
 func (h *Handler) getProjectSessionDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	session, err := h.Sessions.GetSession(ctx, tenantID(r), chi.URLParam(r, "session_id"))
+	session, err := h.SessionAdmin.GetSessionDiagnosticsSnapshot(ctx, tenantID(r), chi.URLParam(r, "session_id"))
 	if err != nil {
 		writeSessionsError(w, r, err)
 		return
