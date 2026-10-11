@@ -2,7 +2,7 @@ import { AgentCoreError } from "./client";
 import { CoreRequester, type CoreClientOptions } from "./core-request";
 import { isOneOf } from "./response-projection";
 import type { ReadOptions } from "./types";
-import { jobStatusValues, serviceStatusValues, type CoremetricsView, type JobStatus, type Latency, type ServiceState, type ServiceStatus } from "./generated/core-api";
+import { jobStatusValues, serviceStatusValues, type CoremetricsView, type JobStatus, type Latency, type ServiceState, type ServiceStatus, type TerminalTurns } from "./generated/core-api";
 
 function invalidCoreMetrics(): never {
   throw new AgentCoreError("Core metrics: the response is not JSON.", 0, "invalid_response");
@@ -57,6 +57,21 @@ function latency(value: unknown): Latency {
   return { p50: number(entry.p50), p95: number(entry.p95) };
 }
 
+function terminalTurns(value: unknown): TerminalTurns | null {
+  if (value === undefined || value === null) return null;
+  const entry = record(value, "execution.terminal_turns");
+  return {
+    total: count(entry.total, "terminal_turns.total"),
+    completed: count(entry.completed, "terminal_turns.completed"),
+    failed: count(entry.failed, "terminal_turns.failed"),
+    cancelled: count(entry.cancelled, "terminal_turns.cancelled"),
+    failures: list(entry.failures, (failure) => {
+      if (failure.source !== "turn" || !text(failure.code)) throw new AgentCoreError("Core metrics: invalid failure category.", 0, "invalid_response");
+      return { code: String(failure.code), source: "turn" as const, count: count(failure.count, "terminal_turns.failures.count") };
+    }, "terminal_turns.failures"),
+  };
+}
+
 /** Validates the envelope and normalises every missing figure to null. */
 export function projectCoreMetrics(value: unknown): CoreMetrics {
   const body = record(value, "response");
@@ -80,6 +95,7 @@ export function projectCoreMetrics(value: unknown): CoreMetrics {
       execution_owner: typeof service.execution_owner === "boolean" ? service.execution_owner : null,
     },
     execution: {
+      terminal_turns: terminalTurns(execution.terminal_turns),
       slots_in_use: count(execution.slots_in_use, "execution.slots_in_use"),
       slots_total: count(execution.slots_total, "execution.slots_total"),
       queued_turns: number(execution.queued_turns),

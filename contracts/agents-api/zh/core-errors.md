@@ -1,7 +1,7 @@
 ---
 title: "Core 管理错误"
 source: contracts/agents-api/core-errors.md
-source_hash: 71088f9154793bd72bdccb199f1ac6da6da4097da05bed828299011eb5dfe12d
+source_hash: 35ab3bfb8cec674766bbcc9dc2f0342045539ed4bf443c532c9a1271e7ec8c3e
 ---
 
 `/core/v1` 上的错误使用此封装结构。`message` 是安全的英文文本；`code` 和 `param` 可以为 null。客户端依据稳定的 `code` 和可选的 `param` 进行处理，对未知代码显示 `message`，绝不解析消息，也绝不自动重试被拒绝的写操作。
@@ -116,6 +116,7 @@ Web 的控制台服务器在 `/core` 路径上发生自身故障时使用此封�
 | `authentication_error` | 原生提供商拒绝了身份验证 |
 | `rate_limit_exceeded` | 原生速率限制分类 |
 | `usage_limit_exceeded` | 原生计费或使用量限制分类 |
+| `provider_billing_unavailable` | 模型端点 HTTP 402，需要修正计费而非自动重试；params 中 `http_status` 为 402 或 null |
 | `server_overloaded` | 原生过载分类 |
 | `server_error` | 原生服务器故障分类 |
 | `invalid_request` | 原生请求被拒绝 |
@@ -140,4 +141,4 @@ Web 的控制台服务器在 `/core` 路径上发生自身故障时使用此封�
 
 数据库故障属于错误，绝不会产生空快照或健康快照。绝不会解析预置原因或原生消息以确定类别或参数。
 
-原生类别仅适用于 outcome 中含有 `error_code: engine_failed` 的失败 Turn。Core 仅接受列出的 `engine_error_code` 值；如果该值未知、格式错误或缺失，则仍归为 `harness_error`。只有 `connection_failed` 使用 `engine_http_status`。绝不会根据嵌套元数据或提供商文本来划分失败类别。Core 存储、流不完整和取消故障具有更高优先级；已取消或已完成的 Turn 没有故障。[Native error classification](../../../docs/zh/runtime-protocol.md#native-failure-classification) 列出了各适配器会报告哪些类别。
+原生类别仅适用于 outcome 中含有 `error_code: engine_failed` 的失败 Turn。Core 仅接受列出的 `engine_error_code` 值；如果该值未知、格式错误或缺失，则仍归为 `harness_error`。`connection_failed` 与 `provider_billing_unavailable` 使用各自经校验的 `engine_http_status`。绝不会根据嵌套元数据或提供商文本来划分失败类别。Core 存储、流不完整和取消故障具有更高优先级；已取消或已完成的 Turn 没有故障。[Native error classification](../../../docs/zh/runtime-protocol.md#native-failure-classification) 列出了各适配器会报告哪些类别。

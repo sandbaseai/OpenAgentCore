@@ -12,16 +12,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
 
-// TestEmitTerminal_LogsErrorMessage pins the diagnostic invariant:
-// every time the codex session decides "this prompt is over with an
-// error", the error message MUST land in the daemon's structured log.
-//
-// Before this fix, emitTerminal silently sent a TypeError envelope to
-// the upstream channel. If the upstream connector logged only the
-// envelope type (not the body), debugging required guessing what the
-// session had decided to surface. With the fix the daemon log carries
-// the exact message string, the run_id, and the thread_id at the same
-// timestamp the TypeError frame was emitted.
+// Terminal logs retain safe metadata while the private runtime frame retains the native error.
 func TestEmitTerminal_LogsErrorMessage(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -42,11 +33,14 @@ func TestEmitTerminal_LogsErrorMessage(t *testing.T) {
 	s.emitTerminal(message, true)
 
 	logs := buf.String()
+	if strings.Contains(logs, message) {
+		t.Fatal("native error body leaked to logs")
+	}
 	for _, want := range []string{
 		`"msg":"codex: emitting terminal error"`,
 		`"run_id":"run-test-123"`,
 		`"thread_id":"thread-abc"`,
-		`"message":"` + message + `"`,
+		`"message_len":`,
 		`"level":"WARN"`,
 	} {
 		if !strings.Contains(logs, want) {
@@ -129,10 +123,13 @@ func TestOnErrorNotif_LogsAndBuffers(t *testing.T) {
 		t.Fatalf("lastErrText not buffered: %q", got)
 	}
 	logs := buf.String()
+	if strings.Contains(logs, "401 from gateway") {
+		t.Fatal("notification body leaked")
+	}
 	for _, want := range []string{
 		`"msg":"codex: error notification received"`,
 		`"thread_id":"thread-y"`,
-		`401 from gateway`,
+		`"message_len":`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log missing %q\n--- log ---\n%s", want, logs)
@@ -252,5 +249,22 @@ func drainEnvelopes(out <-chan proto.Envelope) []proto.Envelope {
 		default:
 			return got
 		}
+	}
+}
+
+func TestTerminalBillingLogsOnlySafeCorrelation(t *testing.T) {
+	var buf bytes.Buffer
+	out := make(chan proto.Envelope, 4)
+	s := &Session{runID: "run", cfg: sessionConfig{logger: slog.New(slog.NewJSONHandler(&buf, nil))}, out: out, cancelCtx: context.Background()}
+	message := "unexpected status 402 Payment Required: secret-canary, url: https://private.invalid, request id: 88a8d808-59c1-4bf3-8950-b34ce57e028b"
+	s.emitTerminalFailure(message, true, classifyTurnError(&TurnError{Message: message}))
+	logs := buf.String()
+	for _, want := range []string{`"error_code":"provider_billing_unavailable"`, `"http_status":402`, `"upstream_request_id":"88a8d808-59c1-4bf3-8950-b34ce57e028b"`} {
+		if !strings.Contains(logs, want) {
+			t.Fatal("missing safe correlation", logs)
+		}
+	}
+	if strings.Contains(logs, "secret-canary") || strings.Contains(logs, "private.invalid") {
+		t.Fatal("native body leaked")
 	}
 }

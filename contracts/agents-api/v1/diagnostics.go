@@ -5,7 +5,7 @@ import "time"
 // ExecutionDiagnostic is the safe failure projection of a committed snapshot.
 // It deliberately excludes native messages, parameters and executor identities.
 type ExecutionDiagnostic struct {
-	Code     string     `json:"code" binding:"required" enums:"unknown,harness_error,model_provider_required,runtime_unavailable,runtime_disconnected,runtime_preparation_failed,execution_interrupted,delivery_unconfirmed,input_rejected,executor_protocol_error,core_storage_failed,environment_connection_timeout,environment_unavailable,environment_provisioning_failed,authentication_error,rate_limit_exceeded,usage_limit_exceeded,server_overloaded,server_error,invalid_request,resource_not_found,request_timeout,context_length_exceeded,cyber_policy,connection_failed"`
+	Code     string     `json:"code" binding:"required" enums:"unknown,harness_error,model_provider_required,runtime_unavailable,runtime_disconnected,runtime_preparation_failed,execution_interrupted,delivery_unconfirmed,input_rejected,executor_protocol_error,core_storage_failed,environment_connection_timeout,environment_unavailable,environment_provisioning_failed,authentication_error,rate_limit_exceeded,usage_limit_exceeded,provider_billing_unavailable,server_overloaded,server_error,invalid_request,resource_not_found,request_timeout,context_length_exceeded,cyber_policy,connection_failed"`
 	Source   string     `json:"source" binding:"required" enums:"turn,environment,environment_input"`
 	FailedAt *time.Time `json:"failed_at" binding:"required" extensions:"x-nullable"`
 }
@@ -17,6 +17,9 @@ type SessionDiagnostics struct {
 	TurnID     string               `json:"turn_id,omitempty"`
 	Status     string               `json:"status" binding:"required" enums:"idle,in_progress,requires_action,failed"`
 	Diagnostic *ExecutionDiagnostic `json:"diagnostic" binding:"required" extensions:"x-nullable"`
+	// InputAvailable is advisory at this snapshot; submission retains all atomic admission checks.
+	InputAvailable         *bool  `json:"input_available,omitempty"`
+	InputUnavailableReason string `json:"input_unavailable_reason,omitempty" enums:"busy,requires_action,environment_unavailable,configuration_required"`
 }
 
 // TurnDiagnostics is an OpenAgentCore extension, not an official OpenAI DTO.
