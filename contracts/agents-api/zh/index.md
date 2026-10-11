@@ -152,6 +152,6 @@ Core 自身字段位于 `x_agents_core` 中（[Core extensions](../../../docs/zh
 - Artifact 对硬链接、特殊文件和链接形式的 `outputs` 目录的捕获，内容字节变化后的重新发布，以及内容标头和范围。
 - Vault 和 Credential 的错误与重试语义、并发写入下的分页、删除后的可见性、依据官方规范化处理进行精确 URL 匹配、OAuth 刷新的时机和错误，以及受限密钥范围。
 
-## Project 诊断扩展
+## Project 诊断扩展 {#project-diagnostics-extensions}
 
 Project 密钥认证的 `GET /v1/agents/sessions/{session_id}/diagnostics` 与 `GET /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics` 返回安全的已提交失败分类。这两个接口是 OpenAgentCore 扩展，不属于 OpenAI 官方接口。参见[会话诊断](./session-diagnostics.md)。
