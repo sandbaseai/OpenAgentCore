@@ -127,15 +127,14 @@ jobs:
           mkdir -p "$output_root"
           bash scripts/prepare-release-runtimes.sh
           inputs="$HOME/.oac/build/release-inputs/inputs.json"
-          AGENTS_RUNTIME_CODEX_PACKAGE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["codex"])' "$inputs")"
+          CODEX_CLI_DIR="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["codex"])' "$inputs")"
           MCODE_HARNESS_BUILD_DIR="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mcode"])' "$inputs")"
           CLAUDE_SDK_BUILD_DIR="$output_root/claude-sdk"
-          export AGENTS_RUNTIME_CODEX_PACKAGE MCODE_HARNESS_BUILD_DIR CLAUDE_SDK_BUILD_DIR
+          export CODEX_CLI_DIR MCODE_HARNESS_BUILD_DIR CLAUDE_SDK_BUILD_DIR
           bash scripts/build-claude-sdk-runtime.sh
           revision="$(git rev-parse HEAD)"
           for harness in codex claude mcode; do
             builder="scripts/build-$harness-runtime.sh"
-            if [[ "$harness" == codex ]]; then builder=scripts/build-agents-runtime.sh; fi
             AGENTS_RUNTIME_BUILD_DIR="$output_root/$harness" bash "$builder"
             docker build --platform linux/amd64 --tag "oac-e2b-$harness:$revision" "$output_root/$harness"
             image="$(docker image inspect --format '{{.Id}}' "oac-e2b-$harness:$revision")"

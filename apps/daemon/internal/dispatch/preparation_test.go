@@ -216,7 +216,8 @@ func TestPreparationSingleTransferAndReleaseDoesNotCancelRun(t *testing.T) {
 		gotSession <- s
 		return s, nil
 	}
-	r := preparationRouter(t, sender, 80*time.Millisecond, func(context.Context, proto.PromptRequestPayload) (preparedFixture, error) { return p, nil })
+	// Allow workspace preparation to finish even on a loaded CI worker.
+	r := preparationRouter(t, sender, 2*time.Second, func(context.Context, proto.PromptRequestPayload) (preparedFixture, error) { return p, nil })
 	prepare := mustEnv(t, proto.TypeExecutionPrepare, "request", preparationRequest())
 	if err := r.Handle(t.Context(), prepare); err != nil {
 		t.Fatal(err)
@@ -238,7 +239,7 @@ func TestPreparationSingleTransferAndReleaseDoesNotCancelRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The old preparation deadline must not govern the transferred Session.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(time.Until(time.UnixMilli(ready.ExpiresAt).Add(time.Millisecond)))
 	if session.ctx.Err() != nil || session.cancels() != 0 || p.starts.Load() != 1 || r.ActiveRuns() != 1 {
 		t.Fatal("transfer was duplicated or cancelled")
 	}
@@ -310,7 +311,8 @@ func TestPreparationCancelDuringStartClosesLateSession(t *testing.T) {
 func TestPreparationExpiryAndOldHandleCannotStartReplacement(t *testing.T) {
 	sender := &recSender{}
 	created := make(chan *controlledPreparation, 2)
-	r := preparationRouter(t, sender, 60*time.Millisecond, func(context.Context, proto.PromptRequestPayload) (preparedFixture, error) {
+	// Expiry must follow readiness, not race workspace preparation on CI.
+	r := preparationRouter(t, sender, 2*time.Second, func(context.Context, proto.PromptRequestPayload) (preparedFixture, error) {
 		p := &controlledPreparation{closed: make(chan struct{})}
 		created <- p
 		return p, nil
