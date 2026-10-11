@@ -55,6 +55,8 @@ export interface CoreJob {
   failed: number | null;
 }
 
+export type TerminalTurns = { total: number; completed: number; failed: number; cancelled: number; failures: { code: string; source: "turn"; count: number }[] };
+
 export interface CoreMetrics {
   object: "core.metrics";
   range: { start: string; end: string; resolution_seconds: number };
@@ -68,6 +70,7 @@ export interface CoreMetrics {
     execution_owner: boolean | null;
   };
   execution: {
+    terminal_turns: TerminalTurns | null;
     slots_in_use: number | null;
     slots_total: number | null;
     queued_turns: number | null;
@@ -137,6 +140,27 @@ function latency(value: unknown): CoreLatency {
   return { p50: number(entry.p50), p95: number(entry.p95) };
 }
 
+function terminalTurns(value: unknown): TerminalTurns | null {
+  if (value === undefined || value === null) return null;
+  const entry = record(value, "execution.terminal_turns");
+  return {
+    total: count(entry.total, "terminal_turns.total"),
+    completed: count(entry.completed, "terminal_turns.completed"),
+    failed: count(entry.failed, "terminal_turns.failed"),
+    cancelled: count(entry.cancelled, "terminal_turns.cancelled"),
+    failures: list(entry.failures, (failure) => {
+      if (failure.source !== "turn" || !text(failure.code)) throw new AgentCoreError("Core metrics: invalid failure category.", 0, "invalid_response");
+      return { code: String(failure.code), source: "turn" as const, count: count(failure.count, "terminal_turns.failures.count") };
+    }, "terminal_turns.failures"),
+  };
+}
+
+
+function count(value: unknown, path: string): number {
+ if (!Number.isSafeInteger(value) || (value as number) < 0) throw new AgentCoreError(`Core metrics: ${path} is not a count.`, 0, "invalid_response");
+ return value as number;
+}
+
 const jobStatuses = new Set<CoreJobStatus>(["ok", "failing", "stopped", "unknown"]);
 
 /** Validates the envelope and normalises every missing figure to null. */
@@ -162,6 +186,7 @@ export function projectCoreMetrics(value: unknown): CoreMetrics {
       execution_owner: typeof service.execution_owner === "boolean" ? service.execution_owner : null,
     },
     execution: {
+      terminal_turns: terminalTurns(execution.terminal_turns),
       slots_in_use: number(execution.slots_in_use),
       slots_total: number(execution.slots_total),
       queued_turns: number(execution.queued_turns),

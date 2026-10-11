@@ -148,3 +148,17 @@ The beta adapter retains its existing build-script layout; the main-only builder
 | Runtime/guest observations | Require a separately built, qualified and activated template containing this revision |
 
 The [operator guide](../../docs/getting-started/operations.md#runtime-startup-latency) defines native version, catalog and initialize boundaries; the [E2B helper guide](../../services/core/tools/e2b-provider/README.md#observations) defines helper and guest stages. Core/Web deployment alone enables helper-side stream timing and guest record filtering, but cannot add new instrumentation to existing Runtime images. No remote calls or mandatory checks are removed, and this change does not establish a production latency improvement. Preserve the previous images and template selection for rollback.
+
+## 2026-10-11 — Project failure diagnostics and explicit continuation
+
+| Item | Value |
+| --- | --- |
+| Deployed production baseline | `11956c3c78d84e3edfabf43d13bc8497f4f59c25` |
+| Feature source | `0ebfe7932035dccb89966fbd4ba8013156ec9a87` (including `00b62751` and `c263a9c7`) |
+| Scope | Safe Project diagnostics, terminal failure statistics, typed provider billing failures and input availability |
+| Schema migrations / DDL | None; the release keeps the deployed schema and does not include later beta migrations |
+| Required assets | Matching Core/Web and combined E2B Runtime template |
+
+The backport preserves the deployed Store and Swagger generation architecture. Failed Turn diagnostics remain immutable; explicit new input creates a new Turn only when the existing admission checks allow it. Diagnostic reads never retry model execution. Private provider messages and request identifiers remain outside the Project API.
+
+Build and qualify the matching Runtime template, then select it with the supported generation-checked administrative deployment flow. The new template applies only to new allocations; existing allocations retain their current Runtime. Historical failures are not reclassified or backfilled. Source validation and local database fixtures do not establish production model-call acceptance.

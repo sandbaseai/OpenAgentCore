@@ -10,6 +10,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/identity"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -20,6 +21,7 @@ func TestProjectDiagnosticsSafeProjection(t *testing.T) {
 	key := callerBinding()
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
 	serveDiagnostics(diagnosticSnapshotStore{session: session})(&deps, fakes)
+	fakes.sessions.getSession = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
 	h := newTestHandler(t, deps)
 	for _, suffix := range []string{"/diagnostics", "/turns/" + turn + "/diagnostics"} {
 		path := "/v1/agents/sessions/" + id + suffix
@@ -49,7 +51,7 @@ func TestProjectDiagnosticsReadErrorIsNotExecutionFailure(t *testing.T) {
 		deps, fakes := testDependencies(t)
 		key := callerBinding()
 		fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
-		fakes.sessionsReader.getSession = func(_ context.Context, tenant, id string) (sessions.Session, error) {
+		fakes.sessions.getSession = func(_ context.Context, tenant, id string) (sessions.Session, error) {
 			if tenant != key.TenantID {
 				t.Fatal("wrong tenant")
 			}
@@ -91,14 +93,14 @@ func TestProjectDiagnosticsDatabaseIsolation(t *testing.T) {
 	foreign.TokenSHA256 = runtimedevice.HashCredential("foreign")
 	deps, fakes := testDependencies(t)
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, key, foreign).ResolveAPIKey
-	databaseSessionReads(pool)(&deps, fakes)
+	databaseSessionReads(service, pool)(&deps, fakes)
 	handler := newTestHandler(t, deps)
 	created, err := service.CreateSession(t.Context(), key.TenantID, sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "test"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"id":"agent_root","model":"test"},"environment":{"type":"none"}}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := created.Session.ID
-	receipt := submitMessage(t, pool, key.TenantID, session, "message", json.RawMessage(`{"text":"private-canary"}`))
+	session := created.ID
+	receipt := projectSubmitMessage(t, service, key.TenantID, session, "message", json.RawMessage(`{"text":"private-canary"}`))
 	paths := []string{"/v1/agents/sessions/" + session + "/diagnostics", "/v1/agents/sessions/" + session + "/turns/" + receipt.TurnID + "/diagnostics"}
 	for _, path := range paths {
 		if w := diagnosticRequest(handler, path, "Bearer caller"); w.Code != 200 || !strings.Contains(w.Body.String(), `"diagnostic":null`) {
@@ -112,7 +114,7 @@ func TestProjectDiagnosticsDatabaseIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongParent := "/v1/agents/sessions/" + other.Session.ID + "/turns/" + receipt.TurnID + "/diagnostics"
+	wrongParent := "/v1/agents/sessions/" + other.ID + "/turns/" + receipt.TurnID + "/diagnostics"
 	if w := diagnosticRequest(handler, wrongParent, "Bearer caller"); w.Code != 404 {
 		t.Fatal("turn visible through another session", w.Code, w.Body)
 	}
@@ -132,6 +134,7 @@ func TestProjectTurnDiagnosticsWaiting(t *testing.T) {
 	deps, fakes := testDependencies(t)
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, callerBinding()).ResolveAPIKey
 	serveDiagnostics(diagnosticSnapshotStore{session: session})(&deps, fakes)
+	fakes.sessions.getSession = diagnosticSnapshotStore{session: session}.GetSessionDiagnosticsSnapshot
 	w := diagnosticRequest(newTestHandler(t, deps), "/v1/agents/sessions/"+id+"/turns/"+turn+"/diagnostics", "Bearer caller")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"waiting"`) || !strings.Contains(w.Body.String(), `"diagnostic":null`) {
 		t.Fatal(w.Code, w.Body)
@@ -143,16 +146,16 @@ func TestProjectFailedTurnAllowsExplicitNewTurnPostgres(t *testing.T) {
 	key := callerBinding()
 	deps, fakes := testDependencies(t)
 	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
-	databaseSessionReads(pool)(&deps, fakes)
+	databaseSessionReads(service, pool)(&deps, fakes)
 	h := newTestHandler(t, deps)
 	created, err := service.CreateSession(t.Context(), key.TenantID, sessions.CreateSession{Creator: identity.Subject{Kind: "service_account", ID: "test"}, Engine: "codex", IdempotencyKey: uuid.NewString(), Configuration: json.RawMessage(`{"agent":{"id":"agent_root","model":"test"},"environment":{"type":"none"}}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := created.Session.ID
-	first := submitMessage(t, pool, key.TenantID, id, "first-explicit-message", json.RawMessage(`{"text":"first"}`))
-	transitionTurn(t, pool, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnQueued, Status: sessions.TurnInProgress})
-	transitionTurn(t, pool, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnInProgress, Status: sessions.TurnFailed, Outcome: json.RawMessage(`{"error_code":"engine_failed","engine_error_code":"provider_billing_unavailable","engine_http_status":402,"engine_request_id":"88a8d808-59c1-4bf3-8950-b34ce57e028b","error":"secret-canary"}`)})
+	id := created.ID
+	first := projectSubmitMessage(t, service, key.TenantID, id, "first-explicit-message", json.RawMessage(`{"text":"first"}`))
+	projectTransitionTurn(t, service, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnQueued, Status: sessions.TurnInProgress})
+	projectTransitionTurn(t, service, key.TenantID, id, first.TurnID, sessions.TurnTransition{ExpectedStatus: sessions.TurnInProgress, Status: sessions.TurnFailed, Outcome: json.RawMessage(`{"error_code":"engine_failed","engine_error_code":"provider_billing_unavailable","engine_http_status":402,"engine_request_id":"88a8d808-59c1-4bf3-8950-b34ce57e028b","error":"secret-canary"}`)})
 	path := "/v1/agents/sessions/" + id + "/diagnostics"
 	for i := 0; i < 2; i++ {
 		w := diagnosticRequest(h, path, "Bearer caller")
@@ -164,7 +167,7 @@ func TestProjectFailedTurnAllowsExplicitNewTurnPostgres(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM turns WHERE session_id=$1", id).Scan(&count); err != nil || count != 1 {
 		t.Fatal("diagnostic read started work", count, err)
 	}
-	next := submitMessage(t, pool, key.TenantID, id, "second-explicit-message", json.RawMessage(`{"text":"continue"}`))
+	next := projectSubmitMessage(t, service, key.TenantID, id, "second-explicit-message", json.RawMessage(`{"text":"continue"}`))
 	if next.TurnID == first.TurnID {
 		t.Fatal("new message reused failed Turn")
 	}
@@ -175,5 +178,20 @@ func TestProjectFailedTurnAllowsExplicitNewTurnPostgres(t *testing.T) {
 	w = diagnosticRequest(h, "/v1/agents/sessions/"+id+"/turns/"+first.TurnID+"/diagnostics", "Bearer caller")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"code":"provider_billing_unavailable"`) {
 		t.Fatal("historical failure lost", w.Code, w.Body)
+	}
+}
+
+func projectSubmitMessage(t *testing.T, s *store.Store, tenant, session, key string, payload json.RawMessage) sessions.InputReceipt {
+	t.Helper()
+	receipt, err := s.SubmitMessage(t.Context(), tenant, session, key, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+func projectTransitionTurn(t *testing.T, s *store.Store, tenant, session, turn string, input sessions.TurnTransition) {
+	t.Helper()
+	if _, err := s.TransitionTurn(t.Context(), tenant, session, turn, input); err != nil {
+		t.Fatal(err)
 	}
 }

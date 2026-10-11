@@ -10,6 +10,7 @@ export const diagnostics = {
   providerHelp: "Core records outcomes from hosted Turns using this deployment default. Records are best effort and may lag; missing records do not prove the provider is ready or unused. Replacing the default starts a new observation history.",
   providerStaleHelp: "The latest read failed. These are the last confirmed observations.",
   failure: {
+    provider_billing_unavailable: "The model service rejected this request because of a billing or usage-limit issue. Contact support to check the model service account before trying again.",
     authentication_error: "The model provider rejected authentication. Check its API key.",
     rate_limit_exceeded: "The model provider's rate limit was reached.",
     usage_limit_exceeded: "The model provider's usage limit was reached. Check its quota.",

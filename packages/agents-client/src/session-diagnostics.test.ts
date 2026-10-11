@@ -86,3 +86,18 @@ it.each([
 ] as const)("rejects arrays in %s", (_field, project) => {
   expect(project).toThrow();
 });
+
+it.each([402, null])("retrieves typed provider billing failures with status %s", async (http_status) => {
+  const billing = { code: "provider_billing_unavailable", params: { http_status }, failed_at: null };
+  const sessionValue = { ...session, failure: { ...billing, source: "turn", turn_id: turn } };
+  const turnValue = { ...snapshot, failure: billing };
+  const client = new AdminClient({ adminToken: "admin", fetch: (async (url) => new Response(JSON.stringify(String(url).includes("/turns/") ? turnValue : sessionValue), { headers: { "Content-Type": "application/json" } })) as typeof fetch });
+  expect(await client.retrieveSessionDiagnostics("project", id)).toEqual(sessionValue);
+  expect(await client.retrieveTurnDiagnostics("project", id, turn)).toEqual(turnValue);
+});
+it.each([400, 401, 403, 429, 500, "402", undefined])("rejects invalid billing status %s on both endpoints", async (http_status) => {
+  const billing = { code: "provider_billing_unavailable", params: { http_status }, failed_at: null };
+  const client = new AdminClient({ adminToken: "admin", fetch: (async (url) => new Response(JSON.stringify(String(url).includes("/turns/") ? { ...snapshot, failure: billing } : { ...session, failure: { ...billing, source: "turn", turn_id: turn } }), { headers: { "Content-Type": "application/json" } })) as typeof fetch });
+  await expect(client.retrieveSessionDiagnostics("project", id)).rejects.toThrow();
+  await expect(client.retrieveTurnDiagnostics("project", id, turn)).rejects.toThrow();
+});

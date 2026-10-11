@@ -18,11 +18,11 @@ import (
 // @Param session_id path string true "Session ID"
 // @Success 200 {object} v1.SessionDiagnostics
 // @Failure 400,401,404,500,503 {object} v1.ErrorResponse
-// @Router /v1/agents/sessions/{session_id}/diagnostics [get]
+// @Router /agents/sessions/{session_id}/diagnostics [get]
 func (h *Handler) getProjectSessionDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	session, err := h.SessionsReader.GetSession(ctx, tenantID(r), chi.URLParam(r, "session_id"))
+	session, err := h.Sessions.GetSession(ctx, tenantID(r), chi.URLParam(r, "session_id"))
 	if err != nil {
 		writeSessionsError(w, r, err)
 		return
@@ -88,7 +88,7 @@ func projectInputAvailability(session sessions.Session, status, environmentType 
 // @Param turn_id path string true "Root Turn ID"
 // @Success 200 {object} v1.TurnDiagnostics
 // @Failure 400,401,404,500,503 {object} v1.ErrorResponse
-// @Router /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics [get]
+// @Router /agents/sessions/{session_id}/turns/{turn_id}/diagnostics [get]
 func (h *Handler) getProjectTurnDiagnostics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()

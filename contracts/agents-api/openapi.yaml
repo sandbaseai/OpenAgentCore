@@ -3687,6 +3687,48 @@ paths:
       summary: Download immutable artifact bytes
       tags:
       - Artifacts
+  /agents/sessions/{session_id}/diagnostics:
+    get:
+      description: OpenAgentCore extension. Project key only. Safe committed failure
+        classification without private execution details.
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.SessionDiagnostics'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Retrieve Project Session diagnostics
+      tags:
+      - Diagnostics
   /agents/sessions/{session_id}/events:
     get:
       description: |-
@@ -4421,6 +4463,53 @@ paths:
       summary: Retrieve an execution Turn
       tags:
       - Turns
+  /agents/sessions/{session_id}/turns/{turn_id}/diagnostics:
+    get:
+      description: OpenAgentCore extension. Project key only. Safe committed failure
+        classification without private execution details.
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Root Turn ID
+        in: path
+        name: turn_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/v1.TurnDiagnostics'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/v1.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Retrieve Project Turn diagnostics
+      tags:
+      - Diagnostics
   /files:
     get:
       description: Lists project-owned Files without reading their bodies. The limit
@@ -4973,95 +5062,6 @@ paths:
       summary: Download immutable Skill version content
       tags:
       - Skills
-  /v1/agents/sessions/{session_id}/diagnostics:
-    get:
-      description: OpenAgentCore extension. Project key only. Safe committed failure
-        classification without private execution details.
-      parameters:
-      - description: Session ID
-        in: path
-        name: session_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/v1.SessionDiagnostics'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "503":
-          description: Service Unavailable
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: Retrieve Project Session diagnostics
-      tags:
-      - Diagnostics
-  /v1/agents/sessions/{session_id}/turns/{turn_id}/diagnostics:
-    get:
-      description: OpenAgentCore extension. Project key only. Safe committed failure
-        classification without private execution details.
-      parameters:
-      - description: Session ID
-        in: path
-        name: session_id
-        required: true
-        type: string
-      - description: Root Turn ID
-        in: path
-        name: turn_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/v1.TurnDiagnostics'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-        "503":
-          description: Service Unavailable
-          schema:
-            $ref: '#/definitions/v1.ErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: Retrieve Project Turn diagnostics
-      tags:
-      - Diagnostics
   /vaults:
     get:
       description: Lists project-owned Vaults independently of execution. An unknown,
