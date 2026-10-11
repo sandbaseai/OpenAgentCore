@@ -136,7 +136,7 @@ func TestStreamFirstTextIgnoresEmptyNonTextAndKeepsOnlyFirst(t *testing.T) {
 	for _, event := range []v1.SessionEvent{{Type: "agent.session.turn.output_text.delta", Delta: &blank}, {Type: "agent.session.turn.reasoning_summary_text.delta", Delta: &blank}, {Type: "agent.session.turn.item.added"}} {
 		o.begin(event, 1, time.Now())
 	}
-	if len(o.seen) != 0 || o.unknownSeen {
+	if len(o.seen) != 0 || o.unknownSeen != 0 {
 		t.Fatal("non-text observed")
 	}
 	text := "answer"
@@ -229,5 +229,54 @@ func TestStreamTextMultipleTurnsLateEventsMissingIDAndCapacity(t *testing.T) {
 	reconnect.begin(v1.SessionEvent{Type: "agent.session.turn.output_text.delta", TurnID: "cold", EventID: "later-cold", Delta: &text}, 101, time.Now())
 	if !reconnect.active || reconnect.connection == o.connection {
 		t.Fatal("reconnect not independently scoped")
+	}
+}
+
+func TestStreamTerminalAndTextUseIndependentBitsWithinTurnBound(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(obslog.NewContextHandler(slog.NewJSONHandler(&logs, nil))))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	o := newStreamTextObservation(t.Context(), "session", 0)
+	w := &observedStreamWriter{header: http.Header{}}
+	write := openEventStream(w, 200, o)
+	if write == nil {
+		t.Fatal("open")
+	}
+	text := "answer"
+	emit := func(turn string, terminal, selected bool) {
+		t.Helper()
+		event := v1.SessionEvent{Type: "agent.session.turn.output_text.delta", TurnID: turn, EventID: "actual", Delta: &text}
+		if terminal {
+			event.Type = "agent.session.turn.completed"
+			event.Delta = nil
+		}
+		o.begin(event, 1, time.Now())
+		if o.active != selected {
+			t.Fatalf("turn=%q terminal=%v active=%v", turn, terminal, o.active)
+		}
+		err := emitSessionEvent(write, "session", event)
+		o.end(err)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	emit("terminal-first", true, true)
+	emit("terminal-first", false, true)
+	emit("terminal-first", true, false)
+	emit("terminal-first", false, false)
+	emit("", false, true)
+	emit("", true, true)
+	emit("", true, false)
+	emit("", false, false)
+	for i := 1; i < streamTextTurnLimit; i++ {
+		emit(fmt.Sprintf("turn-%d", i), false, true)
+	}
+	// A full identity set still admits the other boundary of a retained Turn.
+	emit("turn-1", true, true)
+	emit("turn-1", true, false)
+	emit("new-overflow", true, false)
+	if len(o.seen) != streamTextTurnLimit || o.unknownSeen != 3 {
+		t.Fatal("bound/unknown bits")
 	}
 }

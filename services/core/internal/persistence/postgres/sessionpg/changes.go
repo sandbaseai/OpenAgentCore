@@ -26,6 +26,7 @@ func AppendChanges(ctx context.Context, q *sqlc.Queries, session pgtype.UUID, ch
 		if err := q.AppendSessionEvent(ctx, sqlc.AppendSessionEventParams{ID: session, Payload: payload}); err != nil {
 			return storable(err)
 		}
+		textobs.CaptureTerminal(ctx, change.Event.SessionID, change.Event.TurnID, change.Event.Type, change.Event.EventID)
 		if change.Event.Type == "agent.session.turn.output_text.delta" && change.Event.Delta != nil && *change.Event.Delta != "" ||
 			change.Event.Type == "agent.session.turn.output_text.done" && change.Event.Text != nil && *change.Event.Text != "" {
 			textobs.Capture(ctx, change.Event.EventID)

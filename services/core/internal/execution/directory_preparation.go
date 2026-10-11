@@ -25,6 +25,13 @@ func (d *Dispatcher) readPreparedDirectory(ctx context.Context, peer *runtimegat
 }
 
 func (d *Dispatcher) withPreparedWorkspace(owner context.Context, peer *runtimegateway.Session, session sessions.Session, environment sessions.Environment, bound sessions.ExecutionDevice, consume func(context.Context, string) error) error {
+	prepareStarted := time.Now()
+	prepareObserved := false
+	defer func() {
+		if !prepareObserved {
+			observeArtifactWorkspace(owner, "artifact_workspace_prepare", prepareStarted, ErrExecutionUnavailable)
+		}
+	}()
 	req := proto.PromptRequestPayload{AgentKind: session.Engine, AgentStateKey: "agents-api-" + session.ID, WorkspaceReadOnly: true}
 	if err := d.configurePreparedEnvironment(session, environment, bound, &req); err != nil {
 		return ErrExecutionUnavailable
@@ -36,7 +43,9 @@ func (d *Dispatcher) withPreparedWorkspace(owner context.Context, peer *runtimeg
 	releaseAttempted := false
 	defer func() {
 		if !releaseAttempted {
+			cleanupStarted := time.Now()
 			prepared.close()
+			observeArtifactWorkspace(owner, "artifact_workspace_cleanup", cleanupStarted, nil, "confirmation", "unobserved")
 		} else {
 			peer.UnsubscribePreparation(prepared.requestID)
 		}
@@ -47,12 +56,17 @@ func (d *Dispatcher) withPreparedWorkspace(owner context.Context, peer *runtimeg
 		err = prepared.awaitDirectoryReady(prepare)
 	}
 	stop()
+	observeArtifactWorkspace(owner, "artifact_workspace_prepare", prepareStarted, err)
+	prepareObserved = true
 	if err != nil {
 		return ErrExecutionUnavailable
 	}
 	err = consume(owner, prepared.handle)
 	releaseAttempted = true
-	if prepared.releaseDirectory() != nil {
+	releaseStarted := time.Now()
+	releaseErr := prepared.releaseDirectory()
+	observeArtifactWorkspace(owner, "artifact_workspace_release", releaseStarted, releaseErr)
+	if releaseErr != nil {
 		return ErrExecutionUnavailable
 	}
 	return err
