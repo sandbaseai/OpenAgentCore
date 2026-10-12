@@ -32,6 +32,7 @@ func (s *Session) ExportWorkspaceOutputs(ctx context.Context, request proto.Work
 	s.workspaceExports = map[string]chan proto.Envelope{id: replies}
 	s.workspaceExportMu.Unlock()
 	defer func() { s.workspaceExportMu.Lock(); delete(s.workspaceExports, id); s.workspaceExportMu.Unlock() }()
+	s.observeArtifactExport(ctx, id)
 	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	r := &workspaceExportReader{ctx: ctx, peer: s, id: id, replies: replies, request: request}

@@ -37,7 +37,7 @@ func nextCapabilityFrame(t *testing.T, s *Session) proto.Envelope {
 	t.Helper()
 	select {
 	case env := <-s.sendCh:
-		return env
+		return env.Envelope
 	case <-time.After(3 * time.Second):
 		t.Fatal("transfer stopped unexpectedly")
 		return proto.Envelope{}

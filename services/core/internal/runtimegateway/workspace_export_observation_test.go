@@ -84,7 +84,8 @@ func TestWorkspaceExportObservationBoundaries(t *testing.T) {
 			for {
 				var env proto.Envelope
 				select {
-				case env = <-s.sendCh:
+				case frame := <-s.sendCh:
+					env = frame.Envelope
 				case <-time.After(4 * time.Second):
 					t.Fatal("request timeout")
 				}
