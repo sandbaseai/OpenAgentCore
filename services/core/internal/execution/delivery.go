@@ -375,7 +375,10 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 		if err := env.DecodePayload(&failure); err != nil {
 			return err
 		}
-		r.EngineErrorCode, r.EngineHTTPStatus = proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus)
+		// Unclassified settlement errors must not erase native failure evidence.
+		if code, status := proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus); code != "" {
+			r.EngineErrorCode, r.EngineHTTPStatus = code, status
+		}
 		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
