@@ -6,13 +6,20 @@ import (
 	"io"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/workspaceobs"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
 
 type workspaceExport struct {
-	id       string
-	requests chan proto.WorkspaceExportPayload
-	cancel   context.CancelFunc
+	id          string
+	requests    chan *workspaceExportRequest
+	observation *workspaceobs.Scope
+	cancel      context.CancelFunc
+}
+
+type workspaceExportRequest struct {
+	proto.WorkspaceExportPayload
+	stamp workspaceobs.QueueStamp
 }
 
 func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) error {
@@ -31,13 +38,16 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 			r.mu.Unlock()
 			return r.sendWorkspaceExport(ctx, env.ID, proto.WorkspaceExportResultPayload{Outcome: "rejected", ErrorCode: "resource_unavailable"})
 		}
+		u.observation.Receive(ctx)
 		if request.Step == "cancel" {
 			u.cancel()
 			r.mu.Unlock()
 			return nil
 		}
+		queued := &workspaceExportRequest{WorkspaceExportPayload: request}
 		select {
-		case u.requests <- request:
+		case u.requests <- queued:
+			queued.stamp.Admitted()
 			r.mu.Unlock()
 			return nil
 		default:
@@ -54,8 +64,10 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 	}
 	owner, stop := r.shutdownContext(p.ctx)
 	owner, cancel := context.WithTimeout(owner, 180*time.Second)
-	u = &workspaceExport{id: env.ID, requests: make(chan proto.WorkspaceExportPayload, 1), cancel: func() { cancel(); stop() }}
-	u.requests <- request
+	u = &workspaceExport{id: env.ID, requests: make(chan *workspaceExportRequest, 1), cancel: func() { cancel(); stop() }, observation: workspaceobs.New(ctx, env.ID, "export")}
+	queued := &workspaceExportRequest{WorkspaceExportPayload: request}
+	u.requests <- queued
+	queued.stamp.Admitted()
 	r.workspaceExport = u
 	r.shutdownWG.Add(1)
 	r.mu.Unlock()
@@ -65,11 +77,15 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 
 func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 	defer r.shutdownWG.Done()
+	ctx = u.observation.Context(ctx)
+	outcome := "cancelled"
 	reader, writer := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		started := u.observation.Begin(workspaceobs.ExportProducer)
 		err := r.localWorkspace.ExportOutputs(ctx, writer)
+		u.observation.End(workspaceobs.ExportProducer, started, err)
 		_ = writer.CloseWithError(err)
 	}()
 	defer func() {
@@ -81,6 +97,7 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 			r.workspaceExport = nil
 		}
 		r.mu.Unlock()
+		u.observation.Finish(outcome)
 	}()
 	// Closing the reader unblocks a pending pipe read on cancellation or shutdown.
 	stopRead := context.AfterFunc(ctx, func() { _ = reader.CloseWithError(ctx.Err()) })
@@ -90,14 +107,24 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 	for {
 		select {
 		case request := <-u.requests:
+			request.stamp.Received(u.observation, workspaceobs.RequestQueue)
 			if request.Offset != offset {
+				outcome = "invalid_request"
 				_ = r.sendWorkspaceExport(ctx, u.id, proto.WorkspaceExportResultPayload{Outcome: "failed", Offset: offset, ErrorCode: "invalid_request"})
 				return
 			}
 		case <-ctx.Done():
+			outcome = "cancelled"
 			return
 		}
+		started := u.observation.Begin(workspaceobs.ExportRead)
 		n, err := reader.Read(buffer)
+		readErr := err
+		if readErr == io.EOF {
+			readErr = nil
+		}
+		u.observation.End(workspaceobs.ExportRead, started, readErr)
+		u.observation.Data(n, err == io.EOF)
 		result := proto.WorkspaceExportResultPayload{Offset: offset}
 		switch {
 		case err == io.EOF:
@@ -110,14 +137,22 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 		}
 		if result.Outcome == "completed" {
 			// The next owner may start immediately after receiving completion.
+			started = u.observation.Begin(workspaceobs.ExportDone)
 			<-done
+			u.observation.End(workspaceobs.ExportDone, started, nil)
 			r.mu.Lock()
 			if r.workspaceExport == u {
 				r.workspaceExport = nil
 			}
 			r.mu.Unlock()
 		}
-		if r.sendWorkspaceExport(ctx, u.id, result) != nil || result.Outcome != "chunk" {
+		sendErr := r.sendWorkspaceExport(ctx, u.id, result)
+		if sendErr != nil {
+			outcome = "send_failed"
+		} else {
+			outcome = result.Outcome
+		}
+		if sendErr != nil || result.Outcome != "chunk" {
 			return
 		}
 	}
@@ -130,5 +165,9 @@ func (r *Router) sendWorkspaceExport(ctx context.Context, id string, result prot
 	if err != nil {
 		return err
 	}
-	return r.sender.Send(ctx, env)
+	observer := workspaceobs.FromContext(ctx)
+	started := observer.Begin(workspaceobs.Sender)
+	err = r.sender.Send(ctx, env)
+	observer.End(workspaceobs.Sender, started, err)
+	return err
 }

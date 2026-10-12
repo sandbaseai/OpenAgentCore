@@ -37,7 +37,7 @@ func (r *Router) Shutdown(ctx context.Context) error {
 		// Prepared release claims exist before this signal can interrupt output.
 		close(r.shutdownCh)
 	}
-	r.closePendingPreparationsLocked()
+	workspaceObservers := r.closePendingPreparationsLocked()
 	executors := r.closeIdleExecutorsLocked()
 	attempt := &shutdownAttempt{done: make(chan struct{})}
 	r.shutdownAttempt = attempt
@@ -45,6 +45,9 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	r.shutdownWG.Add(1)
 	r.mu.Unlock()
 
+	for _, observer := range workspaceObservers {
+		observer.Finish("shutdown")
+	}
 	r.closeIdleExecutors(executors)
 	go r.runShutdownAttempt(attempt, victims)
 	return waitShutdown(ctx, attempt)

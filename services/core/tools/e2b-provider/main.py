@@ -75,10 +75,23 @@ def main():
     finally:
         if not startup_recorded:
             helper_stage('helper_startup', _HELPER_STARTED, False)
-    output = json.dumps(result) + '\n'
-    if not valid_response(result) or len(output.encode('utf-8')) > MAX_RESPONSE:
-        output = json.dumps({'Version': PROTOCOL_VERSION, 'ErrorCode': 'unconfirmed'}) + '\n'
-    sys.stdout.write(output)
+    serialization_started = time.monotonic_ns()
+    serialized = False
+    try:
+        output = json.dumps(result) + '\n'
+        if not valid_response(result) or len(output.encode('utf-8')) > MAX_RESPONSE:
+            output = json.dumps({'Version': PROTOCOL_VERSION, 'ErrorCode': 'unconfirmed'}) + '\n'
+        serialized = True
+    finally:
+        helper_stage('helper_response_serialize', serialization_started, serialized)
+    write_started = time.monotonic_ns()
+    written = False
+    try:
+        sys.stdout.write(output)
+        written = True
+    finally:
+        # Returning from write does not establish a flush or parent receipt.
+        helper_stage('helper_stdout_write', write_started, written)
 
 
 if __name__ == '__main__':

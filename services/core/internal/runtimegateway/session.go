@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -129,7 +130,11 @@ type Session struct {
 	// sendCh feeds the WS write loop. Capacity is bounded so a slow
 	// peer can't queue unbounded outbound frames; once full, Send
 	// blocks up to WriteTimeout then returns an error.
-	sendCh chan proto.Envelope
+	sendCh              chan *outboundFrame
+	artifactMu          sync.Mutex
+	artifactCaptures    map[string]*artifactTransport
+	artifactIDs         map[string]*artifactTransport
+	transportConnection string
 
 	// closeOnce guards the shutdown path so concurrent Close calls
 	// collapse into one.
@@ -150,20 +155,21 @@ type Session struct {
 func NewSessionWithOwner(conn WSConn, deviceID, workspaceID, daemonVersion string, reg *Registry, log SessionLogger, owner *ownerLease) *Session {
 	now := time.Now()
 	return &Session{
-		DeviceID:      deviceID,
-		WorkspaceID:   workspaceID,
-		DaemonVersion: daemonVersion,
-		ConnectedAt:   now,
-		conn:          conn,
-		log:           log,
-		reg:           reg,
-		owner:         owner,
-		lastSeenAt:    now,
-		subs:          map[string]*Subscription{},
-		preparations:  map[string]*preparationSubscription{},
-		ackWaiters:    map[string]chan proto.InteractionDecisionAckPayload{},
-		sendCh:        make(chan proto.Envelope, 64),
-		closed:        make(chan struct{}),
+		DeviceID:            deviceID,
+		WorkspaceID:         workspaceID,
+		DaemonVersion:       daemonVersion,
+		ConnectedAt:         now,
+		transportConnection: uuid.NewString(),
+		conn:                conn,
+		log:                 log,
+		reg:                 reg,
+		owner:               owner,
+		lastSeenAt:          now,
+		subs:                map[string]*Subscription{},
+		preparations:        map[string]*preparationSubscription{},
+		ackWaiters:          map[string]chan proto.InteractionDecisionAckPayload{},
+		sendCh:              make(chan *outboundFrame, 64),
+		closed:              make(chan struct{}),
 	}
 }
 
@@ -295,12 +301,17 @@ func (s *Session) Send(ctx context.Context, env proto.Envelope) error {
 			env.Trace = carrier.String()
 		}
 	}
+	frame := &outboundFrame{Envelope: env, observation: s.artifactFor(env)}
+	frame.observation.frame(1)
 	select {
-	case s.sendCh <- env:
+	case s.sendCh <- frame:
+		frame.queued.Store(int64(time.Since(artifactClock)))
 		return nil
 	case <-s.closed:
+		frame.observation.frame(-1)
 		return ErrSessionClosed
 	case <-ctx.Done():
+		frame.observation.frame(-1)
 		return ctx.Err()
 	}
 }
@@ -356,20 +367,32 @@ func (s *Session) SendAndWaitInteractionAck(ctx context.Context, env proto.Envel
 func (s *Session) writeLoop() {
 	for {
 		select {
-		case env, ok := <-s.sendCh:
+		case frame, ok := <-s.sendCh:
 			if !ok {
 				return
 			}
+			dequeued := int64(time.Since(artifactClock))
+			env := frame.Envelope
+			o := frame.observation
+			o.queue(frame.queued.Load(), dequeued)
 			if !s.allowsReceiptFrame(env, true) {
+				o.frame(-1)
 				continue
 			}
+			encodeStarted := o.begin(artifactEncode)
 			raw, err := json.Marshal(env)
+			o.end(artifactEncode, encodeStarted, err)
 			if err != nil {
 				s.log("agentdaemon gateway: marshal outbound envelope: %v", err)
+				o.frame(-1)
 				continue
 			}
 			_ = s.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
-			if err := s.conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+			writeStarted := o.begin(artifactWrite)
+			writeErr := s.conn.WriteMessage(websocket.TextMessage, raw)
+			o.end(artifactWrite, writeStarted, writeErr)
+			o.frame(-1)
+			if err := writeErr; err != nil {
 				s.log("agentdaemon gateway: write %s frame: %v", env.Type, err)
 				s.Close("write error: " + err.Error())
 				return
@@ -401,12 +424,24 @@ func (s *Session) readLoop() {
 			}
 		}
 
+		decodeStarted := time.Now()
 		var env proto.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			s.log("agentdaemon gateway: unmarshal inbound frame: %v", err)
 			continue
 		}
+		decodeElapsed := time.Since(decodeStarted)
+		o := s.artifactFor(env)
+		if o != nil {
+			o.mu.Lock()
+			if !o.closed {
+				o.stages[artifactDecode].add(decodeElapsed, false)
+			}
+			o.mu.Unlock()
+		}
+		dispatchStarted := o.begin(artifactDispatch)
 		s.dispatch(env)
+		o.end(artifactDispatch, dispatchStarted, nil)
 	}
 }
 

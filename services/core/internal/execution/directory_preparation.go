@@ -40,6 +40,8 @@ func (d *Dispatcher) withPreparedWorkspace(owner context.Context, peer *runtimeg
 	if err != nil {
 		return ErrExecutionUnavailable
 	}
+	finishTransport := peer.ObserveArtifactTransport(owner, prepared.requestID)
+	defer finishTransport()
 	releaseAttempted := false
 	defer func() {
 		if !releaseAttempted {

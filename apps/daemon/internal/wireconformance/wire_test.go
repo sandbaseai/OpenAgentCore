@@ -167,7 +167,7 @@ func connectRuntime(t *testing.T, peer *corePeer, setupErr error) *runtimeSide {
 	}
 	go func() {
 		for env := range conn.Recv() {
-			if err := router.Handle(t.Context(), env); err != nil {
+			if err := router.Handle(env.Context(t.Context()), env.Envelope); err != nil {
 				t.Errorf("dispatch: %v", err)
 			}
 		}

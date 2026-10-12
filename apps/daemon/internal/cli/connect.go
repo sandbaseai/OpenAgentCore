@@ -364,13 +364,14 @@ func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.R
 		case <-conn.Done():
 			obslog.Bg().Warn("pumpConn: conn.Done fired", "err", conn.Err())
 			return conn.Err()
-		case env, ok := <-conn.Recv():
+		case received, ok := <-conn.Recv():
+			env := received.Envelope
 			if !ok {
 				obslog.Bg().Warn("pumpConn: recvCh closed", "err", conn.Err())
 				return conn.Err()
 			}
 			obslog.Bg().Info("pumpConn: received envelope, calling router.Handle", "type", env.Type, "id", env.ID)
-			if err := router.Handle(parentCtx, env); err != nil {
+			if err := router.Handle(received.Context(parentCtx), env); err != nil {
 				obslog.Bg().Error("router.Handle failed", "type", env.Type, "id", env.ID, "err", err)
 			} else {
 				obslog.Bg().Info("pumpConn: router.Handle ok", "type", env.Type, "id", env.ID)
