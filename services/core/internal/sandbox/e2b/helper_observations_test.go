@@ -130,4 +130,14 @@ func TestHelperCallCancellationDoesNotAnnounceChildCompletion(t *testing.T) {
 	if row["msg"] != "e2b helper call" || row["status"] != "cancelled" || row["helper_started"] != true {
 		t.Fatal(row)
 	}
+	for _, field := range []string{"process_wait_ms", "fence_release_ms", "observation_parse_ms", "response_decode_ms"} {
+		if value, exists := row[field]; !exists || value != nil {
+			t.Fatalf("cancelled caller invented %s", field)
+		}
+	}
+	for _, field := range []string{"request_marshal_ms", "command_setup_ms", "process_start_ms", "caller_wait_ms"} {
+		if value, ok := row[field].(float64); !ok || value < 0 {
+			t.Fatalf("missing observed %s", field)
+		}
+	}
 }

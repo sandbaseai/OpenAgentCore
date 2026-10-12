@@ -28,6 +28,8 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (response Response,
 	}
 	started := time.Now()
 	helperStarted := false
+	var requestMarshalMS, commandSetupMS, processStartMS, callerWaitMS any
+	var processWaitMS, fenceReleaseMS, observationParseMS, responseDecodeMS any
 	defer func() {
 		status := "ok"
 		switch {
@@ -38,12 +40,19 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (response Response,
 		case callErr != nil || response.ErrorCode != "":
 			status = "error"
 		}
-		obslog.Ctx(ctx).Info("e2b helper call", "operation", q.Operation, "duration_ms", float64(time.Since(started).Microseconds())/1000, "status", status, "helper_started", helperStarted, "environment_id", q.Reference.EnvironmentID, "allocation_id", q.Reference.AllocationID)
+		obslog.Ctx(ctx).Info("e2b helper call", "operation", q.Operation, "duration_ms", float64(time.Since(started).Microseconds())/1000, "status", status, "helper_started", helperStarted, "environment_id", q.Reference.EnvironmentID, "allocation_id", q.Reference.AllocationID,
+			"request_marshal_ms", requestMarshalMS, "command_setup_ms", commandSetupMS,
+			"process_start_ms", processStartMS, "caller_wait_ms", callerWaitMS,
+			"process_wait_ms", processWaitMS, "fence_release_ms", fenceReleaseMS,
+			"observation_parse_ms", observationParseMS, "response_decode_ms", responseDecodeMS)
 	}()
+	boundary := time.Now()
 	data, err := json.Marshal(q)
+	requestMarshalMS = float64(time.Since(boundary).Microseconds()) / 1000
 	if err != nil || len(data) > MaxRequestBytes {
 		return Response{}, errHelperNotStarted
 	}
+	boundary = time.Now()
 	cmd := exec.Command(q.Config.Binary)
 	cmd.Stdin = bytes.NewReader(data)
 	for _, entry := range os.Environ() {
@@ -55,10 +64,14 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (response Response,
 	cmd.Env = append(cmd.Env, "PYTHONNOUSERSITE=1", "PYTHONDONTWRITEBYTECODE=1")
 	stdout, stderr := &limitBuffer{limit: MaxResponseBytes}, &limitBuffer{limit: MaxOutputBytes}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	commandSetupMS = float64(time.Since(boundary).Microseconds()) / 1000
 	if ctx.Err() != nil {
 		return Response{}, errHelperNotStarted
 	}
-	if cmd.Start() != nil {
+	boundary = time.Now()
+	startErr := cmd.Start()
+	processStartMS = float64(time.Since(boundary).Microseconds()) / 1000
+	if startErr != nil {
 		return Response{}, errHelperNotStarted
 	}
 	helperStarted = true
@@ -66,19 +79,45 @@ func (p *ProcessCaller) Call(ctx context.Context, q Request) (response Response,
 	if p.Fence != nil {
 		finished = p.Fence.ChildStarted()
 	}
-	done := make(chan error, 1)
-	go func() { err := cmd.Wait(); finished(); done <- err }()
+	// Only the existing completion channel transfers child measurements. A
+	// cancelled caller never reads buffers or fields still owned by cmd.Wait.
+	type completion struct {
+		err     error
+		waitMS  float64
+		fenceMS any
+	}
+	done := make(chan completion, 1)
+	hasFence := p.Fence != nil
+	go func() {
+		waitStarted := time.Now()
+		err := cmd.Wait()
+		result := completion{err: err, waitMS: float64(time.Since(waitStarted).Microseconds()) / 1000}
+		releaseStarted := time.Now()
+		finished()
+		if hasFence {
+			result.fenceMS = float64(time.Since(releaseStarted).Microseconds()) / 1000
+		}
+		done <- result
+	}()
+	boundary = time.Now()
 	select {
 	case <-ctx.Done():
+		callerWaitMS = float64(time.Since(boundary).Microseconds()) / 1000
 		return Response{}, ctx.Err()
-	case err = <-done:
+	case result := <-done:
+		callerWaitMS = float64(time.Since(boundary).Microseconds()) / 1000
+		err, processWaitMS, fenceReleaseMS = result.err, result.waitMS, result.fenceMS
 		if !stderr.exceeded {
+			parseStarted := time.Now()
 			observeHelperStages(ctx, q, stderr.Bytes())
+			observationParseMS = float64(time.Since(parseStarted).Microseconds()) / 1000
 		}
 		if err != nil || stdout.exceeded || stderr.exceeded {
 			return Response{}, errors.New("helper result unconfirmed")
 		}
 	}
+	decodeStarted := time.Now()
+	defer func() { responseDecodeMS = float64(time.Since(decodeStarted).Microseconds()) / 1000 }()
 	var out Response
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	decoder.DisallowUnknownFields()
