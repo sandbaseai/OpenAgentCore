@@ -36,7 +36,7 @@ func parseStageObservations(raw []byte, event string) []createObservation {
 			continue
 		}
 		if event == "e2b_helper_stage" {
-			if value.Stage == "helper_startup" || value.Stage == "helper_execute" {
+			if value.Stage == "helper_startup" || value.Stage == "helper_execute" || value.Stage == "helper_response_serialize" || value.Stage == "helper_stdout_write" {
 				seen[value.Stage] = true
 				out = append(out, value)
 			}
