@@ -1,11 +1,17 @@
 package dispatch
 
-func (r *Router) closePendingPreparationsLocked() {
+import "github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/workspaceobs"
+
+func (r *Router) closePendingPreparationsLocked() []*workspaceobs.Scope {
+	var observers []*workspaceobs.Scope
 	for _, p := range r.preparations {
 		p.timer.Stop()
 		if p.executor != nil {
 			continue
 		}
+		// Business ownership can settle before the terminal publication starts.
+		// Shutdown must also finish that observation if publication is suppressed.
+		observers = append(observers, p.observation)
 		if !p.owns {
 			continue
 		}
@@ -19,4 +25,5 @@ func (r *Router) closePendingPreparationsLocked() {
 			p.owns = false
 		}
 	}
+	return observers
 }

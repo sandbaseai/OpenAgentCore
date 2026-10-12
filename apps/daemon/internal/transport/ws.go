@@ -14,6 +14,8 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 
+	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/workspaceobs"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -53,8 +55,9 @@ type Conn struct {
 	ws       *websocket.Conn
 	deviceID string
 
-	recvCh chan proto.Envelope
-	sendCh chan envelopeWithAck
+	recvCh       chan ReceivedEnvelope
+	connectionID string
+	sendCh       chan envelopeWithAck
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -69,8 +72,10 @@ type Conn struct {
 // blocks until the frame is flushed (or the write goroutine errors).
 // Single-writer serialisation point gorilla/websocket requires.
 type envelopeWithAck struct {
-	env proto.Envelope
-	ack chan error
+	env         proto.Envelope
+	ack         chan error
+	observation *workspaceobs.Scope
+	stamp       *workspaceobs.QueueStamp
 }
 
 // Dial opens the reverse WebSocket. Read/write goroutines are live
@@ -125,11 +130,12 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
-		ws:       wsConn,
-		deviceID: opts.DeviceID,
-		recvCh:   make(chan proto.Envelope, 64),
-		sendCh:   make(chan envelopeWithAck, 64),
-		closed:   make(chan struct{}),
+		ws:           wsConn,
+		deviceID:     opts.DeviceID,
+		recvCh:       make(chan ReceivedEnvelope, 64),
+		connectionID: uuid.NewString(),
+		sendCh:       make(chan envelopeWithAck, 64),
+		closed:       make(chan struct{}),
 	}
 	go c.writeLoop()
 	go c.readLoop()
@@ -138,7 +144,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 
 // Recv returns the inbound envelope channel. Closes when the connection
 // terminates; Err() returns the cause after.
-func (c *Conn) Recv() <-chan proto.Envelope { return c.recvCh }
+func (c *Conn) Recv() <-chan ReceivedEnvelope { return c.recvCh }
 
 // Done closes when the connection has shut down.
 func (c *Conn) Done() <-chan struct{} { return c.closed }
@@ -158,12 +164,19 @@ func (c *Conn) DeviceID() string { return c.deviceID }
 // the only thing touching the underlying ws write path.
 func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
 	ack := make(chan error, 1)
-	wrapped := envelopeWithAck{env: env, ack: ack}
+	wrapped := envelopeWithAck{env: env, ack: ack, observation: workspaceobs.ForConnection(ctx, c.connectionID)}
+	if wrapped.observation != nil {
+		wrapped.stamp = &workspaceobs.QueueStamp{}
+	}
+	wrapped.observation.Pending(1)
 	select {
 	case c.sendCh <- wrapped:
+		wrapped.stamp.Admitted()
 	case <-c.closed:
+		wrapped.observation.Pending(-1)
 		return errClosedOrErr(c)
 	case <-ctx.Done():
+		wrapped.observation.Pending(-1)
 		return ctx.Err()
 	}
 	select {
@@ -259,18 +272,27 @@ func (c *Conn) writeLoop() {
 		case <-c.closed:
 			return
 		case msg := <-c.sendCh:
+			msg.stamp.Received(msg.observation, workspaceobs.OutboundQueue)
+			started := msg.observation.Begin(workspaceobs.OutboundEncode)
 			raw, err := json.Marshal(msg.env)
+			msg.observation.End(workspaceobs.OutboundEncode, started, err)
 			if err != nil {
+				msg.observation.Pending(-1)
 				msg.ack <- fmt.Errorf("transport: marshal envelope: %w", err)
 				continue
 			}
 			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.ws.WriteMessage(websocket.TextMessage, raw); err != nil {
+			started = msg.observation.Begin(workspaceobs.OutboundWrite)
+			err = c.ws.WriteMessage(websocket.TextMessage, raw)
+			msg.observation.End(workspaceobs.OutboundWrite, started, err)
+			if err != nil {
 				wrapped := fmt.Errorf("transport: write envelope (type=%s): %w", msg.env.Type, err)
+				msg.observation.Pending(-1)
 				msg.ack <- wrapped
 				c.fail(wrapped)
 				return
 			}
+			msg.observation.Pending(-1)
 			msg.ack <- nil
 		}
 	}
@@ -315,9 +337,10 @@ func (c *Conn) readLoop() {
 				"bytes", len(raw), "err", err.Error(), "head", string(raw[:min(len(raw), 200)]))
 			continue
 		}
+		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), connectionID: c.connectionID}
 		log.Bg().Info("transport: dispatching envelope", "type", env.Type, "id", env.ID)
 		select {
-		case c.recvCh <- env:
+		case c.recvCh <- received:
 		case <-c.closed:
 			return
 		}
@@ -376,4 +399,20 @@ func withQueryParams(raw string, params map[string]string) (string, error) {
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// ReceivedEnvelope carries process-local timing only; it is never serialized.
+type ReceivedEnvelope struct {
+	proto.Envelope
+	decoded      time.Time
+	connectionID string
+}
+
+func (e ReceivedEnvelope) Context(ctx context.Context) context.Context {
+	switch e.Type {
+	case proto.TypeExecutionPrepare, proto.TypeExecutionRelease, proto.TypeWorkspaceExport:
+		return workspaceobs.ReceivedContext(ctx, e.connectionID, e.decoded)
+	default:
+		return ctx
+	}
 }

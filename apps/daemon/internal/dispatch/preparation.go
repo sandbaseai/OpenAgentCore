@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/workspaceobs"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/google/uuid"
 )
@@ -18,6 +19,7 @@ const preparationRecords = 64
 // All mutable fields are protected by Router.mu. owns includes resources whose
 // cancellation is underway; a slow close cannot bypass the capacity bound.
 type preparationState struct {
+	observation      *workspaceobs.Scope
 	capabilities     proto.AgentKindCapabilities
 	executor         *executorState
 	requestID        string
@@ -37,6 +39,7 @@ type preparationState struct {
 }
 
 func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope) error {
+	localStarted := time.Now()
 	var input proto.ExecutionPreparePayload
 	if env.DecodePayload(&input) != nil || strings.TrimSpace(env.ID) == "" {
 		return r.rejectPreparation(env, "invalid_request")
@@ -87,6 +90,7 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 		if !matches {
 			return r.rejectPreparation(env, "request_conflict")
 		}
+		old.observation.Receive(ctx)
 		r.publishPreparation(old, status)
 		return nil
 	}
@@ -102,11 +106,13 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 	}
 	owner, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	p := &preparationState{capabilities: caps, requestID: env.ID, trace: env.Trace, fingerprint: fingerprint, ctx: owner, cancel: cancel, environmentID: req.EnvironmentID(), busy: true, owns: true, deadline: time.Now().Add(r.preparationTimeout)}
+	p.observation = workspaceobs.New(ctx, env.ID, "preparation")
 	p.status = proto.PreparationStatusPayload{Handle: uuid.NewString(), Revision: 1, State: "preparing", ExpiresAt: p.deadline.UnixMilli()}
 	r.preparations[p.status.Handle], r.preparationRequests[p.requestID] = p, p
 	p.timer = time.AfterFunc(r.preparationTimeout, func() { r.releasePreparation(p, "expired", "", true) })
 	r.shutdownWG.Add(1)
 	r.mu.Unlock()
+	p.observation.Elapsed(workspaceobs.PrepareLocal, localStarted)
 	go r.prepareExecution(p)
 	return nil
 }
@@ -114,9 +120,10 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 // prepareExecution readies a read-only preparation without starting a Harness.
 func (r *Router) prepareExecution(p *preparationState) {
 	defer r.shutdownWG.Done()
-	if !r.sendPreparation(p.requestID, p.trace, proto.PreparationStatusPayload{Handle: p.status.Handle, Revision: 1, State: "preparing", ExpiresAt: p.deadline.UnixMilli()}) {
+	if !r.sendPreparation(p.requestID, p.trace, proto.PreparationStatusPayload{Handle: p.status.Handle, Revision: 1, State: "preparing", ExpiresAt: p.deadline.UnixMilli()}, p.observation) {
 		r.releasePreparation(p, "failed", "status_delivery_failed", false)
 	}
+	localStarted := p.observation.Begin(workspaceobs.PrepareLocal)
 	r.mu.Lock()
 	p.busy = false
 	ready := p.status.State == "preparing" && p.ctx.Err() == nil && !r.closed
@@ -133,16 +140,17 @@ func (r *Router) prepareExecution(p *preparationState) {
 	}
 	status := p.status
 	r.mu.Unlock()
+	p.observation.End(workspaceobs.PrepareLocal, localStarted, nil)
 	if !ready {
 		r.publishPreparation(p, status)
 		return
 	}
-	if !r.sendPreparation(p.requestID, p.trace, status) {
+	if !r.sendPreparation(p.requestID, p.trace, status, p.observation) {
 		r.releasePreparation(p, "failed", "status_delivery_failed", false)
 	}
 }
 
-func (r *Router) handleExecutionRelease(_ context.Context, env proto.Envelope) error {
+func (r *Router) handleExecutionRelease(ctx context.Context, env proto.Envelope) error {
 	var input proto.ExecutionReleasePayload
 	if env.DecodePayload(&input) != nil || input.Handle == "" {
 		return r.rejectPreparation(env, "invalid_release")
@@ -154,7 +162,10 @@ func (r *Router) handleExecutionRelease(_ context.Context, env proto.Envelope) e
 	if !valid {
 		return r.rejectPreparation(env, "unknown_preparation")
 	}
+	p.observation.Receive(ctx)
+	started := p.observation.Begin(workspaceobs.ReleaseLocal)
 	r.releasePreparation(p, "released", "", true)
+	p.observation.End(workspaceobs.ReleaseLocal, started, nil)
 	return nil
 }
 
@@ -214,7 +225,14 @@ func (r *Router) publishPreparation(p *preparationState, status proto.Preparatio
 		return
 	}
 	if r.closed || r.suspension != nil {
+		outcome := "suspended"
+		if r.closed {
+			outcome = "shutdown"
+		}
 		r.mu.Unlock()
+		// Publication owns the observation even after the settled record is
+		// pruned. A suppressed terminal send must finish outside Router.mu.
+		p.observation.Finish(outcome)
 		return
 	}
 	r.shutdownWG.Add(1)
@@ -222,23 +240,41 @@ func (r *Router) publishPreparation(p *preparationState, status proto.Preparatio
 	go func() {
 		defer r.shutdownWG.Done()
 		// A failed terminal notification must not restart incomplete cleanup.
-		if !r.sendPreparation(p.requestID, p.trace, status) && (p.executor != nil || status.State == "preparing" || status.State == "ready") {
+		if !r.sendPreparation(p.requestID, p.trace, status, p.observation) && (p.executor != nil || status.State == "preparing" || status.State == "ready") {
 			r.releasePreparation(p, "failed", "status_delivery_failed", false)
 		}
 	}()
 }
 
-func (r *Router) sendPreparation(requestID, trace string, status proto.PreparationStatusPayload) bool {
-	return r.sendPreparationUntil(requestID, trace, status, time.Now().Add(5*time.Second))
+func (r *Router) sendPreparation(requestID, trace string, status proto.PreparationStatusPayload, observations ...*workspaceobs.Scope) bool {
+	return r.sendPreparationUntil(requestID, trace, status, time.Now().Add(5*time.Second), observations...)
 }
 
-func (r *Router) sendPreparationUntil(requestID, trace string, status proto.PreparationStatusPayload, deadline time.Time) bool {
+func (r *Router) sendPreparationUntil(requestID, trace string, status proto.PreparationStatusPayload, deadline time.Time, observations ...*workspaceobs.Scope) bool {
 	ctx, stop := r.shutdownContext(context.Background())
 	defer stop()
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	env, err := proto.NewEnvelopeWithTrace(proto.TypePreparationStatus, requestID, status, trace)
-	return err == nil && r.sender.Send(ctx, env) == nil
+	var observer *workspaceobs.Scope
+	if len(observations) > 0 {
+		observer = observations[0]
+	}
+	ctx = observer.Context(ctx)
+	if err == nil {
+		started := observer.Begin(workspaceobs.Sender)
+		err = r.sender.Send(ctx, env)
+		observer.End(workspaceobs.Sender, started, err)
+	}
+	switch status.State {
+	case "released", "expired", "failed":
+		outcome := status.State
+		if err != nil {
+			outcome = "send_failed"
+		}
+		observer.Finish(outcome)
+	}
+	return err == nil
 }
 
 func (r *Router) rejectPreparation(env proto.Envelope, code string) error {

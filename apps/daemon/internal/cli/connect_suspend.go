@@ -169,7 +169,8 @@ func (s *suspendedRouter) pump(ctx context.Context, conn *transport.Conn, boot *
 			return nil, ctx.Err()
 		case <-conn.Done():
 			return nil, conn.Err()
-		case env, ok := <-conn.Recv():
+		case received, ok := <-conn.Recv():
+			env := received.Envelope
 			if !ok {
 				return nil, conn.Err()
 			}
@@ -214,7 +215,7 @@ func (s *suspendedRouter) pump(ctx context.Context, conn *transport.Conn, boot *
 				}
 				return &request, nil
 			}
-			if err := s.router.Handle(ctx, env); err != nil {
+			if err := s.router.Handle(received.Context(ctx), env); err != nil {
 				obslog.Bg().Error("router.Handle failed", "type", env.Type, "err", err)
 			}
 		}
@@ -230,7 +231,8 @@ func (s *suspendedRouter) resume(ctx context.Context, conn *transport.Conn, requ
 			return err
 		}
 		return transport.ErrConnClosed
-	case env, ok := <-conn.Recv():
+	case received, ok := <-conn.Recv():
+		env := received.Envelope
 		if !ok {
 			if err := conn.Err(); err != nil {
 				return err
