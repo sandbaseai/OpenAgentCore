@@ -1,5 +1,5 @@
-// Package textobs carries bounded, private text and terminal diagnostics
-// through one write attempt. It never changes stored or public events.
+// Package textobs carries bounded, private text/terminal write diagnostics and
+// completed-artifact capture identity. It never changes stored or public events.
 package textobs
 
 import "context"

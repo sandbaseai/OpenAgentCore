@@ -1,7 +1,7 @@
 ---
 title: "运维"
 source: docs/getting-started/operations.md
-source_hash: 69f2d03a44ad7112d5a31ee87e32185dacbf4e82d0565f6d5a3edf510fad6d80
+source_hash: e64aaf1dfa9a3202c42105764f6a152cc517def8dc630ef9760143c6fa2e9184
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -260,6 +260,10 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 `executor done received` 是主循环首次接收 done、进入 journal 之前的边界，不是模型完成时刻。`delivery_final_drain` 和 `delivery_final_flush` 分别记录最终 drain 和 flush；flush 包含 `pending_count`、`confirmation` 和 `done_to_cleanup_ms`（收到 done 到清理开始，未观测为 null）。成功空 flush 是 `no_pending`，不是新增提交。仅在 final drain 遇到 done 不补造接收边界；done 后仍可能等待 preparation/function 回执。
 
 已完成且具有本地 workspace 配置（`openai_hosted` 或 `self_hosted`）的 Turn 记录 `artifact_capture_begin`、`artifact_workspace_prepare`、`artifact_export_total`、`artifact_export_staging`、`artifact_workspace_release`、`artifact_capture_total`。Prepare 包含配置/订阅/发送/ready 等待，release 包含发送/ACK。Staging 包含远端 archive 读取、PostgreSQL 大对象写入和 staging 事务，不能当作纯 DB 时间。Capture total 包含失败时 `artifact_failure_cancel_check`。前置失败可记录 `artifact_workspace_cleanup`，`confirmation=unobserved`；其 `status=ok` 仅指清理调用返回，不确认远端 release ACK。`artifact capture skipped` 使用 `turn_not_completed` 或 `workspace_not_local`。environment-none dispatcher 本来不调用 capture，无日志不代表实测零耗时；普通目录浏览不激活此 scope。父子阶段重叠，不能相加。
+
+Artifact capture 使用不可变 `capture_id` 关联原有阶段与两条有界汇总；普通目录读取和未携带 capture scope 的调用不输出这些汇总。`artifact export reader` 对每个成功注册的 export 输出一条，包含消费失败与清理，并携带 `export_id`；非法请求或注册被拒绝时没有 reader 汇总。`enqueue_ms` 累加 begin/next Send 调用，成功仅指队列接纳，不是 WebSocket 写出。`begin_count` 和 `next_count` 统计发送尝试，包含最后请求 completion；`receipt_wait_count` 统计实际进入的等待。`receipt_wait_ms` 和 `receipt_wait_max_ms` 包含每次回执或中断之前的远端工作、传输与调度，不是纯网络耗时。`chunk_count` 和 `received_bytes` 只统计验证通过的数据块；`delivered_bytes` 统计复制给消费者或最终 drain 的字节，递归读取与小 buffer 不重复计数。`first_data_ms` 和 `completed_receipt_ms` 从 reader 建立起计，未观测到为 null。`completed` 表示收到合法完成回执，不代表 staging 成功。`cancel_enqueue_ms` 仅在清理尝试取消时有值，`cancel_enqueued` 只确认入队。空 tar 仍可能需要数据块与独立 completion 请求，archive EOF 不等于 exporter 完成回执。Reader 区间包含消费者工作和清理，不能再加上其回执等待。
+
+`artifact staging` 仅在 capture scope 与 Session、Turn 匹配时输出一条。`with_staging_ms` 包住原 WithArtifactStaging 调用直到返回，包含事务获取与结束；不是数据库 commit 时刻，扣除子阶段后的剩余也不能叫纯 commit 耗时。`load_environment_ms`、`read_export_ms`、`lock_session_ms`、`load_turn_ms`、`stage_artifacts_ms` 测量原调用，未到达的边界为 null。`put_ms` 累计 `put_count` 次内容写入尝试（没有调用时均为零）；Put 包含远端 export 读取，嵌套在 read-export 内，不是纯 DB 时间。回执等待可能发生于 Put，也可能发生于 archive header/trailer 读取。Staging 的 `confirmation` 仅在外层成功返回时 confirmed；失败、rollback 或未知结果仍为 unconfirmed，即使 staging callback 已完成，也不证明最终 Turn 发布。汇总只记录身份、有限状态、时长和计数，不输出文件路径、内容或原始错误；数量不随文件或 chunk 数增长。读取顺序、锁时机、事务、取消、错误优先级与 Runtime 协议保持不变。
 
 `turn_completion` 测量每次原有 `CompleteExecution` 调用及事务返回，记录 `requested_turn_status`、`returned_turn_status`、`attempt`、`confirmation`、`mapping_status` 和真实候选 `event_id`。仅成功时填 returned status，请求状态不证明结果。每 attempt 新建私有 collector，在 `AppendChanges` 按精确 Session、Turn、预期终态类型捕获，独立于首文本 source 投影。候选插入后调用失败仍为 `unconfirmed`，成功只确认该 attempt；即使调用成功，`mapping_status=unobserved` 和空 ID 也不证明公开终态事件存在。`CompleteExecution` 不同于 journal append，不支持幂等 replay：未知提交后重试可能返回 Turn conflict，不能追认旧候选。原 unapplied-input fallback 仍为独立第二次 attempt。Deployment-provider 观测在 completion 返回后，不直接阻塞已提交终态可用性。用真实终态 event ID 关联 commit 和 SSE，不用 journal ordinal 或相邻时间配对。事务、wire、重试和 Runtime 模板要求不变。
 
