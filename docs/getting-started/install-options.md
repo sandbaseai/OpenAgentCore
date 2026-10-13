@@ -14,7 +14,7 @@ On Windows, download `install.ps1` and pass the same flags with `& ./install.ps1
 
 ## Docker Compose and hosting platforms
 
-Use the `compose.yaml` from a release on any [supported Core host](./install.md#prerequisites). The release pins its initialization image and source revision in the [Compose template](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml). Core and Web use the `latest` images, and PostgreSQL uses `postgres:16-alpine`. It starts PostgreSQL, Core and Web. Web forwards `/v1` and `/api/v1` to Core. Data lives in a named Docker volume. The one-time initialization service generates random secrets there and prepares the node installer; Core applies database migrations when it starts. [Compose configuration](../configuration.md#compose-installations) owns the settings and the data directory.
+Use the `compose.yaml` from a release on any [supported Core host](./install.md#prerequisites). The release pins its initialization, Core and Web images and source revision in the [Compose template](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml). PostgreSQL uses `postgres:16-alpine`. It starts PostgreSQL, Core and Web. Web forwards `/v1` and `/api/v1` to Core. Data lives in a named Docker volume. The one-time initialization service generates random secrets there and prepares the node installer; Core applies database migrations when it starts. [Compose configuration](../configuration.md#compose-installations) owns the settings and the data directory.
 
 For a local trial, download `compose.yaml` from a release into an empty directory, then run:
 
@@ -66,7 +66,7 @@ Several installations can share a machine when they use distinct installation di
 
 ## Sandbox backend
 
-The installer saves no sandbox backend. After signing in, open **System** → **Manage sandbox configuration** and choose Docker, microsandbox or E2B; Web proposes the [default size the Provider declares](../sandbox-provider.md#register-the-provider-kind) as Standard. The choice is stored in Core's database. To change it later, [reset the deployment](./nodes.md#change-the-sandbox-configuration). Docker shares each node's kernel with its sandboxes, and its node service account is [root-equivalent](./nodes.md#what-the-installer-sets-up). E2B needs a public HTTPS URL that is not loopback, because E2B's sandboxes call Core from E2B's cloud. Prepare an E2B template with the [E2B guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md).
+The installer saves no sandbox backend. After signing in, open **Settings** → **Sandbox and scheduling** and choose Docker, microsandbox or E2B; Web proposes the [default size the Provider declares](../sandbox-provider.md#register-the-provider-kind) as Standard. The choice is stored in Core's database. To change it later, [reset the deployment](./nodes.md#change-the-sandbox-configuration). Docker shares each node's kernel with its sandboxes, and its node service account is [root-equivalent](./nodes.md#what-the-installer-sets-up). E2B needs a public HTTPS URL that is not loopback, because E2B's sandboxes call Core from E2B's cloud. Prepare an E2B template with the [E2B guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md).
 
 ## Listeners and access
 

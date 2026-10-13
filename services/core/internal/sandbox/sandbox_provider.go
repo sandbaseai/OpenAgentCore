@@ -110,6 +110,8 @@ type SandboxProvider interface {
 	// Store remain the lifecycle owner. Its operations share one declaration.
 	Initial(context.Context, Reference) (Compute, error)
 	NewCompute(context.Context, Reference, uint64, *RetainedState) (Compute, error)
+	// GetCompute returns ErrNotFound only after the owning node verified that
+	// the exact incarnation no longer exists.
 	GetCompute(context.Context, Reference, Compute) (ComputeState, error)
 	RenewCompute(context.Context, Reference, Compute) (ComputeState, error)
 	Suspend(context.Context, SuspendRequest) (ComputeState, error)
@@ -190,6 +192,9 @@ type ComputeState struct {
 	// of this exact source and operation; native absence alone is insufficient.
 	SuspendSettled bool
 }
+
+// Terminated reports a verified stopped or crashed incarnation.
+func (s ComputeState) Terminated() bool { return s.Status == "stopped" || s.Status == "crashed" }
 
 // ClosesRestoreAttempt validates a never-executed closure against the exact
 // persisted request. Absence without this operation-bound evidence is unknown.

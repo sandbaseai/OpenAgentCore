@@ -17,7 +17,10 @@ import (
 func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	if state.Rollback {
-		if _, err := p.ResumeCompute(ctx, runtimeReference(owner), state.Current); err != nil {
+		started := time.Now()
+		_, err := p.ResumeCompute(ctx, runtimeReference(owner), state.Current)
+		logComputeStep(ctx, owner, "resume_compute", started, err)
+		if err != nil {
 			return err
 		}
 	}
@@ -28,13 +31,16 @@ func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxPro
 		}
 		// This idempotent control signal is fenced by guest PID/start time and the
 		// suspension token. It cannot execute or replay an agent request.
+		started := time.Now()
 		result, err := p.RunCommandCompute(ctx, runtimeReference(owner), state.Current, sandbox.Command{Args: []string{"oac-daemon", "resume", "--control-file", runtimebootstrap.SuspendControlFile, "--environment-id", owner.EnvironmentID, "--suspend-id", state.SuspendID}})
+		logComputeStep(ctx, owner, "wake_command", started, err)
 		if err != nil {
 			return err
 		}
 		if result.ExitCode != 0 {
 			return sandbox.ErrComputeUnconfirmed
 		}
+		started = time.Now()
 		timer := time.NewTicker(100 * time.Millisecond)
 		defer timer.Stop()
 		for {
@@ -48,8 +54,11 @@ func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxPro
 			case <-timer.C:
 			}
 		}
+		logComputeStep(ctx, owner, "peer_authorized", started, nil)
 	}
+	started := time.Now()
 	result, err := peer.SuspendControl(ctx, proto.TypeEnvironmentResume, proto.EnvironmentSuspendPayload{EnvironmentID: owner.EnvironmentID, SuspendID: state.SuspendID, Rollback: state.Rollback})
+	logComputeStep(ctx, owner, "environment_resume", started, err)
 	if err != nil {
 		return err
 	}
@@ -59,7 +68,10 @@ func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxPro
 	// The artifact has been consumed. Never restore it after this generation
 	// admits work, even if garbage collection or the final database commit fails.
 	if state.Retained != nil {
-		if err := ignoreComputeAbsent(p.DeleteRetained(ctx, runtimeReference(owner), *state.Retained)); err != nil {
+		started = time.Now()
+		err := ignoreComputeAbsent(p.DeleteRetained(ctx, runtimeReference(owner), *state.Retained))
+		logComputeStep(ctx, owner, "delete_retained", started, err)
+		if err != nil {
 			return err
 		}
 	}
@@ -139,7 +151,7 @@ func (w *Worker) waitRuntimeAwake(ctx context.Context, environment sessions.Envi
 	for {
 		owner, err := w.dispatcher.DeploymentReader.EnvironmentAllocation(ctx, key)
 		if errors.Is(err, deployment.ErrNotFound) {
-			return nil
+			return w.waitEnvironmentInitialization(ctx, environment)
 		}
 		if err != nil {
 			return err
@@ -193,7 +205,7 @@ func (w *Worker) waitRuntimeAwake(ctx context.Context, environment sessions.Envi
 					if !found || !kind.Available {
 						return ErrExecutionUnavailable
 					}
-					return nil
+					return w.waitEnvironmentInitialization(ctx, environment)
 				}
 			} else if !errors.Is(peerErr, sessions.ErrNotFound) && !errors.Is(peerErr, runtimegateway.ErrDeviceNotRegistered) && !errors.Is(peerErr, runtimegateway.ErrSessionClosed) {
 				return peerErr
@@ -209,6 +221,37 @@ func (w *Worker) waitRuntimeAwake(ctx context.Context, environment sessions.Envi
 				default:
 				}
 			}
+		}
+		select {
+		case <-ctx.Done():
+			return ErrExecutionUnavailable
+		case <-w.stopped:
+			return ErrExecutionUnavailable
+		case <-ticker.C:
+		}
+	}
+}
+
+// A live socket and its capability declaration precede Environment setup. Files
+// share the caller's existing budget while waiting for that durable completion;
+// they never reserve a worker slot or send preparation during initialization.
+func (w *Worker) waitEnvironmentInitialization(ctx context.Context, environment sessions.Environment) error {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		current, err := w.dispatcher.SessionsReader.GetEnvironment(ctx, environment.TenantID, environment.ID)
+		if err != nil {
+			return err
+		}
+		if current.SessionID != environment.SessionID {
+			return sessions.ErrNotFound
+		}
+		switch current.Initialization {
+		case "complete":
+			return nil
+		case "pending", "running":
+		default:
+			return ErrExecutionUnavailable
 		}
 		select {
 		case <-ctx.Done():

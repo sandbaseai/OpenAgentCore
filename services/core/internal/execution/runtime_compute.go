@@ -9,19 +9,21 @@ import (
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspacefs"
 	"github.com/google/uuid"
 )
 
-// RuntimeSuspensionPolicy is the idle suspension policy of a provider that
-// suspends sandboxes.
+// RuntimeSuspensionPolicy supplies snapshot retention for a provider that
+// suspends sandboxes. Deployment storage owns the mutable idle timeout.
 type RuntimeSuspensionPolicy struct {
 	MaxActive   int
 	MaxRetained int
-	IdleTimeout time.Duration
 	Retention   time.Duration
 }
 
@@ -41,16 +43,20 @@ func (r *runtimeLifecycle) saveCompute(ctx context.Context, owner deployment.All
 	if err != nil {
 		return owner, err
 	}
-	idleTimeout := time.Duration(0)
-	if phase == "quiescing" {
-		policy := r.config.Suspension
-		if policy == nil {
-			return owner, sandbox.ErrInvalid
-		}
-		idleTimeout = policy.IdleTimeout
+	next, err := r.deployment.SetCompute(ctx, owner, phase, raw, until)
+	if err == nil {
+		log.Ctx(ctx).Info("Runtime compute phase saved", "allocation_id", owner.ID, "node_id", owner.NodeID, "from", owner.ComputePhase, "to", phase)
 	}
-	return r.deployment.SetCompute(ctx, owner, phase, raw, until, idleTimeout)
+	return next, err
 }
+
+// Durations use this Core process's monotonic clock and cover the provider or
+// daemon round trip as seen by the lifecycle, including node queueing.
+func logComputeStep(ctx context.Context, owner deployment.Allocation, step string, started time.Time, err error) {
+	log.Ctx(ctx).Info("Runtime compute step", "allocation_id", owner.ID, "node_id", owner.NodeID, "step", step,
+		"duration_ms", time.Since(started).Milliseconds(), "succeeded", err == nil)
+}
+
 func (r *runtimeLifecycle) enableCompute(ctx context.Context, owner deployment.Allocation) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	p := r.config.Provider
@@ -116,8 +122,17 @@ func (r *runtimeLifecycle) observeCompute(ctx context.Context, owner deployment.
 func (r *runtimeLifecycle) idleCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	compute, err := p.GetCompute(ctx, runtimeReference(owner), state.Current)
+	if errors.Is(err, sandbox.ErrNotFound) {
+		return r.releaseLostCompute(ctx, p, owner, state, err)
+	}
 	if err != nil {
 		return err
+	}
+	if compute.Terminated() {
+		if compute.Compute.ID != state.Current.ID || compute.Compute.Name != state.Current.Name || compute.Compute.Generation != state.Current.Generation {
+			return sandbox.ErrOwnership
+		}
+		return r.releaseLostCompute(ctx, p, owner, state, sandbox.ErrComputeUnconfirmed)
 	}
 	if compute.Status != "running" || !compute.BootstrapComplete {
 		return sandbox.ErrComputeUnconfirmed
@@ -192,9 +207,53 @@ func (r *runtimeLifecycle) idleCompute(ctx context.Context, p sandbox.SandboxPro
 	return r.captureCompute(ctx, p, suspending, state, false)
 }
 
+// releaseLostCompute settles a settled running incarnation that its owning
+// node reports absent, stopped or crashed. Only exact cleanup of that
+// incarnation, with no live Runtime, no other compute intent and a Session
+// that can continue on new compute, releases ownership; every other case
+// returns the observation's error.
+func (r *runtimeLifecycle) releaseLostCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observed error) error {
+	if !owner.CreateSettled || owner.State != "running" || state.Current.ID == "" || state.Target != nil || state.Retained != nil || state.SuspendID != "" || state.RestoreID != "" || state.Rollback {
+		return observed
+	}
+	if _, err := authorizedRuntimePeer(ctx, r.sessions, r.registry, owner.DeviceID); err == nil {
+		return sandbox.ErrComputeUnconfirmed
+	} else if !errors.Is(err, sessions.ErrNotFound) && !errors.Is(err, runtimegateway.ErrDeviceNotRegistered) && !errors.Is(err, runtimegateway.ErrSessionClosed) {
+		return err
+	}
+	current, err := r.reader.EnvironmentAllocation(ctx, owner.Key())
+	if err != nil {
+		return err
+	}
+	if current.ID != owner.ID || current.State != owner.State || current.ComputePhase != owner.ComputePhase || current.ComputeRevision != owner.ComputeRevision {
+		return deployment.ErrAllocationConflict
+	}
+	retained, err := r.reader.RetainedNativeHistory(ctx, owner.Key())
+	if err != nil {
+		return err
+	}
+	if !retained {
+		return observed
+	}
+	if err := r.lease.CheckOwnership(ctx); err != nil {
+		return err
+	}
+	if err := ignoreComputeAbsent(p.KillCompute(ctx, runtimeReference(owner), state.Current)); err != nil {
+		return err
+	}
+	released, err := r.deployment.ReleaseLostCompute(ctx, owner)
+	if err != nil {
+		return err
+	}
+	r.clearRuntimeState(released)
+	return nil
+}
+
 func (r *runtimeLifecycle) captureCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observeOnly bool) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
+	started := time.Now()
 	result, err := p.Suspend(ctx, sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, Retained: state.Retained, ReconcileOnly: observeOnly})
+	logComputeStep(ctx, owner, "suspend", started, err)
 	if err != nil {
 		return err
 	}
@@ -294,6 +353,7 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Sandbox
 	resumeAt := time.Now()
 	result, err := p.Resume(ctx, sandbox.ResumeRequest{Workspace: workspace, Reference: runtimeReference(owner), OperationID: state.RestoreID, Retained: *state.Retained, Target: *state.Target, ReconcileOnly: observeOnly})
 	observeExecutionStage(ctx, "provider_resume", resumeAt, err, "allocation_id", owner.ID, "session_id", owner.SessionID, "environment_id", owner.EnvironmentID, "node_id", r.nodeID, "reconcile_only", observeOnly)
+	logComputeStep(ctx, owner, "resume", resumeAt, err)
 	if err != nil {
 		return err
 	}
@@ -380,7 +440,7 @@ func (r *runtimeLifecycle) restoreWorkspace(ctx context.Context, owner deploymen
 	if r.workspaces == nil {
 		return nil, workspacefs.ErrUnavailable
 	}
-	binding, err := r.workspaces.GetReady(ctx, owner.TenantID, owner.EnvironmentID, r.config.WorkspaceRequirements, spec.Resources.EnvironmentDiskMiB)
+	binding, err := r.workspaces.GetReady(ctx, owner.TenantID, owner.EnvironmentID, r.config.WorkspaceRequirements)
 	if err == nil && binding == nil {
 		return nil, workspacefs.ErrNotFound
 	}

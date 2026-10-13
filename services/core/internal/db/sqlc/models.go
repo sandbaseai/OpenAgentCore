@@ -151,6 +151,7 @@ type EnvironmentWorkspace struct {
 	ConfigurationID pgtype.UUID `json:"configuration_id"`
 	State           string      `json:"state"`
 	Attachment      []byte      `json:"attachment"`
+	CapacityMib     int64       `json:"capacity_mib"`
 }
 
 type ExecutionProjectScope struct {
@@ -261,6 +262,7 @@ type RuntimeDeployment struct {
 	ResetAudit         []byte             `json:"reset_audit"`
 	ProviderConfig     []byte             `json:"provider_config"`
 	ProviderMetadata   []byte             `json:"provider_metadata"`
+	IdleSeconds        int64              `json:"idle_seconds"`
 }
 
 type RuntimeDeploymentGeneration struct {
@@ -564,6 +566,12 @@ type WorkspaceFsConfiguration struct {
 	Adapter    string      `json:"adapter"`
 	Parameters []byte      `json:"parameters"`
 	Active     bool        `json:"active"`
+	Credential []byte      `json:"credential"`
+}
+
+type WorkspaceStorageAdmission struct {
+	Singleton         bool  `json:"singleton"`
+	TenantCapacityMib int64 `json:"tenant_capacity_mib"`
 }
 
 type WriteAuditOperation struct {

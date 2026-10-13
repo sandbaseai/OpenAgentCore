@@ -131,7 +131,7 @@ func TestFreshEnvironmentHintProvisionsWithoutMaintenanceTick(t *testing.T) {
 					err := node.lifecycle.reconcile(ctx)
 					scans <- struct{}{}
 					return err
-				})
+				}, node.lifecycle.pendingWake, node.lifecycle.provisionCommitted, node.lifecycle.connectionWake, node.lifecycle.observeAwaitingConnections)
 			}()
 			t.Cleanup(func() { cancel(); <-done })
 			<-scans // Startup scan finishes before any Session is committed.

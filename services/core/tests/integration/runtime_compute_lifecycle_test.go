@@ -299,11 +299,12 @@ func computeFixtureForMode(t *testing.T, maxActive, maxRetained int, direct bool
 	if direct {
 		kind = "e2b"
 	}
-	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: webDeployment(t, s, kind), policy: execution.RuntimeSuspensionPolicy{IdleTimeout: time.Second, Retention: time.Hour, MaxActive: maxActive, MaxRetained: maxRetained}}
+	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: webDeployment(t, s, kind), policy: execution.RuntimeSuspensionPolicy{Retention: time.Hour, MaxActive: maxActive, MaxRetained: maxRetained}}
 	view, err := deploymentService(t, s).View(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.sql(`UPDATE runtime_deployment SET idle_seconds=30`)
 	if !direct {
 		f.node = enrollNode(t, s, view, deployment.Capacity{MaxActive: maxActive, MaxRetained: maxRetained}).NodeID
 	}

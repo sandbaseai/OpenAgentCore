@@ -118,11 +118,12 @@ func newNodeIsolationFixture(t *testing.T, mode string) *nodeIsolationFixture {
 		server.Close()
 	})
 	f := &nodeIsolationFixture{initializationCancel: cancelPreparation, t: t, store: s, nodes: deploymentService(t, s), pool: pool, provider: p, key: webDeployment(t, s, "microsandbox"), nodeA: uuid.NewString(), nodeB: uuid.NewString()}
+	runtimeSuspensionSQL(t, pool, "UPDATE runtime_deployment SET idle_seconds=60")
 	// Keep restored compute awake throughout the isolation assertions.
 	// The suspension setup explicitly dates its activity two minutes in the past.
 	owner := executionOwner(t, s)
 	f.placement = owner.Deployment
-	f.worker = startOwnedWorker(t, t.Context(), s, &execution.Dispatcher{Registry: registry, ManagedRuntimes: webRuntimes(t, s, f.key, p, &execution.RuntimeSuspensionPolicy{IdleTimeout: time.Minute, Retention: time.Hour})}, owner)
+	f.worker = startOwnedWorker(t, t.Context(), s, &execution.Dispatcher{Registry: registry, ManagedRuntimes: webRuntimes(t, s, f.key, p, &execution.RuntimeSuspensionPolicy{Retention: time.Hour})}, owner)
 	t.Cleanup(f.stop)
 	f.epoch = fixtureOwnerEpoch(t, s)
 	f.enroll(f.nodeA)

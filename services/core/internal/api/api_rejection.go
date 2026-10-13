@@ -83,10 +83,14 @@ func (w *processingTimeWriter) logRejection(status int) {
 	if !w.environmentFile || status < 400 || w.stamped {
 		return
 	}
+	code := ""
+	if w.errorCode != nil {
+		code = *w.errorCode
+	}
 	log.Warn(w.ctx, "api_request_rejected",
 		"operation", "environment_file_create",
 		"route", "/v1/agents/environments/{environment_id}/files",
 		"status", status,
-		"code", safeAPIErrorCode(w.errorCode),
+		"code", safeAPIErrorCode(code),
 		"reason", w.rejectionReason.String())
 }
