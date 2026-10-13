@@ -1,7 +1,7 @@
 ---
 title: "安装选项"
 source: docs/getting-started/install-options.md
-source_hash: 698909d30bf0ebdff2656deb6a6cb00c18181e835e2c1a7972de0d1e7ca47733
+source_hash: 23c43bed7e7368fe9e106572cd0061d6fea306e418e34340cafed34a47398bc5
 ---
 
 [默认安装](install.md)无需任何选项。本页介绍安装选项、Compose 部署和反向代理配置。
@@ -16,7 +16,7 @@ Windows 可下载 `install.ps1`，然后使用相同参数，例如 `& ./install
 
 ## Docker Compose 与托管平台 {#docker-compose-and-hosting-platforms}
 
-在任一[支持的 Core 主机](install.md#prerequisites)上使用发行版中的 `compose.yaml`。发行流程会在 [Compose 模板](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml)中固定初始化镜像及源码版本。Core 和 Web 使用 `latest` 镜像，PostgreSQL 使用 `postgres:16-alpine`。它会启动 PostgreSQL、Core 和 Web。Web 把 `/v1` 和 `/api/v1` 转发到 Core。数据保存在 Docker 命名卷中。一次性初始化服务会在该目录中生成随机机密信息并准备节点安装程序；Core 启动时执行数据库迁移。[Compose 配置](../configuration.md#compose-installations)负责管理各项设置和数据目录。
+在任一[支持的 Core 主机](install.md#prerequisites)上使用发行版中的 `compose.yaml`。发行流程会在 [Compose 模板](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml)中固定初始化、Core 和 Web 镜像及源码版本。PostgreSQL 使用 `postgres:16-alpine`。它会启动 PostgreSQL、Core 和 Web。Web 把 `/v1` 和 `/api/v1` 转发到 Core。数据保存在 Docker 命名卷中。一次性初始化服务会在该目录中生成随机机密信息并准备节点安装程序；Core 启动时执行数据库迁移。[Compose 配置](../configuration.md#compose-installations)负责管理各项设置和数据目录。
 
 进行本地试用时，请将发行版的 `compose.yaml` 下载到一个空目录，然后运行：
 
@@ -68,7 +68,7 @@ docker compose exec web oac-web core-key
 
 ## 沙箱后端 {#sandbox-backend}
 
-安装程序不保存沙箱后端。登录后，打开 **System** → **Manage sandbox configuration**，选择 Docker、microsandbox 或 E2B；Web 会把 [Provider 声明的默认大小](../sandbox-provider.md#register-the-provider-kind)推荐为 Standard 尺寸。该选择保存在 Core 的数据库中。以后要更改，请[重置部署](nodes.md#change-the-sandbox-configuration)。Docker 沙箱与每个节点共用该节点的内核，其节点服务账户[等效于 root](nodes.md#what-the-installer-sets-up)。E2B 需要一个非回环的公共 HTTPS URL，因为 E2B 沙箱会从 E2B 云端调用 Core。按照 [E2B 指南](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md)准备模板。
+安装程序不保存沙箱后端。登录后，打开 **Settings** → **Sandbox and scheduling**，选择 Docker、microsandbox 或 E2B；Web 会把 [Provider 声明的默认大小](../sandbox-provider.md#register-the-provider-kind)推荐为 Standard 尺寸。该选择保存在 Core 的数据库中。以后要更改，请[重置部署](nodes.md#change-the-sandbox-configuration)。Docker 沙箱与每个节点共用该节点的内核，其节点服务账户[等效于 root](nodes.md#what-the-installer-sets-up)。E2B 需要一个非回环的公共 HTTPS URL，因为 E2B 沙箱会从 E2B 云端调用 Core。按照 [E2B 指南](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md)准备模板。
 
 ## 监听器与访问 {#listeners-and-access}
 

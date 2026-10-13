@@ -10,7 +10,7 @@ Every setting of a Core installation has exactly one home, in one of three categ
 | [Secrets](#compose-installations) | Database password, credential encryption key, installation ID, Core key and the Core key digest derived from it | `secrets/` in the Compose data volume, one copy each | Initialization generates them once; `oac rotate-core-key` replaces the Core key and its digest | `oac rotate-core-key` restarts Core and Web |
 | [Runtime settings](#runtime-settings-web) | Sandbox backend and size, nodes, Projects and keys, default models, executor credentials | Core's PostgreSQL database | Web, or the Core API (`/core/v1`) with the Core key | Saved without a Core restart; nodes prepare Runtime changes asynchronously |
 
-Web's **System** page shows the installation's addresses, the default models, the sandbox configuration and, under **Startup settings**, the process settings Core loaded. No configuration file defines Projects or API keys.
+**Settings** is Web's single entry for platform configuration, with **Sandbox and scheduling**, **Workspace storage**, **Models and credentials** and **Service and deployment** groups. Each setting has one editor; monitoring and node pages link to it. Forms save independently through their owning API, without a cross-resource save. **Service and deployment** shows the installation's addresses and the process settings Core loaded; process settings remain read-only in Web. Projects, API keys and Session executor credentials remain on their resource pages. No configuration file defines Projects or API keys.
 
 ## Process settings
 
@@ -92,14 +92,16 @@ Runtime settings live in Core's database. Change them in Web; scripts use the sa
 
 | Setting | Where in Web | Core API | Notes |
 | --- | --- | --- | --- |
-| Sandbox backend: Docker, microsandbox or E2B | **System** → **Manage sandbox configuration**: the setup wizard, ending with **Save configuration** | `/core/v1/sandbox/deployment` | One backend per installation, chosen after the first sign-in. Another backend needs **Reset deployment** first; see [change the sandbox configuration](./getting-started/nodes.md#change-the-sandbox-configuration) |
-| Sandbox size, Runtime release, E2B key and template build | **System** → **Manage sandbox configuration** → **Change resources** | `/core/v1/sandbox/deployment` | Web proposes the [default size the Provider declares](./sandbox-provider.md#register-the-provider-kind). Existing sandboxes keep their size and release. The E2B key is write-only and encrypted |
-| Nodes and their capacity | **Nodes**: **Add node**; **Edit node** and **Remove node** on a node's page | `/core/v1/sandbox/enrollment-tokens`, `/core/v1/sandbox/nodes` | See [Node capacity](#node-capacity) and the [nodes guide](./getting-started/nodes.md) |
+| Sandbox backend: Docker, microsandbox or E2B | **Settings** → **Sandbox and scheduling**: the setup wizard, ending with **Save configuration** | `/core/v1/sandbox/deployment` | One backend per installation, chosen after the first sign-in. Another backend needs **Reset deployment** first; see [change the sandbox configuration](./getting-started/nodes.md#change-the-sandbox-configuration) |
+| Sandbox size, Runtime release, E2B key and template build | **Settings** → **Sandbox and scheduling** → **Change resources** | `/core/v1/sandbox/deployment` | Web proposes the [default size the Provider declares](./sandbox-provider.md#register-the-provider-kind). Existing sandboxes keep their size and release. The E2B key is write-only and encrypted |
+| Nodes and their capacity | **Settings → Sandbox and scheduling**: **Add node**; **Sandbox nodes** → **Edit node**. Removal stays on the node's page | `/core/v1/sandbox/enrollment-tokens`, `/core/v1/sandbox/nodes` | See [Node capacity](#node-capacity) and the [nodes guide](./getting-started/nodes.md) |
+| Idle suspension | **Settings** → **Sandbox and scheduling** → **Capacity and suspension** → **Idle before suspension (seconds)** → **Save** | `PATCH /core/v1/sandbox/deployment` | Deployment-wide; see [suspension policy](../contracts/agents-api/sandbox-deployment.md#suspension-policy) |
+| Independent workspace storage and tenant capacity | **Settings → Workspace storage** | `/core/v1/workspace-storage` | See [independent workspace storage](#independent-workspace-storage); existing workspaces retain their configuration |
 | Projects and API keys | **Projects and keys**: **Create project**, **Rename**, **Issue key**, **Revoke**, **Archive** | `/core/v1/projects` | Keys are shown once; Core stores digests |
-| Default model per harness | **System** → **Default model configuration**: **Set** | `/core/v1/harnesses/{harness}/model-configuration` | See [Default models](#default-models) |
+| Default model per harness | **Settings** → **Models and credentials**: **Set** | `/core/v1/harnesses/{harness}/model-configuration` | See [Default models](#default-models) |
 | Executor credentials of a self-hosted Session | **Session log**, then the **Session** page: **Executor credentials** | `/core/v1/projects/{project_id}/environments/{environment_id}/executor-credentials` | See [self-hosted executors](./getting-started/self-hosted.md) |
 
-Which harnesses are enabled, and the default one, are process settings (`core.harnesses`, `core.default_harness`); System shows them read-only. The [Core administration API](../contracts/agents-api/admin-api.md) lists every Core API route, and the [deployment contract](../contracts/agents-api/sandbox-deployment.md) defines the sandbox fields, limits and change rules.
+Which harnesses are enabled, and the default one, are process settings (`core.harnesses`, `core.default_harness`); **Settings → Models and credentials** shows them read-only. The [Core administration API](../contracts/agents-api/admin-api.md) lists every Core API route, and the [deployment contract](../contracts/agents-api/sandbox-deployment.md) defines the sandbox fields, limits and change rules.
 
 ### Independent workspace storage
 
@@ -121,7 +123,7 @@ services:
           create_host_path: false
 ```
 
-Select storage using `PUT /core/v1/workspace-storage` with the Core key as described in the [administration API](../contracts/agents-api/admin-api.md#workspace-storage). For first-time setup, generate separate canonical UUIDs for the immutable configuration `id` and the namespace marker, then submit this shape with your actual values. Restores retain their existing identities. Selection runs the adapter's availability, ownership and xattr checks in Core; it does not prove that every node can resolve the mount:
+Select storage in **Settings → Workspace storage → Select new configuration**, or use `PUT /core/v1/workspace-storage` with the Core key as described in the [administration API](../contracts/agents-api/admin-api.md#workspace-storage). For first-time setup, generate separate canonical UUIDs for the immutable configuration `id` and the namespace marker, then submit this shape with your actual values. Restores retain their existing identities. Selection runs the adapter's availability, ownership and xattr checks in Core; it does not prove that every node can resolve the mount:
 
 ```json
 {
@@ -131,21 +133,76 @@ Select storage using `PUT /core/v1/workspace-storage` with the Core key as descr
     "root": "/srv/oac-workspaces",
     "namespace_id": "22222222-2222-4222-8222-222222222222",
     "uid": 65532
-  }
+  },
+  "tenant_capacity_mib": 0
 }
 ```
 
-Then create or update the microsandbox deployment through the [sandbox deployment API](../contracts/agents-api/sandbox-deployment.md#routes), setting `resources.environment_disk_mib` to `0` and retaining the required compute resources, Runtime and provider configuration. A positive value requests a quota that this adapter does not enforce and is rejected. Deployment workspace requirements and each Session's attachment are derived from the selected database configuration; do not add a filesystem field to the deployment or a second storage configuration to node files. Web has no workspace storage editor. After the filesystem and deployment are selected, use **Nodes → Add node** to enroll the prepared hosts. Connected, ready compute alone does not qualify an external filesystem; validate actual Session creation and access through each participating node before admitting application traffic. Include the independent namespace in the [stopped-write backup and restore procedure](./getting-started/operations.md#back-up).
+This configuration enforces no per-workspace quota, so `tenant_capacity_mib` must be `0`. For bounded workspaces, prepare the [quota mode storage server](#quota-mode-storage-server) and select a quota mode configuration with a [tenant capacity](#tenant-capacity) instead.
+
+Then create or update the microsandbox deployment through the [sandbox deployment API](../contracts/agents-api/sandbox-deployment.md#routes), retaining the required compute resources, Runtime and provider configuration. `resources.environment_disk_mib` is each new workspace's capacity: `0` without quota mode, where a positive value is rejected, and at least 1024 MiB in quota mode, where `0` is refused at workspace admission. Existing workspaces keep the capacity they were admitted with when the deployment changes. Deployment workspace requirements and each Session's attachment are derived from the selected database configuration; do not add a filesystem field to the deployment or a second storage configuration to node files.
+
+The storage form accepts the adapter identifier, its parameters as a JSON object and an optional write-only credential JSON object. Core validates these adapter-owned values; Web does not define provider-specific storage fields. **Edit tenant capacity** keeps the selected immutable configuration. Selecting another configuration requires a new ID and does not migrate existing workspaces.
+
+After the filesystem and deployment are selected, use **Settings → Sandbox and scheduling → Add node** to enroll the prepared hosts. Connected, ready compute alone does not qualify an external filesystem; validate actual Session creation and access through each participating node before admitting application traffic. Include the independent namespace in the [stopped-write backup and restore procedure](./getting-started/operations.md#back-up).
+
+#### Quota mode storage server
+
+Quota mode bounds each workspace's allocated bytes and inodes with an XFS project quota on the NFS server, set by the `oac-workspace-quota` command that Core calls over a restricted SSH forced command. [Quota mode](./workspace-provider.md#quota-mode) owns the protocol and enforcement semantics. Prepare the storage server as its administrator:
+
+1. Put the export on a local XFS filesystem mounted with enforcing project quotas (`prjquota`, not `pqnoenforce`). The export root must be a subdirectory of that mount, for example mount `/srv/xfs` and export `/srv/xfs/oac-workspaces`; the command keeps its journal in `/srv/xfs/.oac-quota`, outside the export. Prepare the namespace root and marker as above.
+2. Install `xfsprogs` and Python 3.9 or newer. Install `storage/oac-workspace-quota` from the matching distribution as `/usr/local/sbin/oac-workspace-quota`, owned by root with mode `0755`.
+3. Write `/etc/oac/workspace-quota.json`, owned by root and not writable by group or others: `{"export_root": "/srv/xfs/oac-workspaces", "mount_point": "/srv/xfs"}`.
+4. Reserve a project ID range that no other project on this filesystem uses, then initialize the journal once: `oac-workspace-quota --config /etc/oac/workspace-quota.json init --projid-start 100000 --projid-end 199999`. It refuses to run over an existing journal; never initialize restored storage.
+5. Generate a dedicated key pair, for example `ssh-keygen -t ed25519 -N '' -f oac-workspace-quota`. Authorize its public key for one account with a working shell, such as `oac-quota`, in that account's `authorized_keys`: `restrict,from="<Core address>",command="sudo -n /usr/local/sbin/oac-workspace-quota --config /etc/oac/workspace-quota.json serve" ssh-ed25519 AAAA...`, with the sudoers entry `oac-quota ALL=(root) NOPASSWD: /usr/local/sbin/oac-workspace-quota --config /etc/oac/workspace-quota.json serve`. Alternatively authorize the key for root with the same options and the command without `sudo -n` under `PermitRootLogin forced-commands-only`. Keep `PermitUserEnvironment no`.
+6. Read the server's public host key from `/etc/ssh/` on the server itself, not from an unauthenticated network scan.
+
+Select the quota mode configuration with the private key as its write-only credential. Delete the local private key file after a successful selection; Core keeps it encrypted with `secrets/core/credential.key`:
+
+```json
+{
+  "id": "33333333-3333-4333-8333-333333333333",
+  "adapter": "nfs",
+  "parameters": {
+    "root": "/srv/oac-workspaces",
+    "namespace_id": "22222222-2222-4222-8222-222222222222",
+    "uid": 65532,
+    "quota": {
+      "endpoint": "storage.internal:22",
+      "user": "oac-quota",
+      "host_key": "ssh-ed25519 AAAA..."
+    }
+  },
+  "credential": {
+    "ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n"
+  },
+  "tenant_capacity_mib": 65536
+}
+```
+
+Selection calls the command's read-only check through the pinned host key. Then update the deployment with the per-workspace capacity in `resources.environment_disk_mib`. Until that update, an installation that switched from a configuration without quotas refuses new workspaces; existing workspaces continue with their own configuration. The credential belongs to the immutable configuration. To rotate it, authorize a new key, select a new configuration ID with it, and keep the old key authorized until no workspace bound to the old configuration is still being created.
+
+Supported recovery for quota mode is a block-level copy of the XFS filesystem; see [back up](./getting-started/operations.md#back-up).
+
+#### Tenant capacity
+
+`tenant_capacity_mib` is the installation's single tenant capacity policy, written only together with the selection by `PUT /core/v1/workspace-storage` and stored in Core's database. A positive value requires a quota mode configuration, and a quota mode configuration requires a positive value. It bounds the sum of admitted capacities of one tenant's workspaces that are not yet confirmed deleted, across configuration changes; [capability validation](./workspace-provider.md#capability-validation) owns the counting rules. Lowering the value refuses new workspaces only; deleting Sessions frees capacity once their storage is removed.
+
+Session creation can succeed before this asynchronous workspace admission. While capacity is exhausted, Core retries without allocating the refused workspace or its compute; pending input keeps its original [Environment input deadline](../contracts/agents-api/environments.md#reservations). An idle Session created without input has no input deadline and waits for capacity.
+
+Workspaces created without quota mode remain unbounded; nothing resizes or migrates them. While one is retained, its tenant cannot admit new workspaces under a positive policy until that Session is deleted.
+
+The policy bounds what each tenant can commit, not the filesystem. Size the XFS filesystem for the number of tenants times the policy plus headroom for unbounded workspaces, identities, deletion markers, the journal and XFS metadata, or oversubscribe knowingly and monitor free space. Keep each node's `checkpoint_root` on separate storage. Capacity bounds provide no I/O fairness.
 
 ### Node capacity
 
-Core approves a node's capacity when you generate its Add node command: **Sandboxes at once** (`max_active`, default 2) and, for microsandbox only, **Retained sandboxes** (`max_retained`, default 8), with `max_retained >= max_active >= 1`. Docker never suspends sandboxes, so Web doesn't ask for it and Core keeps `max_retained` equal to `max_active`. Change them later with **Edit node**. Reservations and cleanup that is not confirmed count against capacity; lowering a limit stops no running sandbox. A node's own files can't change its capacity, size or Runtime.
+Core approves a node's capacity when you generate its Add node command: **Sandboxes at once** (`max_active`, default 2) and, for microsandbox only, **Retained sandboxes** (`max_retained`, default 8), with `max_retained >= max_active >= 1`. Docker never suspends sandboxes, so Web doesn't ask for it and Core keeps `max_retained` equal to `max_active`. Change them later in **Settings → Sandbox and scheduling → Sandbox nodes** with **Edit node**. Reservations and cleanup that is not confirmed count against capacity; lowering a limit stops no running sandbox. A node's own files can't change its capacity, size or Runtime.
 
 `core.execution_concurrency` is unrelated: it limits concurrent execution work in Core.
 
 ### Default models
 
-Set a default in **System** → **Default model configuration**, or use `PUT /core/v1/harnesses/{harness}/model-configuration`. Core encrypts provider keys with `secrets/core/credential.key` and never returns them. [Model execution](../contracts/agents-api/model-execution.md#deployment-defaults) owns the request fields and replacement rules, and [precedence](../contracts/agents-api/model-execution.md#saved-defaults-and-precedence) says which Sessions use a default.
+Set a default in **Settings** → **Models and credentials**, or use `PUT /core/v1/harnesses/{harness}/model-configuration`. Core encrypts provider keys with `secrets/core/credential.key` and never returns them. [Model execution](../contracts/agents-api/model-execution.md#deployment-defaults) owns the request fields and replacement rules, and [precedence](../contracts/agents-api/model-execution.md#saved-defaults-and-precedence) says which Sessions use a default.
 
 ## Compose installations
 

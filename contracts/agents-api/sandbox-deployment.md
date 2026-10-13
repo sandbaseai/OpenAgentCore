@@ -6,6 +6,12 @@ The sandbox deployment selects the Sandbox Provider, the per-sandbox resources a
 
 This contract owns the Core API routes below and their semantics. The [nodes guide](../../docs/getting-started/nodes.md) owns the operator workflow, the [machine connection API](./machine-api.md#node-routes) the routes nodes call, and the [sandbox node protocol](./node-generation-protocol.md) the node connection.
 
+## Suspension policy
+
+`PATCH /core/v1/sandbox/deployment` accepts `{"idle_seconds": 300}`. `idle_seconds` is a required integer from 30 to 86400 seconds, defaulting to 300, stored in Core's database. Only configured Providers declaring checkpoint support accept this change; unconfigured, unsupported or resetting deployments reject it. Success returns the deployment view with the saved `suspension.idle_seconds`.
+
+Changes apply to existing and new running allocations on the next lifecycle pass, without a Core restart, generation change or node rollout. Suspension already in progress is not cancelled; existing snapshots and the 24-hour retention period are unchanged. [Capacity-pressure reclamation](../../docs/sandbox-provider.md#suspension) can still suspend after 15 seconds of inactivity. Web manages this deployment-wide policy in **Settings** → **Sandbox and scheduling** → **Capacity and suspension**. The adjacent **Sandbox nodes** section owns per-node capacity editing; the policy belongs to the deployment and capacity limits remain node-owned.
+
 ## Routes
 
 Every route requires the Core key. [Web's console server](../../docs/web/console-server.md) adds it on the server side for signed-in requests.
@@ -13,6 +19,7 @@ Every route requires the Core key. [Web's console server](../../docs/web/console
 | Route | Effect |
 | --- | --- |
 | `GET /core/v1/sandbox/deployment` | Read the safe active configuration, rollout, reset and resource counts |
+| `PATCH /core/v1/sandbox/deployment` | Update deployment-wide idle suspension without changing the configuration generation |
 | `POST /core/v1/sandbox/deployment` | Select the initial provider, resources and Runtime |
 | `PUT /core/v1/sandbox/deployment` | Change the same provider's target online |
 | `POST /core/v1/sandbox/deployment/reset` | Start or escalate a durable clear of hosted resources |
@@ -48,7 +55,7 @@ The request has no Core address. Core derives the deployment's `core_url` from t
 | `cpus` | Integer, 1 through 255 |
 | `memory_mib` | Integer, 512 through 1048576 MiB |
 | `root_disk_mib` | microsandbox: at least 1024 MiB; Docker and E2B: omitted or zero |
-| `environment_disk_mib` | microsandbox owned disk: at least 1024 MiB; external filesystem: zero requests no quota; a positive value must be at least 1024 MiB and requires enforced quotas; Docker and E2B: omitted or zero |
+| `environment_disk_mib` | microsandbox owned disk: at least 1024 MiB; external filesystem: each new workspace's admitted capacity, where zero requests no quota and a positive value must be at least 1024 MiB and requires enforced quotas; Docker and E2B: omitted or zero |
 
 These limits describe each sandbox. A node's `max_active` and `max_retained` are separate reservation limits, and host measurements never permit exceeding either. Native providers may reject values that pass these bounds.
 
@@ -58,7 +65,7 @@ microsandbox configures the CPUs, memory, a managed root disk and a separate own
 
 The optional response `specification.workspace` is an immutable capability receipt derived from the selected [workspace filesystem](../../docs/workspace-provider.md), not an independently writable setting. It contains only `attachment`, `user_xattr` and `capacity_quota`; filesystem configuration, paths and credentials stay outside the sandbox specification. Core validates the combined declarations before saving, and retained generation validation and node construction use this receipt. Missing `workspace` preserves owned disk mode, including its existing disk bounds. Create and Resume must provide a binding exactly when the frozen generation selects external storage.
 
-To enable external storage for an existing owned deployment, select the filesystem configuration first, then update the sandbox deployment with compatible resources (`environment_disk_mib: 0` for a filesystem without quotas). Selecting the filesystem does not alter existing generations or allocations. The next sandbox update derives the external receipt; old owned allocations keep their owned disks. A filesystem selection must support the provider's declared requirements, and an already external deployment requires an equivalent declaration with compatible quota semantics.
+To enable external storage for an existing owned deployment, select the filesystem configuration first, then update the sandbox deployment with compatible resources (`environment_disk_mib: 0` for a filesystem without quotas). Selecting the filesystem does not alter existing generations or allocations. The next sandbox update derives the external receipt; old owned allocations keep their owned disks. A filesystem selection must support the provider's declared requirements. An already external deployment requires the same `attachment` and `user_xattr`; the selection may change `capacity_quota`, after which new workspaces are refused until a sandbox update sets a matching `environment_disk_mib`. Existing workspaces keep the capacity they were admitted with.
 
 ### Runtime release
 
@@ -142,7 +149,7 @@ A node is online while it is connected under the current owner epoch with a hear
 
 Each node adds `rollout: {state, ready_generation, diagnostic?}`, where `ready_generation` is the nullable durable serving pin and `diagnostic` a fixed code for the target generation; allocation items add `deployment_generation`. Poll every five seconds only while `rollout.state` is `preparing` or `reset` is not null; old Sessions and failed, update-required or offline nodes alone do not keep polling active.
 
-Node-backed creation validates the target deployment and commits the Session, pending Environment and any initial input without reserving compute. A full, offline or preparing fleet leaves that accepted work waiting; an unconfigured deployment, reset or unsupported combination still rejects admission. The common scheduler uses bounded rotating scans of unplaced demand, with pages ordered by recorded time and Environment ID and a fixed time boundary for each scan so continuous arrivals cannot prevent it from revisiting older work. It checks online presence, exact serving-generation readiness, address, shared capacity and the selected generation's Harness/filesystem compatibility, then prefers the newest qualifying pin. Placement is immutable once reserved until confirmed release or a settled checkpoint transfer. A bounded scan skips temporarily unavailable demand and resumes after a restart. Existing suspended allocations reserve eligible checkpoint capacity through the same lock under the [checkpoint transfer contract](../../docs/sandbox-provider.md#checkpoint-transfer); this is not a global fairness guarantee across hot restores and unplaced work. Input retains its [original five-minute deadline](./environments.md#reservations), including time waiting for capacity.
+Node-backed creation validates the target deployment and commits the Session, pending Environment and any initial input without reserving compute. A full, offline or preparing fleet leaves that accepted work waiting; an unconfigured deployment, reset or unsupported combination still rejects admission. The common scheduler uses bounded rotating scans of unplaced demand, with pages ordered by recorded time and Environment ID and a fixed time boundary for each scan so continuous arrivals cannot prevent it from revisiting older work. It checks online presence, exact serving-generation readiness, address, shared capacity and the selected generation's Harness/filesystem compatibility, then prefers the newest qualifying pin. Placement is immutable once reserved until confirmed release or a settled checkpoint transfer. A bounded scan skips temporarily unavailable demand and resumes after a restart. If preparation fails before a new allocation is reserved, Core releases only that attempt’s node reservation, retaining any filesystem identity. Its next placement demand is ordered no earlier than release time, behind already-waiting work; successful retries use the newly selected generation’s specification. An allocation with an unknown compute outcome keeps its reservation. Existing suspended allocations reserve eligible checkpoint capacity through the same lock under the [checkpoint transfer contract](../../docs/sandbox-provider.md#checkpoint-transfer); this is not a global fairness guarantee across hot restores and unplaced work. Input retains its [original five-minute deadline](./environments.md#reservations), including time waiting for capacity.
 
 ## Reset
 
@@ -185,28 +192,29 @@ A node without generation management reports its provider's readiness itself: `p
 
 `PATCH /core/v1/sandbox/nodes/{node_id}` takes `{name, max_active, max_retained}`; lowering a limit stops no running sandbox. `DELETE /core/v1/sandbox/nodes/{node_id}` refuses with 409 `runtime_node_in_use` while the node holds allocations, snapshots, reservations or pending cleanup, including while it is offline. Removal deletes no compute and retires the node's identity; the host can come back only as a new node. There is no node drain.
 
-`GET /core/v1/sandbox/nodes/{node_id}/allocations` lists the node's unreleased allocations. Each item's `compute_phase_changed_at` is when the allocation entered its current `compute_phase`, or null when unknown. For a suspended microsandbox allocation, that time plus `suspension.retention_seconds` tells roughly when Core reclaims it.
+`GET /core/v1/sandbox/nodes/{node_id}/allocations` lists the node's unreleased allocations. Each item's `compute_phase_changed_at` is when the allocation entered its current `compute_phase`, or null when unknown. This is a phase transition time, not a snapshot expiry. The snapshot deadline is not exposed by this response and must not be inferred from `suspension.retention_seconds`.
 
 ## What each field means per sandbox provider
 
 Some fields keep one name across providers but differ in meaning, or do not apply. Deployment fields come from `GET /core/v1/sandbox/deployment`, node and allocation fields from the node routes, and Runtime fields from the [Runtime telemetry API](./runtime-observability-api.md), where `disk` appears only in the observation list and history is described under [Session Runtime history](./runtime-observability-api.md#session-runtime-history).
 
-| Field | E2B | Docker | microsandbox |
+| Field | microsandbox | E2B | Docker |
 | --- | --- | --- | --- |
-| Deployment `specification.resources` | `cpus` and `memory_mib`, equal to the ready template build's and taken from it when omitted; no disk fields | `cpus` and `memory_mib`; no disk quota | `cpus`, `memory_mib`, `root_disk_mib` and `environment_disk_mib` |
-| Deployment `specification.runtime` | Absent; `configuration.template` selects the build | The full [release](#runtime-release); nodes match `image_id` or `image_manifest_digest` | The full [release](#runtime-release); nodes match `microsandbox_ref`, `runtime_sha256` and `firmware_sha256` |
-| Deployment `metadata.template_build` | The build as Core read it when the selection was saved | Absent: `metadata` is empty | Absent: `metadata` is empty |
-| Deployment `suspension` | `null`; Core does not suspend E2B sandboxes | `null` | `{idle_seconds, retention_seconds}` |
-| Deployment `resources.allocations`, `resources.pending` | Core's unreleased E2B sandboxes, and hosted Environments waiting for one | Totals across all nodes | Totals across all nodes |
-| Enrollment-token `max_active`, `max_retained` | 409 `sandbox_deployment_conflict`, after the 400 capacity checks; E2B has no nodes | `max_retained` always equals `max_active` | Both limits apply |
-| Node list and detail | Empty list; detail returns 404 | Enrolled nodes | Enrolled nodes |
-| Node `retained`, `snapshots`, `max_retained` | Not applicable | Docker never suspends: `retained` equals `active`, `snapshots` is 0 and `max_retained` equals `max_active` | Suspended sandboxes are `retained` minus `active` |
-| Node `host.available_disk_bytes` | Not applicable | Free space on the filesystem of the node state directory, not a container's disk | Free space on the filesystem of the node state directory; sandbox disks have their own quotas |
-| Allocation `compute_phase`, `compute_phase_changed_at` | Not applicable: no node allocations | Always `disabled`, counted as running until release; the time is the allocation's creation | Includes `suspended`; its time plus `suspension.retention_seconds` tells roughly when Core reclaims the snapshot |
-| Runtime observation `cpu`, `memory` | From E2B metrics: `cpu.utilization_ratio` and `capacity_cores`, memory usage and limit; no cumulative CPU time | From Docker stats: `cpu.usage_seconds_total`, CPU and memory limits, memory usage | From the VM: `cpu.usage_seconds_total`, CPU and memory limits, memory usage |
-| Runtime observation `disk` | E2B `diskUsed` and `diskTotal`; `null` when the template does not report them | `null`: no disk quota | `null` |
-| Runtime observation `lifecycle_state: sleeping` | Never | Never | While suspended |
-| Runtime history CPU | Mean of the utilization ratios E2B reported in each bucket | Derived from cumulative CPU time | Derived from cumulative CPU time |
+| Independent workspace filesystem | [Kernel NFS adapter](../../docs/workspace-provider.md#kernel-nfs-adapter); configured separately from compute | Unsupported | Unsupported |
+| Deployment `specification.resources` | `cpus`, `memory_mib`, `root_disk_mib` and `environment_disk_mib` | `cpus` and `memory_mib`, equal to the ready template build's and taken from it when omitted; no disk fields | `cpus` and `memory_mib`; no disk quota |
+| Deployment `specification.runtime` | The full [release](#runtime-release); nodes match `microsandbox_ref`, `runtime_sha256` and `firmware_sha256` | Absent; `configuration.template` selects the build | The full [release](#runtime-release); nodes match `image_id` or `image_manifest_digest` |
+| Deployment `metadata.template_build` | Absent: `metadata` is empty | The build as Core read it when the selection was saved | Absent: `metadata` is empty |
+| Deployment `suspension` | `{idle_seconds, retention_seconds}` | `null`; Core does not suspend E2B sandboxes | `null` |
+| Deployment `resources.allocations`, `resources.pending` | Totals across all nodes | Core's unreleased E2B sandboxes, and hosted Environments waiting for one | Totals across all nodes |
+| Enrollment-token `max_active`, `max_retained` | Both limits apply | 409 `sandbox_deployment_conflict`, after the 400 capacity checks; E2B has no nodes | `max_retained` always equals `max_active` |
+| Node list and detail | Enrolled nodes | Empty list; detail returns 404 | Enrolled nodes |
+| Node `retained`, `snapshots`, `max_retained` | Suspended sandboxes are `retained` minus `active`; `snapshots` also includes retained snapshots during restore or cleanup | Not applicable | Docker never suspends: `retained` equals `active`, `snapshots` is 0 and `max_retained` equals `max_active` |
+| Node `host.available_disk_bytes` | Free space on the filesystem of the node state directory; sandbox disks have their own quotas | Not applicable | Free space on the filesystem of the node state directory, not a container's disk |
+| Allocation `compute_phase`, `compute_phase_changed_at` | Includes `suspended`; the timestamp describes the current phase, not snapshot expiry | Not applicable: no node allocations | Always `disabled`, counted as running until release; the time is the allocation's creation |
+| Runtime observation `cpu`, `memory` | From the VM: `cpu.usage_seconds_total`, CPU and memory limits, memory usage | From E2B metrics: `cpu.utilization_ratio` and `capacity_cores`, memory usage and limit; no cumulative CPU time | From Docker stats: `cpu.usage_seconds_total`, CPU and memory limits, memory usage |
+| Runtime observation `disk` | `null` | E2B `diskUsed` and `diskTotal`; `null` when the template does not report them | `null`: no disk quota |
+| Runtime observation `lifecycle_state: sleeping` | While suspended | Never | Never |
+| Runtime history CPU | Derived from cumulative CPU time | Mean of the utilization ratios E2B reported in each bucket | Derived from cumulative CPU time |
 
 ## Errors
 

@@ -1,3 +1,4 @@
+import { requestLog } from "./data/request-log.mjs";
 // Browser acceptance fixture: the console service's routes (/console/**) and the
 // Core management tree it forwards (/core/v1/**: installation, projects, summary,
 // audit log, metrics, harness default models and /core/v1/sandbox/**), with synthetic, deterministic data and
@@ -259,6 +260,7 @@ function adminRead(response, path, url) {
   if (path === "/installation") return send(response, 200, installation());
   if (path === "/projects") return send(response, 200, { data: a.projects.map(a.publicProject), has_more: false });
   if (path === "/summary") return send(response, 200, a.summary(url));
+  if (path === "/request-logs") return send(response, 200, requestLog(url));
   if (path === "/metrics") return send(response, 200, coreMetrics(url.searchParams.get("range") ?? "1h"));
   const match = path.match(/^\/projects\/([^/]+)(\/.*)?$/);
   const project = match && a.projects.find((entry) => entry.id === match[1]);
@@ -371,6 +373,13 @@ async function sandboxRoute(request, response, path, url) {
     const e2b = state.deployment?.provider === "e2b";
     const data = state.admin.runtimeObservations().map((entry) => ({ ...entry, observation: { ...entry.observation, disk: e2b && entry.observation.status === "observed" ? { usage_bytes: 3 * 2 ** 30, limit_bytes: 10 * 2 ** 30 } : null } }));
     return send(response, 200, { object: "list", data, has_more: false, first_id: data[0]?.observation.id ?? null, last_id: data.at(-1)?.observation.id ?? null });
+  }
+  if (path === "/deployment" && request.method === "PATCH") {
+    const input = await body(request);
+    if (!state.deployment.suspension || state.deployment.reset) return error(response, 409, "Suspension policy is unavailable.", "sandbox_deployment_conflict");
+    if (!Number.isInteger(input.idle_seconds) || input.idle_seconds < 30 || input.idle_seconds > 86400) return error(response, 400, "Invalid idle seconds.", "invalid_request_error");
+    state.deployment.suspension.idle_seconds = input.idle_seconds;
+    return send(response, 200, state.deployment);
   }
   if (path === "/deployment" && (request.method === "POST" || request.method === "PUT")) {
     const input = await body(request);
