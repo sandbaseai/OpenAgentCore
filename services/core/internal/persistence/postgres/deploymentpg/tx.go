@@ -365,3 +365,7 @@ func (t *deploymentTx) RecordAuditAs(source adminaudit.Source, action, installat
 func (t *deploymentTx) HasIncompatibleComputeState(version string) (bool, error) {
 	return t.q.HasIncompatibleRuntimeComputeState(t.ctx, version)
 }
+
+func (u unit) SaveIdleSeconds(seconds int64) error {
+	return u.q.UpdateSandboxIdleSeconds(u.ctx, seconds)
+}

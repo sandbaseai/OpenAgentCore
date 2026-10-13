@@ -16,7 +16,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// A dedicated disposable database exercises the real 91-to-99 SQL, never a
+// A dedicated disposable database exercises the real 91-to-101 SQL, never a
 // product database. No provider or native sandbox is contacted by this test.
 func TestBeta91UpgradePreservesRetainedAllocations(t *testing.T) {
 	dsn := os.Getenv("OAC_TEST_DATABASE_URL")
@@ -95,8 +95,12 @@ func TestBeta91UpgradePreservesRetainedAllocations(t *testing.T) {
 	if snapshot() != before {
 		t.Fatal("migration changed retained state, ownership or deadline")
 	}
+	var idlePolicy int
+	if err = db.QueryRowContext(t.Context(), `SELECT idle_seconds FROM runtime_deployment`).Scan(&idlePolicy); err != nil || idlePolicy != 300 {
+		t.Fatal("mutable idle policy default", idlePolicy, err)
+	}
 	var version, live, workspaces int
-	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM agents_api_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 99 {
+	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM agents_api_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 101 {
 		t.Fatal(version, err)
 	}
 	if err = db.QueryRowContext(t.Context(), `SELECT count(*) FROM runtime_allocations WHERE state<>'released' AND compute_phase='suspended' AND compute_state->>'protocol_version'='1'`).Scan(&live); err != nil || live != 17 {

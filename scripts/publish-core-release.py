@@ -183,8 +183,9 @@ def publish_images(assets, repository, revision, tag, floating_latest=False):
             if registry_manifest(reference) is None:
                 subprocess.run(["docker", "buildx", "imagetools", "create", "--tag", reference, *sources], check=True)
             verify_index(reference, registry_manifest(reference), expected)
-            digest = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", reference,
-                                               "--format", "{{.Manifest.Digest}}"], text=True).strip()
+            index = json.loads(subprocess.check_output(["docker", "buildx", "imagetools", "inspect", reference,
+                                                        "--format", "{{json .Manifest}}"], text=True))
+            digest = index.get("digest", "")
             if not distribution.DIGEST.fullmatch(digest):
                 raise ValueError("Invalid registry index digest")
             pinned = reference.rsplit(":", 1)[0] + "@" + digest
@@ -301,6 +302,8 @@ def publish(assets, repository, revision, tag, mode):
     compose_files = render_compose.write_assets(assets, {
         "REVISION": revision,
         "INIT_IMAGE": images["ingress"]["digest"],
+        "CORE_IMAGE": images["core"]["digest"],
+        "WEB_IMAGE": images["web"]["digest"],
     })
     expected.update({path.name: path.stat().st_size for path in compose_files})
     parallel_each(upload, compose_files)
