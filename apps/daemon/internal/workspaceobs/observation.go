@@ -27,26 +27,34 @@ const (
 	PrepareLocal
 	ReleaseLocal
 	ExportProducer
+	ReadPredecode
+	InboundDecode
+	ExportWriter
 	stageCount
 )
 
-var names = [stageCount]string{"receive_dispatch_wait", "request_queue_wait", "export_read", "export_done_wait", "sender_call", "outbound_queue_wait", "outbound_encode", "outbound_write", "prepare_local", "release_local", "export_producer"}
+var names = [stageCount]string{"receive_dispatch_wait", "request_queue_wait", "export_read", "export_done_wait", "sender_call", "outbound_queue_wait", "outbound_encode", "outbound_write", "prepare_local", "release_local", "export_producer", "read_return_to_decode_begin", "inbound_decode", "export_writer"}
 
 type metric struct {
 	count, active, failed, cancelled, unknown int
 	total, max                                time.Duration
+	overflow                                  bool
 }
 type arrivalKey struct{}
 type scopeKey struct{}
 type arrival struct {
-	connection string
-	delay      time.Duration
+	connection                           string
+	delay                                time.Duration
+	readReturned, decodeStarted, decoded time.Time
 }
 
 // ReceivedContext is called exactly when an internal receive carrier is consumed.
 // It retains no envelope, payload or business state.
 func ReceivedContext(ctx context.Context, connection string, decoded time.Time) context.Context {
-	return context.WithValue(ctx, arrivalKey{}, arrival{connection: connection, delay: time.Since(decoded)})
+	return ReceivedFrameContext(ctx, connection, time.Time{}, time.Time{}, decoded)
+}
+func ReceivedFrameContext(ctx context.Context, connection string, readReturned, decodeStarted, decoded time.Time) context.Context {
+	return context.WithValue(ctx, arrivalKey{}, arrival{connection: connection, delay: time.Since(decoded), readReturned: readReturned, decodeStarted: decodeStarted, decoded: decoded})
 }
 
 type Scope struct {
@@ -60,6 +68,10 @@ type Scope struct {
 	bytes, chunks        int64
 	completed            bool
 	pending              int
+	rounds               []*Round
+	roundCount           int
+	roundsTruncated      bool
+	roundMetric          metric
 }
 
 func New(ctx context.Context, id, kind string) *Scope {
@@ -107,14 +119,26 @@ func (s *Scope) Receive(ctx context.Context) {
 		return
 	}
 	if !ok || a.connection == "" || a.connection != s.connection {
-		s.metrics[ReceiveDispatch].unknown++
+		s.metrics[ReceiveDispatch].addUnknown(1)
 		s.mismatch = true
 		return
 	}
 	s.add(ReceiveDispatch, a.delay, nil)
+	if !a.readReturned.IsZero() && !a.decodeStarted.IsZero() {
+		s.add(ReadPredecode, a.decodeStarted.Sub(a.readReturned), nil)
+		s.add(InboundDecode, a.decoded.Sub(a.decodeStarted), nil)
+	} else {
+		s.metrics[ReadPredecode].addUnknown(1)
+		s.metrics[InboundDecode].addUnknown(1)
+	}
 }
 func (s *Scope) add(k stage, d time.Duration, err error) {
 	m := &s.metrics[k]
+	if d < 0 || d > 30*time.Minute || m.total > 30*time.Minute-d || m.count >= 1000000 {
+		m.addUnknown(1)
+		m.overflow = true
+		return
+	}
 	m.count++
 	m.total += d
 	if d > m.max {
@@ -199,7 +223,7 @@ func (q *QueueStamp) Received(s *Scope, k stage) {
 		return
 	}
 	if start == 0 || start > end {
-		s.metrics[k].unknown++
+		s.metrics[k].addUnknown(1)
 		return
 	}
 	s.add(k, time.Duration(end-start), nil)
@@ -226,6 +250,8 @@ func (s *Scope) Finish(outcome string) {
 		return
 	}
 	s.closed = true
+	roundFields := s.roundFieldsLocked()
+	roundsComplete := s.roundMetric.active == 0 && s.roundMetric.unknown == 0 && !s.roundMetric.overflow
 	metrics, mismatch, bytes, chunks, completed, pending, transportObserved := s.metrics, s.mismatch, s.bytes, s.chunks, s.completed, s.pending, s.transportObserved
 	s.mu.Unlock()
 	fields := []any{"connection_id", s.connection, "scope", s.kind, "identity_valid", s.identityValid, "outcome", outcome, "connection_mismatch", mismatch, "read_bytes", bytes, "chunk_count", chunks, "local_eof", completed, "outbound_unfinished_count", pending, "transport_observed", transportObserved}
@@ -242,12 +268,26 @@ func (s *Scope) Finish(outcome string) {
 			total = float64(m.total.Microseconds()) / 1000
 			max = float64(m.max.Microseconds()) / 1000
 		}
-		unknown := m.unknown + m.active
+		m.addUnknown(m.active)
+		unknown := m.unknown
 		if unknown > 0 {
 			complete = false
 		}
-		fields = append(fields, name+"_count", m.count, name+"_total_ms", total, name+"_max_ms", max, name+"_failed_count", m.failed, name+"_cancelled_count", m.cancelled, name+"_unknown_count", unknown)
+		fields = append(fields, name+"_count", m.count, name+"_total_ms", total, name+"_max_ms", max, name+"_failed_count", m.failed, name+"_cancelled_count", m.cancelled, name+"_unknown_count", unknown, name+"_overflow", m.overflow)
 	}
-	fields = append(fields, "snapshot_complete", complete)
+	fields = append(fields, "export_writer_observed", metrics[ExportWriter].count > 0)
+	fields = append(fields, roundFields...)
+	fields = append(fields, "snapshot_complete", complete && roundsComplete)
 	obslog.Ctx(s.ctx).Info("runtime workspace transport", fields...)
+}
+
+// addUnknown saturates before addition, including unfinished snapshot operations.
+func (m *metric) addUnknown(n int) {
+	const limit = 1000000
+	if m.unknown > limit || n > limit-m.unknown {
+		m.unknown = limit
+		m.overflow = true
+		return
+	}
+	m.unknown += n
 }

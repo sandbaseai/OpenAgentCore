@@ -14,9 +14,15 @@ import (
 type artifactTransportStage struct {
 	count, failed, active, unknown int
 	total, max                     time.Duration
+	overflow                       bool
 }
 
 func (m *artifactTransportStage) add(d time.Duration, failed bool) {
+	if d < 0 || d > 30*time.Minute || m.total > 30*time.Minute-d || m.count >= 1000000 {
+		m.addUnknown(1)
+		m.overflow = true
+		return
+	}
 	m.count++
 	m.total += d
 	if d > m.max {
@@ -34,7 +40,7 @@ type artifactTransport struct {
 	connection, preparation, export string
 	closed                          bool
 	pending                         int
-	stages                          [5]artifactTransportStage
+	stages                          [6]artifactTransportStage
 }
 
 const (
@@ -43,6 +49,7 @@ const (
 	artifactWrite
 	artifactDecode
 	artifactDispatch
+	artifactPredecode
 )
 
 // A queued frame carries only private metadata. It is never serialized.
@@ -160,7 +167,7 @@ func (o *artifactTransport) queue(stamp, dequeued int64) {
 		return
 	}
 	if stamp == 0 || stamp > dequeued {
-		o.stages[artifactQueue].unknown++
+		o.stages[artifactQueue].addUnknown(1)
 		return
 	}
 	// Both timestamps come from this process's monotonic clock.
@@ -184,19 +191,31 @@ func (o *artifactTransport) finish() {
 	}
 	fields := []any{"capture_id", o.scope.Capture, "session_id", o.scope.Session, "turn_id", o.scope.Turn, "connection_id", o.connection, "preparation_request_id", o.preparation, "export_id", o.export, "scope_status", status, "outbound_unfinished_count", pending}
 	complete := pending == 0 && status == "observed"
-	for i, name := range []string{"outbound_queue_wait", "outbound_encode", "outbound_write", "inbound_decode", "inbound_dispatch"} {
+	for i, name := range []string{"outbound_queue_wait", "outbound_encode", "outbound_write", "inbound_decode", "inbound_dispatch", "read_return_to_decode_begin"} {
 		m := stages[i]
 		var total, max any
 		if m.count > 0 {
 			total = float64(m.total.Microseconds()) / 1000
 			max = float64(m.max.Microseconds()) / 1000
 		}
-		unknown := m.unknown + m.active
+		m.addUnknown(m.active)
+		unknown := m.unknown
 		if unknown > 0 {
 			complete = false
 		}
-		fields = append(fields, name+"_count", m.count, name+"_total_ms", total, name+"_max_ms", max, name+"_failed_count", m.failed, name+"_unknown_count", unknown)
+		fields = append(fields, name+"_count", m.count, name+"_total_ms", total, name+"_max_ms", max, name+"_failed_count", m.failed, name+"_unknown_count", unknown, name+"_overflow", m.overflow)
 	}
 	fields = append(fields, "snapshot_complete", complete)
 	obslog.Ctx(o.ctx).Info("artifact transport", fields...)
+}
+
+// addUnknown saturates before addition, including unfinished snapshot operations.
+func (m *artifactTransportStage) addUnknown(n int) {
+	const limit = 1000000
+	if m.unknown > limit || n > limit-m.unknown {
+		m.unknown = limit
+		m.overflow = true
+		return
+	}
+	m.unknown += n
 }

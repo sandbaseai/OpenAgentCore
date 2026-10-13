@@ -19,7 +19,8 @@ type workspaceExport struct {
 
 type workspaceExportRequest struct {
 	proto.WorkspaceExportPayload
-	stamp workspaceobs.QueueStamp
+	stamp   workspaceobs.QueueStamp
+	arrival context.Context
 }
 
 func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) error {
@@ -44,7 +45,7 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 			r.mu.Unlock()
 			return nil
 		}
-		queued := &workspaceExportRequest{WorkspaceExportPayload: request}
+		queued := &workspaceExportRequest{WorkspaceExportPayload: request, arrival: ctx}
 		select {
 		case u.requests <- queued:
 			queued.stamp.Admitted()
@@ -65,7 +66,7 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 	owner, stop := r.shutdownContext(p.ctx)
 	owner, cancel := context.WithTimeout(owner, 180*time.Second)
 	u = &workspaceExport{id: env.ID, requests: make(chan *workspaceExportRequest, 1), cancel: func() { cancel(); stop() }, observation: workspaceobs.New(ctx, env.ID, "export")}
-	queued := &workspaceExportRequest{WorkspaceExportPayload: request}
+	queued := &workspaceExportRequest{WorkspaceExportPayload: request, arrival: ctx}
 	u.requests <- queued
 	queued.stamp.Admitted()
 	r.workspaceExport = u
@@ -84,7 +85,7 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 	go func() {
 		defer close(done)
 		started := u.observation.Begin(workspaceobs.ExportProducer)
-		err := r.localWorkspace.ExportOutputs(ctx, writer)
+		err := r.localWorkspace.ExportOutputs(ctx, u.observation.Writer(writer))
 		u.observation.End(workspaceobs.ExportProducer, started, err)
 		_ = writer.CloseWithError(err)
 	}()
@@ -105,12 +106,14 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 	var offset int64
 	buffer := make([]byte, proto.WorkspaceExportChunkBytes)
 	for {
+		roundCtx := ctx
 		select {
 		case request := <-u.requests:
 			request.stamp.Received(u.observation, workspaceobs.RequestQueue)
+			roundCtx = u.observation.RoundContext(ctx, request.arrival, request.Step, request.Offset)
 			if request.Offset != offset {
 				outcome = "invalid_request"
-				_ = r.sendWorkspaceExport(ctx, u.id, proto.WorkspaceExportResultPayload{Outcome: "failed", Offset: offset, ErrorCode: "invalid_request"})
+				_ = r.sendWorkspaceExport(roundCtx, u.id, proto.WorkspaceExportResultPayload{Outcome: "failed", Offset: offset, ErrorCode: "invalid_request"})
 				return
 			}
 		case <-ctx.Done():
@@ -146,7 +149,7 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 			}
 			r.mu.Unlock()
 		}
-		sendErr := r.sendWorkspaceExport(ctx, u.id, result)
+		sendErr := r.sendWorkspaceExport(roundCtx, u.id, result)
 		if sendErr != nil {
 			outcome = "send_failed"
 		} else {
@@ -165,6 +168,7 @@ func (r *Router) sendWorkspaceExport(ctx context.Context, id string, result prot
 	if err != nil {
 		return err
 	}
+	workspaceobs.RoundFromContext(ctx).SetResponse(result.Outcome)
 	observer := workspaceobs.FromContext(ctx)
 	started := observer.Begin(workspaceobs.Sender)
 	err = r.sender.Send(ctx, env)

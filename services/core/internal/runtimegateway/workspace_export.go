@@ -2,6 +2,7 @@ package runtimegateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -28,8 +29,8 @@ func (s *Session) ExportWorkspaceOutputs(ctx context.Context, request proto.Work
 		s.workspaceExportMu.Unlock()
 		return errors.New("agentdaemon gateway: workspace export capacity")
 	}
-	replies := make(chan proto.Envelope, 1)
-	s.workspaceExports = map[string]chan proto.Envelope{id: replies}
+	replies := make(chan workspaceExportReceipt, 1)
+	s.workspaceExports = map[string]chan workspaceExportReceipt{id: replies}
 	s.workspaceExportMu.Unlock()
 	defer func() { s.workspaceExportMu.Lock(); delete(s.workspaceExports, id); s.workspaceExportMu.Unlock() }()
 	s.observeArtifactExport(ctx, id)
@@ -67,7 +68,8 @@ type workspaceExportReader struct {
 	ctx         context.Context
 	peer        *Session
 	id          string
-	replies     <-chan proto.Envelope
+	replies     <-chan workspaceExportReceipt
+	dispatched  time.Time
 	request     proto.WorkspaceExportPayload
 	data        []byte
 	offset      int64
@@ -95,6 +97,10 @@ func (r *workspaceExportReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	started := time.Now()
+	r.dispatched = time.Time{}
+	roundOutcome := "unknown"
+	roundRequest := r.request
+	defer func() { r.observeRound(started, roundRequest, roundOutcome) }()
 	err = r.peer.Send(r.ctx, env)
 	if o := r.observation; o != nil {
 		o.enqueue += time.Since(started)
@@ -116,6 +122,7 @@ func (r *workspaceExportReader) Read(p []byte) (int, error) {
 		return 0, errors.New("agentdaemon gateway: invalid export receipt")
 	}
 	if result.Outcome == "completed" && len(result.Data) == 0 && result.ErrorCode == "" {
+		roundOutcome = "completed"
 		r.completed = true
 		if o := r.observation; o != nil {
 			o.completedMS = float64(time.Since(o.started).Microseconds()) / 1000
@@ -132,6 +139,7 @@ func (r *workspaceExportReader) Read(p []byte) (int, error) {
 		o.chunks++
 		o.received += int64(len(result.Data))
 	}
+	roundOutcome = "chunk"
 	r.data = result.Data
 	r.offset += int64(len(result.Data))
 	r.request = proto.WorkspaceExportPayload{Step: "next", Offset: r.offset}
@@ -155,7 +163,8 @@ func (r *workspaceExportReader) receipt() (proto.Envelope, error) {
 		if !ok {
 			return proto.Envelope{}, ErrSessionClosed
 		}
-		return env, nil
+		r.dispatched = env.dispatched
+		return env.Envelope, nil
 	case <-r.ctx.Done():
 		return proto.Envelope{}, r.ctx.Err()
 	case <-r.peer.closed:
@@ -172,10 +181,15 @@ type workspaceExportObservation struct {
 	received, delivered                       int64
 	firstDataMS, completedMS, cancelEnqueueMS any
 	cancelEnqueued                            bool
+	rounds                                    []exportRound
+	roundMetric                               artifactTransportStage
+	roundCount                                int
+	roundsTruncated                           bool
 }
 
 func (r *workspaceExportReader) observe(scope textobs.ArtifactScope, err error) {
 	o := r.observation
+	roundsJSON, _ := json.Marshal(o.rounds)
 	status := "ok"
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -191,7 +205,10 @@ func (r *workspaceExportReader) observe(scope textobs.ArtifactScope, err error) 
 		"receipt_wait_ms", float64(o.wait.Microseconds())/1000, "receipt_wait_max_ms", float64(o.waitMax.Microseconds())/1000, "receipt_wait_count", o.waits,
 		"chunk_count", o.chunks, "received_bytes", o.received, "delivered_bytes", o.delivered,
 		"first_data_ms", o.firstDataMS, "completed_receipt_ms", o.completedMS, "completed", r.completed,
-		"cancel_enqueue_ms", o.cancelEnqueueMS, "cancel_enqueued", o.cancelEnqueued)
+		"cancel_enqueue_ms", o.cancelEnqueueMS, "cancel_enqueued", o.cancelEnqueued,
+		"rounds_json", string(roundsJSON), "round_count", o.roundCount, "rounds_truncated", o.roundsTruncated, "rounds_overflow", o.roundMetric.overflow,
+		"request_send_to_receipt_dispatch_count", o.roundMetric.count, "request_send_to_receipt_dispatch_total_ms", stageMS(o.roundMetric.total, o.roundMetric.count),
+		"request_send_to_receipt_dispatch_max_ms", stageMS(o.roundMetric.max, o.roundMetric.count), "request_send_to_receipt_dispatch_unknown_count", o.roundMetric.unknown)
 }
 
 func (s *Session) dispatchWorkspaceExport(env proto.Envelope) {
@@ -199,7 +216,7 @@ func (s *Session) dispatchWorkspaceExport(env proto.Envelope) {
 	defer s.workspaceExportMu.Unlock()
 	if replies := s.workspaceExports[env.ID]; replies != nil {
 		select {
-		case replies <- env:
+		case replies <- workspaceExportReceipt{Envelope: env, dispatched: time.Now()}:
 		default:
 			close(replies)
 			delete(s.workspaceExports, env.ID)

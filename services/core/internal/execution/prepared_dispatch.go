@@ -100,12 +100,14 @@ func (d *Dispatcher) RunEnvironmentInput(ctx context.Context, lease Ownership, t
 	if err != nil {
 		return run, err
 	}
+	observeSchedulingState(owner, "prepare_sent")
 	prepareAt = time.Now()
 	run.Reservation, err = d.awaitPreparation(owner, tenantID, sessionID, run.Reservation, prepared)
 	observeExecutionStage(owner, "execution_prepare_wait", prepareAt, err, "session_id", sessionID, "reservation_id", reservationID, "preparation_request_id", prepared.requestID, "state", run.Reservation.State)
 	if err != nil || run.Reservation.State != sessions.EnvironmentInputPending {
 		return run, err
 	}
+	observeSchedulingState(owner, "ready_seen")
 	if err := d.messageInputSupport(peer, session.Engine, snapshot, messages); err != nil {
 		return run, err
 	}
@@ -117,7 +119,11 @@ func (d *Dispatcher) RunEnvironmentInput(ctx context.Context, lease Ownership, t
 		return run, err
 	}
 	if err == nil {
+		if promoted.State == sessions.EnvironmentInputAdmitted {
+			observeSchedulingState(owner, "promoted")
+		}
 		d.notifications.notify(tenantID, sessionID)
+		observeSchedulingState(owner, "notification_sent")
 	}
 	run.Reservation = promoted
 	if err != nil || run.Reservation.State != sessions.EnvironmentInputAdmitted {

@@ -77,6 +77,9 @@ func TestWorkspaceExportSummaryOwnedAndBounded(t *testing.T) {
 			if row["export_id"] != "54dedddf-27c9-4a06-9b1f-244d0bc373e5" || row["read_bytes"] != float64(offset) || row["export_producer_count"] != float64(1) {
 				t.Fatal(row)
 			}
+			if row["export_writer_count"].(float64) < 1 {
+				t.Fatal("writer missing", row)
+			}
 			if cancelled {
 				if row["outcome"] != "cancelled" || row["export_done_wait_total_ms"] != nil {
 					t.Fatal(row)

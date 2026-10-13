@@ -92,7 +92,7 @@ func (d *Dispatcher) Run(ctx context.Context, tenantID, sessionID, turnID string
 	if json.Unmarshal(session.Configuration, &snapshot) != nil || strings.TrimSpace(snapshot.Agent.Model) == "" {
 		return sessions.Turn{}, sessions.ErrInvalidInput
 	}
-	caps, err := d.engineCapabilities(peer, session.Engine, snapshot)
+	caps, err := d.engineCapabilities(ctx, peer, session.Engine, snapshot)
 	if err != nil {
 		return sessions.Turn{}, err
 	}

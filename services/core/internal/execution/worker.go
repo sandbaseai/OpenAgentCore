@@ -19,19 +19,20 @@ const ownershipCheckTimeout = 5 * time.Second
 
 // Worker owns queued work; the database lease excludes a second execution service.
 type Worker struct {
-	concurrency         int
-	metrics             workerMetricsState
-	dispatcher          *Dispatcher
-	lease               Ownership
-	ownershipCheckOnce  sync.Once
-	ownershipChecks     chan struct{}
-	directoryReads      chan directoryReadRequest
-	fileWrites          chan fileWriteRequest
-	scheduleWake        chan struct{}
-	stopped             chan struct{}
-	stopOnce            sync.Once
-	runtimes            *runtimeManager
-	enrolledConnections map[string]*runtimeConnection
+	concurrency            int
+	metrics                workerMetricsState
+	schedulingObservations schedulingObservations
+	dispatcher             *Dispatcher
+	lease                  Ownership
+	ownershipCheckOnce     sync.Once
+	ownershipChecks        chan struct{}
+	directoryReads         chan directoryReadRequest
+	fileWrites             chan fileWriteRequest
+	scheduleWake           chan struct{}
+	stopped                chan struct{}
+	stopOnce               sync.Once
+	runtimes               *runtimeManager
+	enrolledConnections    map[string]*runtimeConnection
 }
 
 // StartWorker takes over owner.Lease from the moment it is called: a failed
@@ -185,6 +186,11 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 		cancel()
 		w.runtimes.stop()
 		running.Wait()
+		outcome := "unknown"
+		if exitStage == "ownership_check" {
+			outcome = "owner_lost"
+		}
+		w.schedulingObservations.close(ctx, outcome)
 		// Drain an external provisioning caller before releasing the writer lease.
 		w.runtimes.drain()
 		w.observeWorkerClosed(closeLease(ctx, w.lease))

@@ -179,6 +179,9 @@ func TestWorkspaceExportObservationBoundaries(t *testing.T) {
 			if row["session_id"] != "session" || row["turn_id"] != "turn" || row["capture_id"] == "" || row["export_id"] == "" {
 				t.Fatal("missing identity")
 			}
+			if row["round_count"] != float64(requests) {
+				t.Fatal("missing rounds", row)
+			}
 			if row["begin_count"] != float64(1) || row["next_count"] != float64(requests-1) || row["receipt_wait_count"] != float64(requests) {
 				t.Fatalf("request counts: %v", row)
 			}
