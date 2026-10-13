@@ -1,7 +1,7 @@
 ---
 title: "Core 管理 API"
 source: contracts/agents-api/admin-api.md
-source_hash: 9687c874ba9e39dbceeb6f2206aff8e5163309a381262955ca247c67aa10455c
+source_hash: dbc53b9e7d6df095b7131238cddc5af0553504152ddae037c56f885174f30f77
 ---
 
 Core 管理 API（`/core/v1`）用于管理安装实例：Project 及其 API 密钥、Project 资源的读取和删除、执行器凭据、部署默认模型、沙箱部署及其节点、监控和审计。Web 的[控制台服务器](../../../docs/zh/web/console-server.md#forwarding-to-core)会为已登录的管理员调用它；运维人员则从 Core 主机上的脚本调用它（[编写 Core API 脚本](../../../docs/zh/getting-started/operations.md#script-the-core-api)）。生成的架构是 [core.openapi.yaml](../core.openapi.yaml)，所有错误都使用 [Core 错误封装](core-errors.md)。
@@ -36,17 +36,30 @@ Core 管理 API（`/core/v1`）用于管理安装实例：Project 及其 API 密
 | `projects/{project_id}/environments/{environment_id}/executor-credentials[/{key_id}]` | `self_hosted` Environment 的执行器凭据 | [执行器凭据](environment-executor-credentials.md#core-key-routes) |
 | `projects/{project_id}/resource-owners`、`projects/{project_id}/write-operations` | 创建资源的 API 密钥以及每个密钥执行的写入 | [写入溯源](#write-provenance) |
 | `harnesses`、`harnesses/{harness}/model-configuration` | 已启用的 Harness 及各 Harness 的部署默认模型 | [部署默认值](model-execution.md#deployment-defaults) |
-| `sandbox/deployment`、`sandbox/deployment/reset`、`sandbox/providers/{provider}/discovery` | 沙箱提供商、资源和 Runtime、重置，以及提供商配置发现，例如 E2B 模板 | [沙箱部署](sandbox-deployment.md#routes) |
+| `sandbox/deployment`、`sandbox/deployment/reset`、`sandbox/providers/{provider}/discovery` | 沙箱提供商、资源和 Runtime、空闲挂起策略、重置，以及提供商配置发现，例如 E2B 模板 | [沙箱部署](sandbox-deployment.md#routes) |
 | `sandbox/enrollment-tokens`、`sandbox/nodes[/{node_id}[/allocations]]` | 节点注册令牌、节点及其分配和主机历史 | [节点指南](../../../docs/zh/getting-started/nodes.md)、[沙箱部署](sandbox-deployment.md)、[节点主机历史](runtime-observability-api.md#node-host-observations-and-history) |
 | `summary` | 按 Project、Agent 或密钥统计的 Session 数量和使用情况 | [汇总](#summary) |
 | `metrics` | Core 自身的进程、执行、数据库和作业指标 | [Core 指标](core-metrics.md) |
+| `request-logs` | 近期应用或管理 HTTP 请求及其响应元数据 | [请求日志](#request-log) |
 | `audit-log` | 管理员写入 | [审计日志](#audit-log) |
+
+## 请求日志 {#request-log}
+
+`GET /core/v1/request-logs` 是仅供 Core 密钥调用的诊断读取，由 Web 的 **Request log** 和运维脚本使用。它观察到达 Core `/v1` 与 `/core/v1` API 的 HTTP 请求，包括认证拒绝和失败响应。日志读取本身、健康检查与文档端点、到达 Core 前的 Web 登录或代理失败、机器传输和后台执行不在此视图中。它不是审计档案或分布式执行追踪。
+
+每个 API 实例按入口分别保留最近开始的 1,000 个请求：`public` 对应 `/v1`，`admin` 对应 `/core/v1`。管理页面轮询不会挤掉应用请求。各自容量用尽后覆盖较旧条目，包括长连接请求；重启清空记录。`instance_id` 和 `instance_started_at` 标识提供响应的 API 实例；负载均衡可能返回另一个实例的窗口。Core 同时通过现有结构化日志输出请求结束时的元数据，其保留由运维日志系统负责，不属于本端点。
+
+查询参数包括 `surface=public|admin`（默认 `public`）、`limit`（1–200，默认 100）、可选的精确 `request_id`、`outcome=all|errors|active`（默认 `all`）及可选 `method`。支持的方法值为 `GET`、`HEAD`、`POST`、`PUT`、`PATCH`、`DELETE`、`OPTIONS`、`CONNECT`、`TRACE` 和 `OTHER`；其他入站方法记为 `OTHER`。不支持、重复或格式错误的查询参数返回 400。`errors` 包括 HTTP 状态为 400 及以上的请求和已中断的请求。筛选仅扫描保留窗口，按开始时间从新到旧返回。`retained_count` 表示该入口的保留条目数，`total_matching` 是保留条目中匹配的数量，`has_more` 表示响应条数限制省略了匹配项，不代表仍能读取已被覆盖的历史。
+
+响应包含 `object: "core.request_log.list"`、实例标识、`surface`、`capacity`、覆盖数量及 `data`。每条记录包含 `request_id`、`trace_id`、`started_at`、`method`、`route`、`state`、`status`、`duration_ms`、`response_bytes` 和可为空的 `error_code`。`route` 是注册路由模板、认证时部分匹配的前缀或 `(unmatched)`，不会包含原始资源路径或查询。最终响应头提交前，`status` 为 null。`state` 区分 `active`、`completed` 和 `aborted`；活跃请求的耗时和字节数是读取时的观测值。`response_bytes` 统计响应写入器接受的字节数，不包括响应头和传输封装，不是网络传输量测量。SSE 响应在处理函数结束前保持活跃。HTTP 状态及结束不代表异步 Agent Turn 的执行结果；执行结果以 [Session 诊断](./session-diagnostics.md)和该 Session 已记录的历史为准。
+
+不采集正文、请求头值、凭据、提示词、文件内容、原始路径、查询值或错误消息，只保留 API 的安全错误码。返回的请求 ID 对应 `X-Request-Id`，可用于查找已有进程日志的关联条目。Trace ID 仅供关联，不表示完整组件链路已经被追踪。
 
 ## 工作区存储 {#workspace-storage}
 
-运维脚本使用 Core key 调用 `GET /core/v1/workspace-storage` 和 `PUT /core/v1/workspace-storage`。Web 没有工作区存储编辑器。请求与成功响应使用规范文件系统配置：`{"id":"<canonical UUID>","adapter":"<adapter identifier>","parameters":{...}}`。`parameters` 是适配器定义的 JSON 对象，由所选适配器验证。未知顶层字段会被拒绝。
+**Settings → Workspace storage** 和运维脚本使用 Core key 调用 `GET /core/v1/workspace-storage` 和 `PUT /core/v1/workspace-storage`。成功响应为选择结果：`{"id":"<canonical UUID>","adapter":"<adapter identifier>","parameters":{...},"tenant_capacity_mib":<integer>}`。请求包含相同的必需字段，以及可选的只写 `credential` 对象。`parameters` 和 `credential` 是适配器定义的 JSON 对象，由所选适配器验证。未知顶层字段会被拒绝。
 
-GET 返回所选配置；尚未配置时返回 404 `workspace_storage_not_found`。PUT 验证并选择不可变配置，以 200 返回该配置。复用 ID 要求适配器配置完全一致；更改其含义或与保留归属冲突会返回 409 `workspace_storage_conflict`。配置更改与工作区归属变更串行执行，成功变更携带与其他部署设置相同的管理员审计来源。[工作区文件系统协议](../../../docs/zh/workspace-provider.md) 规定标识、挂载、准入和保留语义。
+GET 返回所选配置和租户容量策略；尚未配置时返回 404 `workspace_storage_not_found`。它绝不返回凭据。PUT 验证并选择不可变配置，同时设置 [`tenant_capacity_mib`](../../../docs/zh/configuration.md#tenant-capacity)，以 200 返回选择结果。正的 `tenant_capacity_mib` 要求实施容量配额的配置，此类配置也要求正值；否则 PUT 返回 400 `workspace_operation_unsupported`。Core 加密凭据，绝不返回、记录日志或审计凭据。复用 ID 要求适配器、参数和凭据完全一致；省略 `credential` 会保留已存储的凭据，显式 `null` 无效。更改其含义或与保留归属冲突会返回 409 `workspace_storage_conflict`。配置更改与工作区归属变更串行执行，成功变更携带与其他部署设置相同的管理员审计来源。[工作区文件系统协议](../../../docs/zh/workspace-provider.md) 规定标识、挂载、准入和保留语义。
 
 无效配置返回 400 `invalid_workspace_configuration`；不支持的适配器或组合返回 400 `workspace_operation_unsupported`。存储不可用或操作尚未确认返回 503 `workspace_storage_unavailable`。错误消息不暴露原生路径或适配器错误文本。此端点独立于 Sandbox Provider 选择配置存储，不创建或删除 Session 工作区。
 
