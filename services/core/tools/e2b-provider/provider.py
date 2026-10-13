@@ -306,16 +306,18 @@ class Provider:
         # Validate the current template entry point before writing any credential.
         with create_stage('template_check'):
             try:
-                entry = cloud.files.get_info('/opt/oac-e2b/managed_init.py',
-                                             user='root', request_timeout=self.remaining())
+                with create_stage('template_get_info'):
+                    entry = cloud.files.get_info('/opt/oac-e2b/managed_init.py',
+                                                 user='root', request_timeout=self.remaining())
                 if entry.type != FileType.FILE:
                     self.receipt.save(status='bootstrap_failed', settled=True)
                     raise Failure('template_invalid')
                 # A successful download can also refer to a special file. Check
                 # the type first, then verify readability without a probe process.
-                with cloud.files.read('/opt/oac-e2b/managed_init.py', format='stream',
-                                      user='root', request_timeout=self.remaining()):
-                    pass
+                with create_stage('template_read_check'):
+                    with cloud.files.read('/opt/oac-e2b/managed_init.py', format='stream',
+                                          user='root', request_timeout=self.remaining()):
+                        pass
             except FileNotFoundException:
                 self.receipt.save(status='bootstrap_failed', settled=True)
                 raise Failure('template_invalid') from None

@@ -90,6 +90,7 @@ type Session struct {
 	owner *ownerLease
 
 	// heartbeat persists daemon-advertised capability snapshots.
+	firstHeartbeat heartbeatObservation
 	heartbeat      HeartbeatTouch
 	credentialHash string
 	// archivedCancellations reads the receipt an archived Session's
@@ -274,6 +275,7 @@ func (s *Session) Close(reason string) {
 		s.closeWorkspaceExports()
 		s.releaseOwnerLease()
 	})
+	s.firstHeartbeat.finish(s, "unknown")
 }
 
 // CloseWithCode sends a WS close frame with a custom status code so
@@ -494,22 +496,45 @@ func (s *Session) releaseOwnerLease() {
 }
 
 func (s *Session) handleHeartbeat(env proto.Envelope) {
+	observing := s.firstHeartbeat.begin()
+	defer func() {
+		if observing {
+			s.firstHeartbeat.finish(s, "ok")
+		}
+	}()
+	started := time.Now()
 	var p proto.HeartbeatPayload
 	if err := env.DecodePayload(&p); err != nil {
+		if observing {
+			s.firstHeartbeat.record("heartbeat_decode_ms", started)
+			s.firstHeartbeat.finish(s, "error")
+		}
 		s.log("agentdaemon gateway: invalid heartbeat declaration device=%s", s.DeviceID)
 		s.setSupportedAgentKinds(nil)
 		s.Close("invalid heartbeat declaration")
 		return
 	}
+	if observing {
+		s.firstHeartbeat.record("heartbeat_decode_ms", started)
+	}
+	started = time.Now()
 	kinds := deviceKindsFromHeartbeat(p)
 	s.setSupportedAgentKinds(kinds)
+	if observing {
+		s.firstHeartbeat.record("capability_set_ms", started)
+	}
 	if s.heartbeat == nil {
+		started = time.Now()
 		s.observeConfirmedCapabilities(kinds)
+		if observing {
+			s.firstHeartbeat.record("capability_hint_ms", started)
+		}
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	started = time.Now()
 	status, err := s.heartbeat.TouchAgentDaemonHeartbeat(ctx, runtimedevice.Heartbeat{
 		RuntimeID:           s.DeviceID,
 		CredentialHash:      s.credentialHash,
@@ -518,11 +543,24 @@ func (s *Session) handleHeartbeat(env proto.Envelope) {
 		HeartbeatTimestamp:  p.Timestamp,
 		SupportedAgentKinds: kinds,
 	})
+	if observing {
+		s.firstHeartbeat.record("heartbeat_store_ms", started)
+	}
 	if err != nil {
+		if observing {
+			outcome := "error"
+			if errors.Is(err, context.Canceled) {
+				outcome = "cancelled"
+			}
+			s.firstHeartbeat.finish(s, outcome)
+		}
 		s.log("agentdaemon gateway: persist heartbeat device=%s: %v", s.DeviceID, err)
 		return
 	}
 	if status.Deleted {
+		if observing {
+			s.firstHeartbeat.finish(s, "deleted")
+		}
 		draining, drainErr := s.DrainArchivedCancellation(ctx)
 		if drainErr == nil && draining {
 			return
@@ -535,7 +573,11 @@ func (s *Session) handleHeartbeat(env proto.Envelope) {
 		s.CloseWithCode(CloseRuntimeDeleted, "runtime retired")
 		return
 	}
+	started = time.Now()
 	s.observeConfirmedCapabilities(kinds)
+	if observing {
+		s.firstHeartbeat.record("capability_hint_ms", started)
+	}
 }
 
 func deviceKindsFromHeartbeat(p proto.HeartbeatPayload) []runtimedevice.SupportedAgentKind {

@@ -1,7 +1,7 @@
 ---
 title: "运维"
 source: docs/getting-started/operations.md
-source_hash: 32dcd5ff86d522f005100596fcf337d92b23d11df8198a9e0d59010e8eb9264b
+source_hash: 6e927dfeef12928e9f5499a47b0d601514babece878f693f6d62f677a5686e73
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -260,6 +260,16 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 `journal first text received` 记录 delivery journal 接纳的第一条非空 delta 或原生 output-message 文本，包含结束时 drain。`journal_sequence` 是执行日志序号，不是公开 Session 事件序号。`journal first text persistence` 将首次失败记录为 `unconfirmed`，最终成功返回记录为 `confirmed`，包含尝试次数、append 耗时、接纳到确认耗时（失败为 null）。这是调用方确认时间，不是数据库内部精确 commit 时刻。每次 attempt 的私有 collector 只捕获该准确 source 实际生成的首个公开文本 `event_id`；只有 append 成功返回后才记录 `mapping_status=confirmed`，插入成功但提交未确认仍为候选。未知提交后的幂等 replay 可以确认 journal，但没有新公开映射时明确记录 `mapping_status=unobserved` 与空 event ID，不能因 replay 成功就升级旧候选。后续 SSE 读到同一个 ID 只能证明事件存在，不能补造原 commit 时间。不变的原生消息投影可能不产生公开文本事件。每 Turn 最多一条接纳、一条失败和一条确认，不输出正文或原始错误。
 
 `session stream first text read` 与 `session stream first text output` 观测同一连接内每个 Turn 的首条非空公开文本 delta/done，包含该连接后续的 Turn。每连接最多保留 64 个不同 Turn ID、不淘汰，缺 ID 共用一个独立槽；重复事件、旧 Turn 迟到文本、重复生命周期事件均不重置已选身份。超过上限时仅记录一次 `session stream text observation limit`，明确 `status=unobserved`、`reason=turn_limit`，公开转发照常；首文本与终态对每个身份使用独立 bit；终态不依赖文本，满 64 个 Turn 后已保留 Turn 仍可选择另一类别。`session stream terminal read` 和 `session stream terminal output` 用 `scope=terminal_per_turn_connection` 观测 completed、failed、cancelled，使用相同的真实事件 ID、Write/Flush 边界和 `event_type` 字段；合计最多 260 条边界日志加 1 条超限日志。字段包含真实 `event_id`、`session_event_sequence`、Turn/Session、每次连接新建的 `connection_id`、`start_cursor`、`turn_identity_observed` 及 `scope=first_text_per_turn_connection`；重连不冒充 Turn 全局首文本。`read_at` 是该批数据库读返回时刻，早于批内前序事件写出。输出记录分开列 Write 与 Flush 耗时和状态，未到达的边界为 `unobserved` 与 null。Flush 成功仅表示 `ResponseController.Flush` 返回 nil，不表示下游已收到。短写单独记录，不改变现有行为。`read_to_emit_return_ms` 包含批内前序输出、投影、授权、序列化、Write 和 Flush，不能与子阶段相加。按真实 event ID 关联，不按相邻时间或不同领域的序号配对。GET 仍为 live-only，漏掉的事件不能伪造重放观测。批量阈值、轮询、wire、事务和鉴权行为不变。
+
+`e2b create stage` 将既有模板检查拆为 `template_get_info`（`files.get_info` 调用）和 `template_read_check`（进入并关闭既有 `files.read(format="stream")` 上下文）。每次 create 各最多一条，仅到达时输出时长及 `completed`；失败为 false，缺失表示未观测。read 检查不消费完整文件。这两个子阶段包含在 `template_check` 中，不能相加；helper 随 Core 构建更新，不因此更新 Runtime 模板。
+
+`runtime first heartbeat` 记录 Runtime 每连接首次心跳尝试的 `capability_payload_build_ms` 与 `first_heartbeat_send_ms`，send 包含本地队列/写确认，不等于 Core 收到。Core 的 `runtime first heartbeat observed` 记录首次尝试的 `heartbeat_decode_ms`、`capability_set_ms`、`heartbeat_store_ms`、`capability_hint_ms`；store 包含同步设备心跳调用，仅持久化成功且未删除才触发 hint。失败或关闭仅终结一次，未完成阶段为 null。device ID 提供上下文，但两端 connection ID 属于不同进程，不能证明是同一首帧；后续心跳不重复汇总。
+
+`native turn boundary` 在既有 native Turn 终结边界每 Turn 输出一次。字段为 `run_id`、可空的 `preparation_request_id`/`native_turn_id`、`input_to_start_turn_ms`、`thread_resolve_ms` 及 `thread_mode=start/resume/reuse/unobserved`、`turn_start_write_ms`、`turn_start_ack_wait_ms`、`first_native_text_to_forward_ms`。observed 布尔区分未测与零耗时，forwarded 表示原发送是否成功。ACK 早于 write 返回时 `ack_before_write_return=true` 且 ACK 等待为 null；未见 ACK 保持 unknown。首文本仅选非空 root 文本，可以早于 ACK。这些本地适配器边界不等于模型计算或 Core 接收，所有权确认不是完成。不记录输入、RPC 内容或原生错误。需重建 Runtime 并验证新模板；只更新 Core 无法给既有 sandbox 加上这些观测。
+
+`journal first text persistence` 新增首文本等待首次 flush 的 `batch_wait_ms` 及 `first_flush_trigger=size/timer/function_call/deferred_final`。`append_count`、`append_total_ms`、`append_max_ms`、`append_failed_count`、`append_unknown_count` 跨 attempt 累计。失败与 unknown 可重叠，返回错误不证明已 rollback；首次失败与最终确认的快照不能相加。不新增逐重试日志或 flush。
+
+`session stream first text read` 的 `timing_scope=connection_prefix` 表示 `empty_read_count`、`authority_cache_hit_count` 以及 `poll_wait`、`authority_check`、`list_events` 的 count/total/max 从本连接开始累计，不是 Turn 独占成本，不得跨 Turn 快照相加。`first_text_list_ms` 是包含该文本的实际查询，同页多个事件共享它。`last_empty_to_first_read_ms` 需要真实空页；最近 poll/check/list 区间只是局部边界，不能完整加总，权限缓存命中没有 check 耗时。若连接未观测到文本，仅输出一次 `session stream observation ended`，保留结局及计数，首文本边界为 null。轮询与权限刷新间隔不变。
 
 `executor done received` 是主循环首次接收 done、进入 journal 之前的边界，不是模型完成时刻。`delivery_final_drain` 和 `delivery_final_flush` 分别记录最终 drain 和 flush；flush 包含 `pending_count`、`confirmation` 和 `done_to_cleanup_ms`（收到 done 到清理开始，未观测为 null）。成功空 flush 是 `no_pending`，不是新增提交。仅在 final drain 遇到 done 不补造接收边界；done 后仍可能等待 preparation/function 回执。
 

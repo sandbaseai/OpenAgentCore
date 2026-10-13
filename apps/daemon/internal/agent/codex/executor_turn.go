@@ -20,6 +20,7 @@ func (s *Session) AwaitSettlement(ctx context.Context) (agent.TurnSettlement, er
 
 func (s *Session) settleExecutorTurn(startErr error) {
 	defer close(s.waitDone)
+	defer func() { s.boundary.finish(s, errors.Join(startErr, s.settlementErr)) }()
 	if startErr == nil {
 		select {
 		case <-s.outputDone:

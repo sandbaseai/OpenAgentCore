@@ -13,6 +13,7 @@ import (
 )
 
 func (r *Router) handleExecutionStart(_ context.Context, env proto.Envelope) error {
+	received := time.Now()
 	var input proto.ExecutionStartPayload
 	if env.DecodePayload(&input) != nil || input.Handle == "" || input.ExecutorID == "" || strings.TrimSpace(input.RunID) == "" || input.Input.Validate() != nil {
 		return r.rejectPreparation(env, "invalid_start")
@@ -77,11 +78,11 @@ func (r *Router) handleExecutionStart(_ context.Context, env proto.Envelope) err
 	status := p.status
 	r.shutdownWG.Add(2)
 	r.mu.Unlock()
-	go r.startPreparedExecution(p, state, input, status)
+	go r.startPreparedExecution(p, state, input, status, received)
 	return nil
 }
 
-func (r *Router) startPreparedExecution(p *preparationState, state *sessionState, input proto.ExecutionStartPayload, starting proto.PreparationStatusPayload) {
+func (r *Router) startPreparedExecution(p *preparationState, state *sessionState, input proto.ExecutionStartPayload, starting proto.PreparationStatusPayload, received time.Time) {
 	defer r.shutdownWG.Done()
 	handoff := state.preparedHandoff
 	go r.forwardPreparedOutput(state)
@@ -95,7 +96,7 @@ func (r *Router) startPreparedExecution(p *preparationState, state *sessionState
 	if blocked {
 		startErr = context.Canceled
 	} else {
-		turn, startErr = handoff.target.StartTurn(p.ctx, input.RunID, input.Input, state.out)
+		turn, startErr = handoff.target.StartTurn(agent.WithBoundaryInput(p.ctx, received, p.requestID), input.RunID, input.Input, state.out)
 	}
 	r.mu.Lock()
 	handoff.turn = turn

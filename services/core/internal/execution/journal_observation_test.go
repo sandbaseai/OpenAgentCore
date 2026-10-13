@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -153,5 +154,56 @@ func TestFirstTextCannotConfirmBeforeAppendReturns(t *testing.T) {
 	}
 	if !j.firstText.confirmed || !bytes.Contains(out.Bytes(), []byte(`"status":"confirmed"`)) {
 		t.Fatal("missing completion")
+	}
+}
+
+func TestFirstTextFlushReasonsAndAttemptCosts(t *testing.T) {
+	for _, trigger := range []string{"size", "timer", "function_call", "deferred_final"} {
+		t.Run(trigger, func(t *testing.T) {
+			logs := captureExecutionLogs(t)
+			writer := &textObservationWriter{}
+			j := journal{ctx: t.Context(), writer: writer, next: 1, session: "session", turn: "turn"}
+			text, _ := proto.NewEnvelope(proto.TypeDelta, "turn", proto.DeltaPayload{Delta: "PRIVATE"})
+			if err := j.enqueue(text); err != nil {
+				t.Fatal(err)
+			}
+			if err := j.flushObserved(t.Context(), trigger); err == nil {
+				t.Fatal("expected unknown attempt")
+			}
+			if err := j.flushObserved(t.Context(), "deferred_final"); err != nil {
+				t.Fatal(err)
+			}
+			t.Log("OBSERVATION_FIXTURE", logs.String())
+			rows := persistenceRows(t, logs.Bytes())
+			if len(rows) != 2 {
+				t.Fatal(rows)
+			}
+			row := rows[1]
+			if row["first_flush_trigger"] != trigger || row["append_count"] != float64(2) || row["append_failed_count"] != float64(1) || row["append_unknown_count"] != float64(1) {
+				t.Fatal(row)
+			}
+			if row["batch_wait_ms"].(float64) < 0 || row["append_total_ms"].(float64) < row["append_max_ms"].(float64) {
+				t.Fatal(row)
+			}
+		})
+	}
+}
+
+func TestFirstTextTypedRejectionsAreNotUnknownCommits(t *testing.T) {
+	for _, rejection := range []error{sessions.ErrInvalidInput, sessions.ErrNotFound, sessions.ErrTurnConflict, sessions.ErrEventLimit, sessions.ErrIdempotencyConflict} {
+		t.Run(rejection.Error(), func(t *testing.T) {
+			logs := captureExecutionLogs(t)
+			j := journal{ctx: t.Context(), next: 1}
+			text, _ := proto.NewEnvelope(proto.TypeDelta, "turn", proto.DeltaPayload{Delta: "PRIVATE"})
+			if err := j.enqueue(text); err != nil {
+				t.Fatal(err)
+			}
+			j.observeTextFlush("timer")
+			j.observeTextCommit(1, j.firstText.flushStarted, fmt.Errorf("wrapped: %w", rejection), "")
+			rows := persistenceRows(t, logs.Bytes())
+			if len(rows) != 1 || rows[0]["append_unknown_count"] != float64(0) || rows[0]["append_failed_count"] != float64(1) {
+				t.Fatal(rows)
+			}
+		})
 	}
 }

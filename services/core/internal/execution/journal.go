@@ -52,7 +52,7 @@ func (j *journal) observe(ctx context.Context, env proto.Envelope) error {
 		return err
 	}
 	if j.bytes > 768*1024 || len(j.batch) >= 64 {
-		return j.flush(ctx)
+		return j.flushObserved(ctx, "size")
 	}
 	return nil
 }
@@ -77,6 +77,10 @@ func (j *journal) enqueue(env proto.Envelope) error {
 }
 
 func (j *journal) flush(ctx context.Context) error {
+	return j.flushObserved(ctx, "deferred_final")
+}
+
+func (j *journal) flushObserved(ctx context.Context, trigger string) error {
 	if len(j.batch) == 0 {
 		return nil
 	}
@@ -101,6 +105,7 @@ func (j *journal) flush(ctx context.Context) error {
 		appendCtx := ctx
 		var observation *textobs.Attempt
 		if j.observesTextBatch(count) {
+			j.observeTextFlush(trigger)
 			appendCtx, observation = textobs.Begin(ctx, j.turn, int64(j.firstText.sequence))
 		}
 		started := time.Now()

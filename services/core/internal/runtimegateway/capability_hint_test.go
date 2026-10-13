@@ -167,7 +167,7 @@ func TestCapabilityConfirmationRetriesWithoutObservingRejectedAuthority(t *testi
 			kinds := []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: true}}
 			publishCapabilityHeartbeat(t, s, kinds)
 			expectCapabilityHint(t, reg, false)
-			if logs.Len() != 0 {
+			if strings.Contains(logs.String(), "runtime capability snapshot observed") {
 				t.Fatal("unconfirmed authority logged as accepted capability")
 			}
 			if mode == "draining" && s.IsClosed() {

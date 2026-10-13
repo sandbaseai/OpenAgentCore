@@ -49,7 +49,7 @@ func TestCreateObservationsRetainFailedStage(t *testing.T) {
 }
 
 func TestCreateObservationsAcceptBoundedGuestStages(t *testing.T) {
-	for _, stage := range []string{"bootstrap_claim", "bootstrap_protection", "bootstrap_layout", "bootstrap_credentials", "bootstrap_spawn", "bootstrap_receipt"} {
+	for _, stage := range []string{"template_get_info", "template_read_check", "bootstrap_claim", "bootstrap_protection", "bootstrap_layout", "bootstrap_credentials", "bootstrap_spawn", "bootstrap_receipt"} {
 		raw := `{"event":"e2b_create_stage","stage":"` + stage + `","duration_us":42,"completed":false}`
 		got := parseStageObservations([]byte(raw+"\n"+raw), "e2b_create_stage")
 		if len(got) != 1 || got[0].Stage != stage || *got[0].Completed || *got[0].DurationUS != 42 {

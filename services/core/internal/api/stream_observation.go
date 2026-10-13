@@ -22,6 +22,8 @@ type streamTextObservation struct {
 	unknownSeen              uint8
 	limitLogged, active      bool
 	terminal                 bool
+	loop                     streamLoopObservation
+	textObserved             bool
 	event                    v1.SessionEvent
 	sequence                 int64
 	readAt                   time.Time
@@ -73,7 +75,12 @@ func (o *streamTextObservation) begin(event v1.SessionEvent, sequence int64, rea
 	o.terminal = terminal
 	o.writeMS, o.flushMS = nil, nil
 	o.writeStatus, o.flushStatus = "unobserved", "unobserved"
-	obslog.Ctx(o.ctx).Info(o.message("read"), o.fields()...)
+	fields := o.fields()
+	if !terminal {
+		o.textObserved = true
+		fields = append(fields, o.loop.fields(readAt)...)
+	}
+	obslog.Ctx(o.ctx).Info(o.message("read"), fields...)
 }
 
 func (o *streamTextObservation) fields() []any {
@@ -132,4 +139,93 @@ func (o *streamTextObservation) scope() string {
 		return "terminal_per_turn_connection"
 	}
 	return "first_text_per_turn_connection"
+}
+
+// Counters are connection-prefix snapshots, never per-Turn exclusive costs.
+// No observation retains a page, text payload or unbounded timing history.
+type streamDurationCounter struct {
+	count      int64
+	total, max time.Duration
+}
+
+func (c *streamDurationCounter) add(d time.Duration) {
+	c.count++
+	c.total += d
+	if d > c.max {
+		c.max = d
+	}
+}
+func (c streamDurationCounter) fields(prefix string) []any {
+	var total, maximum any
+	if c.count > 0 {
+		total, maximum = streamMS(c.total), streamMS(c.max)
+	}
+	return []any{prefix + "_count", c.count, prefix + "_total_ms", total, prefix + "_max_ms", maximum}
+}
+func streamMS(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+
+type streamLoopObservation struct {
+	emptyReads, authorityCacheHits    int64
+	poll, authority, list             streamDurationCounter
+	lastEmpty                         time.Time
+	lastPoll, lastAuthority, lastList any
+	currentList                       any
+}
+
+func (o *streamLoopObservation) listed(start, end time.Time, empty bool, err error) {
+	d := end.Sub(start)
+	o.list.add(d)
+	o.currentList = streamMS(d)
+	if !o.lastEmpty.IsZero() {
+		o.lastList = streamMS(d)
+	}
+	if err == nil && empty {
+		o.emptyReads++
+		o.lastEmpty = end
+		o.lastPoll, o.lastAuthority, o.lastList = nil, nil, nil
+	}
+}
+func (o *streamLoopObservation) checked(d time.Duration) {
+	o.authority.add(d)
+	if !o.lastEmpty.IsZero() {
+		o.lastAuthority = streamMS(d)
+	}
+}
+func (o *streamLoopObservation) cached() {
+	o.authorityCacheHits++
+	o.lastAuthority = nil
+}
+func (o *streamLoopObservation) polled(d time.Duration) {
+	o.poll.add(d)
+	if !o.lastEmpty.IsZero() {
+		o.lastPoll = streamMS(d)
+	}
+}
+func (o *streamLoopObservation) fields(readAt time.Time) []any {
+	var gap any
+	if !o.lastEmpty.IsZero() {
+		gap = streamMS(readAt.Sub(o.lastEmpty))
+	}
+	fields := []any{"timing_scope", "connection_prefix", "empty_read_count", o.emptyReads,
+		"authority_cache_hit_count", o.authorityCacheHits, "first_text_list_ms", o.currentList,
+		"last_empty_to_first_read_ms", gap, "last_poll_wait_ms", o.lastPoll,
+		"last_authority_check_ms", o.lastAuthority, "last_list_events_ms", o.lastList}
+	fields = append(fields, o.poll.fields("poll_wait")...)
+	fields = append(fields, o.authority.fields("authority_check")...)
+	return append(fields, o.list.fields("list_events")...)
+}
+func (o *streamTextObservation) finish(outcome string) {
+	if o.textObserved {
+		return
+	}
+	fields := []any{"session_id", o.session, "connection_id", o.connection, "start_cursor", o.cursor,
+		"outcome", outcome, "scope", "connection_without_text", "text_observed", false}
+	fields = append(fields, o.loop.fields(time.Now())...)
+	// An ending connection without text has no first-text read boundary.
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i] == "first_text_list_ms" || fields[i] == "last_empty_to_first_read_ms" {
+			fields[i+1] = nil
+		}
+	}
+	obslog.Ctx(o.ctx).Info("session stream observation ended", fields...)
 }

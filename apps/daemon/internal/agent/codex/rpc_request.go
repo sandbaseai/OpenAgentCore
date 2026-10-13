@@ -60,12 +60,20 @@ func (c *JSONRPCClient) requestWithTimeout(ctx context.Context, method string, p
 			}
 		}()
 	}
+	boundary := nativeBoundaryFrom(ctx)
+	if method == "turn/start" && boundary != nil {
+		pending.onResponse = func(bool) { boundary.ack(time.Now()) }
+	}
 	c.pendingMu.Lock()
 	c.pending[id] = pending
 	c.pendingMu.Unlock()
 
 	frame := JsonRpcRequest{JsonRpc: JsonRpcVersion, ID: id, Method: method, Params: params}
+	writeStarted := time.Now()
 	err = write(frame)
+	if method == "turn/start" && boundary != nil {
+		boundary.write(writeStarted, time.Now())
+	}
 	if method == "initialize" {
 		ended, writeErr := time.Now(), err
 		defer func() { observePreparationInterval(ctx, "rpc_initialize_write", started, ended, writeErr) }()
