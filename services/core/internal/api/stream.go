@@ -62,18 +62,32 @@ type streamSettlement func(context.Context) (settled bool, cursor int64, err err
 func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, session sessions.Session, cursor int64, initial *v1.SessionEvent, status int, settlement streamSettlement) {
 	id, tenant := session.ID, tenantID(r)
 	observation := newStreamTextObservation(r.Context(), id, cursor)
+	outcome := "ok"
+	defer func() {
+		if r.Context().Err() != nil {
+			outcome = "cancelled"
+		}
+		observation.finish(outcome)
+	}()
 	write := openEventStream(w, status, observation)
 	if write == nil {
+		outcome = "error"
 		return
 	}
 	principal := r.Context().Value(principalContextKey{}).(identity.Principal)
 	var checkedAuthority time.Time
 	authorized := func() bool {
 		if time.Since(checkedAuthority) < time.Second {
+			observation.loop.cached()
 			return true
 		}
+		started := time.Now()
 		current, ok, err := h.resolvePrincipal(r)
 		checkedAuthority = time.Now()
+		observation.loop.checked(checkedAuthority.Sub(started))
+		if err != nil || !ok || current != principal {
+			outcome = "error"
+		}
 		return err == nil && ok && current == principal
 	}
 	// Recheck on idle polls and before output, including a continuously busy drain.
@@ -88,6 +102,7 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 	emit := func(event v1.SessionEvent) error { return emitSessionEvent(write, id, event) }
 	if initial != nil {
 		if err := emit(*initial); err != nil {
+			outcome = "error"
 			return
 		}
 	}
@@ -102,7 +117,13 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		if !authorized() {
 			return
 		}
+		listStarted := time.Now()
 		changes, err := h.SessionEvents.ListSessionEvents(r.Context(), tenant, id, cursor)
+		readAt := time.Now()
+		observation.loop.listed(listStarted, readAt, len(changes) == 0, err)
+		if err != nil {
+			outcome = "error"
+		}
 		if errors.Is(err, sessions.ErrNotFound) {
 			return
 		}
@@ -110,13 +131,13 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			writeStreamFailure(write, id)
 			return
 		}
-		readAt := time.Now()
 		for _, change := range changes {
 			if limit >= 0 && change.Sequence > limit {
 				return
 			}
 			event, err := streamResponse(session, change, h.Execution.ExecutorURL)
 			if err != nil {
+				outcome = "error"
 				writeStreamFailure(write, id)
 				return
 			}
@@ -124,6 +145,7 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			emitErr := emit(event)
 			observation.end(emitErr)
 			if emitErr != nil {
+				outcome = "error"
 				return
 			}
 			cursor = change.Sequence
@@ -142,9 +164,11 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			recheck, checked = false, time.Now()
 			settled, snapshot, err := settlement(r.Context())
 			if errors.Is(err, sessions.ErrNotFound) || r.Context().Err() != nil {
+				outcome = "error"
 				return
 			}
 			if err != nil {
+				outcome = "error"
 				writeStreamFailure(write, id)
 				return
 			}
@@ -156,12 +180,15 @@ func (h *Handler) serveSessionEvents(w http.ResponseWriter, r *http.Request, ses
 				continue
 			}
 		}
+		waitStarted := time.Now()
 		select {
 		case <-r.Context().Done():
 			return
 		case <-poll.C:
+			observation.loop.polled(time.Since(waitStarted))
 		case <-heartbeat.C:
 			if err := write([]byte(": keepalive\n\n")); err != nil {
+				outcome = "error"
 				return
 			}
 		}

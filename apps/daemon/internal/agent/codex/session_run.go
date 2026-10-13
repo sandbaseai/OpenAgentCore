@@ -10,11 +10,19 @@ import (
 )
 
 func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.PromptRequestPayload) error {
+	threadStarted := time.Now()
+	mode := "reuse"
 	if s.currentThreadID() == "" {
+		mode = "start"
+		if req.AgentSessionID != "" || req.RequireExistingNativeSession {
+			mode = "resume"
+		}
 		if err := s.resolveThread(req, plan); err != nil {
+			s.boundary.thread(mode, threadStarted)
 			return err
 		}
 	}
+	s.boundary.thread(mode, threadStarted)
 
 	input, err := nativeInput(req.Input)
 	if err != nil {
@@ -41,7 +49,7 @@ func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.P
 		},
 	}
 	turnCtx, turnCancel := context.WithTimeout(ctx, 10*time.Second)
-	_, ackErr := s.rpc.requestWithResult(turnCtx, "turn/start", turnParams, s.bindTurnResult)
+	_, ackErr := s.rpc.requestWithResult(withNativeBoundary(turnCtx, s.boundary), "turn/start", turnParams, s.bindTurnResult)
 	turnCancel()
 	if ackErr != nil {
 		s.cfg.logger.Warn("codex: turn/start ack failed", "run_id", s.runID, "err", ackErr)

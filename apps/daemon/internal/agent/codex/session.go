@@ -48,6 +48,7 @@ func defaultSessionConfig(stateRoot string) sessionConfig {
 //  5. turn/completed emits TypeDone + closes out. Cancel can short-cut
 //     this by killing the child early.
 type Session struct {
+	boundary                  *nativeBoundary
 	retiredTurns              map[string]bool
 	executor                  *Executor
 	outputDone                chan struct{}

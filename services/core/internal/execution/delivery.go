@@ -87,7 +87,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 		}
 		flushStarted := time.Now()
 		pendingCount := len(journal.batch)
-		flushErr := journal.flush(finishCtx)
+		flushErr := journal.flushObserved(finishCtx, "deferred_final")
 		confirmation := "unconfirmed"
 		if flushErr == nil {
 			confirmation = "confirmed"
@@ -188,7 +188,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				return
 			}
 		case <-flushTicker.C:
-			if journal.flush(ctx) != nil {
+			if journal.flushObserved(ctx, "timer") != nil {
 				result.ErrorCode = "event_persistence_failed"
 				return
 			}
@@ -247,7 +247,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
 			case proto.TypeFunctionCall:
-				if err := journal.flush(ctx); err != nil {
+				if err := journal.flushObserved(ctx, "function_call"); err != nil {
 					result.ErrorCode = "event_persistence_failed"
 					return
 				}

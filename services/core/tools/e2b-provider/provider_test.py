@@ -157,13 +157,46 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(result['ErrorCode'], '')
         rows = [json.loads(line) for line in stream.getvalue().splitlines()]
         self.assertEqual([row['stage'] for row in rows], [
-            'sandbox_create', 'ownership_check', 'template_check',
+            'sandbox_create', 'ownership_check', 'template_get_info', 'template_read_check', 'template_check',
             'bootstrap_write', 'bootstrap_run', 'ready_inspect'])
         for row in rows:
             self.assertEqual(set(row), {'event', 'stage', 'duration_us', 'completed'})
             self.assertTrue(row['completed'])
             self.assertGreaterEqual(row['duration_us'], 0)
         self.assertNotIn('private', stream.getvalue())
+
+    def test_template_substages_measure_independent_calls(self):
+        import time
+        original_read = self.cloud.files.read.side_effect
+        def info(*args, **kwargs):
+            time.sleep(0.012)
+            return SimpleNamespace(type=FileType.FILE)
+        def read(*args, **kwargs):
+            time.sleep(0.023)
+            return original_read(*args, **kwargs)
+        self.cloud.files.get_info.side_effect = info
+        self.cloud.files.read.side_effect = read
+        stream = io.StringIO()
+        with patch('provider.sys.stderr', stream):
+            self.assertEqual(self.call('create')['ErrorCode'], '')
+        rows = {row['stage']: row for row in map(json.loads, stream.getvalue().splitlines())}
+        self.assertGreaterEqual(rows['template_get_info']['duration_us'], 12000)
+        self.assertGreaterEqual(rows['template_read_check']['duration_us'], 23000)
+        self.cloud.files.get_info.assert_called_once()
+        self.template_stream.__enter__.assert_called_once()
+        self.template_stream.__exit__.assert_called_once()
+
+    def test_template_get_info_failure_never_invents_read_stage(self):
+        self.cloud.files.get_info.side_effect = TimeoutError('private-template-secret')
+        stream = io.StringIO()
+        with patch('provider.sys.stderr', stream):
+            self.assertEqual(self.call('create')['ErrorCode'], 'unconfirmed')
+        rows = {row['stage']: row for row in map(json.loads, stream.getvalue().splitlines())}
+        self.assertFalse(rows['template_get_info']['completed'])
+        self.assertFalse(rows['template_check']['completed'])
+        self.assertNotIn('template_read_check', rows)
+        self.cloud.files.read.assert_not_called()
+        self.assertNotIn('private-template-secret', stream.getvalue())
 
     def test_failed_create_stage_does_not_expose_exception_or_replay(self):
         stream = io.StringIO()

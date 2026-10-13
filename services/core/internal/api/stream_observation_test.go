@@ -2,11 +2,16 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -278,5 +283,120 @@ func TestStreamTerminalAndTextUseIndependentBitsWithinTurnBound(t *testing.T) {
 	emit("new-overflow", true, false)
 	if len(o.seen) != streamTextTurnLimit || o.unknownSeen != 3 {
 		t.Fatal("bound/unknown bits")
+	}
+}
+
+func TestStreamLoopPrefixSnapshotAndNoEmptyNull(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(obslog.NewContextHandler(slog.NewJSONHandler(&logs, nil))))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	o := newStreamTextObservation(t.Context(), "session", 0)
+	now := time.Now()
+	o.loop.listed(now, now.Add(time.Millisecond), true, nil)
+	o.loop.polled(25 * time.Millisecond)
+	o.loop.checked(3 * time.Millisecond)
+	o.loop.listed(now.Add(30*time.Millisecond), now.Add(35*time.Millisecond), false, nil)
+	text := "PRIVATE"
+	o.begin(v1.SessionEvent{Type: "agent.session.turn.output_text.delta", TurnID: "turn", EventID: "event", Delta: &text}, 1, now.Add(35*time.Millisecond))
+	var row map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &row); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]float64{"empty_read_count": 1, "poll_wait_count": 1, "poll_wait_total_ms": 25, "authority_check_total_ms": 3, "list_events_count": 2, "list_events_total_ms": 6, "first_text_list_ms": 5, "last_empty_to_first_read_ms": 34} {
+		if row[key] != want {
+			t.Fatalf("%s=%v want %v", key, row[key], want)
+		}
+	}
+	if bytes.Contains(logs.Bytes(), []byte("PRIVATE")) {
+		t.Fatal("text leaked")
+	}
+	fresh := streamLoopObservation{}
+	fields := fresh.fields(now)
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i] == "last_empty_to_first_read_ms" && fields[i+1] != nil {
+			t.Fatal("invented empty read")
+		}
+	}
+	o.loop.cached()
+	if o.loop.lastAuthority != nil {
+		t.Fatal("cache counted as check")
+	}
+}
+
+func TestStreamNoTextEndKeepsNullBoundaryAndOutcome(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(obslog.NewContextHandler(slog.NewJSONHandler(&logs, nil))))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	o := newStreamTextObservation(t.Context(), "session", 9)
+	now := time.Now()
+	o.loop.listed(now, now.Add(time.Millisecond), true, nil)
+	o.finish("cancelled")
+	t.Log("OBSERVATION_FIXTURE", logs.String())
+	var row map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["outcome"] != "cancelled" || row["first_text_list_ms"] != nil || row["last_empty_to_first_read_ms"] != nil || row["poll_wait_total_ms"] != nil {
+		t.Fatal(row)
+	}
+}
+
+func TestStreamLoopActualHandlerPollAndListTimings(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(obslog.NewContextHandler(slog.NewJSONHandler(&logs, nil))))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	key := callerBinding()
+	key.TokenSHA256 = runtimedevice.HashCredential("fixture")
+	f := &streamFixture{session: sessions.Session{ID: uuid.NewString(), TenantID: key.TenantID, CreatedAt: time.Now(), Metadata: map[string]string{}, Configuration: json.RawMessage(`{"agent":{"id":"agent_fixture","model":"fixture","tools":[]},"environment":{"type":"none"}}`)}}
+	deps, fakes := testDependencies(t)
+	f.serve(fakes)
+	fakes.projectsReader.resolveAPIKey = projectKeys(t, key).ResolveAPIKey
+	calls := 0
+	fakes.sessionEvents.listSessionEvents = func(context.Context, string, string, int64) ([]sessions.SessionChange, error) {
+		calls++
+		time.Sleep(2 * time.Millisecond)
+		switch calls {
+		case 1:
+			return nil, nil
+		case 2:
+			text := "PRIVATE"
+			return []sessions.SessionChange{{Sequence: 11, Event: v1.SessionEvent{Type: "agent.session.turn.output_text.delta", TurnID: "turn", EventID: "event", Delta: &text}}}, nil
+		default:
+			return nil, sessions.ErrNotFound
+		}
+	}
+	request := httptest.NewRequest("GET", "/v1/agents/sessions/"+f.session.ID+"/events", nil)
+	request.Header.Set("Authorization", "Bearer fixture")
+	request.Header.Set("OpenAI-Beta", "agents=v1")
+	writer := &observedStreamWriter{header: http.Header{}}
+	newTestHandler(t, deps).ServeHTTP(writer, request)
+	t.Log("OBSERVATION_FIXTURE", logs.String())
+	if calls != 3 {
+		t.Fatalf("list calls=%d", calls)
+	}
+	var selected map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+		var row map[string]any
+		if err := json.Unmarshal(line, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row["msg"] == "session stream first text read" {
+			selected = row
+		}
+	}
+	if selected == nil {
+		t.Fatal("missing read")
+	}
+	if selected["empty_read_count"] != float64(1) || selected["poll_wait_count"] != float64(1) || selected["list_events_count"] != float64(2) || selected["authority_check_count"] != float64(1) {
+		t.Fatal(selected)
+	}
+	if selected["first_text_list_ms"].(float64) < 2 || selected["poll_wait_total_ms"].(float64) < 50 {
+		t.Fatal(selected)
+	}
+	if bytes.Contains(logs.Bytes(), []byte("PRIVATE")) {
+		t.Fatal("text leaked")
 	}
 }

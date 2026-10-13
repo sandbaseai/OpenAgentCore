@@ -65,7 +65,8 @@ type Conn struct {
 	errMu sync.Mutex
 	err   error
 
-	hbCancel context.CancelFunc
+	hbCancel       context.CancelFunc
+	firstHeartbeat heartbeatObservation
 }
 
 // envelopeWithAck pairs an outbound frame with a done channel so Send
@@ -199,6 +200,7 @@ func (c *Conn) Close() error {
 		}
 		close(c.closed)
 	})
+	c.firstHeartbeat.finish(c, "unknown")
 	return nil
 }
 
@@ -219,15 +221,37 @@ func (c *Conn) StartHeartbeats(parentCtx context.Context, interval time.Duration
 	go func() {
 		defer cancel()
 		sendHeartbeat := func(sendTimeout time.Duration) {
-			env, err := proto.NewEnvelope(proto.TypeHeartbeat, "", payloadFn())
+			observing := c.firstHeartbeat.begin(logger)
+			started := time.Now()
+			payload := payloadFn()
+			if observing {
+				c.firstHeartbeat.record(true, started)
+			}
+			env, err := proto.NewEnvelope(proto.TypeHeartbeat, "", payload)
 			if err != nil {
+				if observing {
+					c.firstHeartbeat.finish(c, "error")
+				}
 				logger.Error("marshal heartbeat envelope", "err", err)
 				return
 			}
 			// Per-send deadline so a wedged peer doesn't pile up
 			// heartbeats on sendCh.
 			sendCtx, sendCancel := context.WithTimeout(ctx, sendTimeout)
-			if err := c.Send(sendCtx, env); err != nil && !errors.Is(err, context.Canceled) {
+			started = time.Now()
+			err = c.Send(sendCtx, env)
+			if observing {
+				c.firstHeartbeat.record(false, started)
+				outcome := "ok"
+				if err != nil {
+					outcome = "error"
+				}
+				if errors.Is(err, context.Canceled) {
+					outcome = "cancelled"
+				}
+				c.firstHeartbeat.finish(c, outcome)
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
 				logger.Warn("send heartbeat", "err", err)
 			}
 			sendCancel()
@@ -312,6 +336,7 @@ func (c *Conn) readLoop() {
 			_ = c.ws.Close()
 			close(c.closed)
 		})
+		c.firstHeartbeat.finish(c, "unknown")
 		close(c.recvCh)
 	}()
 	for {

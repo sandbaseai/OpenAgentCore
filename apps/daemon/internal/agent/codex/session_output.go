@@ -6,12 +6,14 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
 
-func (s *Session) trySend(env proto.Envelope) {
+func (s *Session) trySend(env proto.Envelope) bool {
 	ctx, cancel := context.WithTimeout(s.cancelCtx, terminalSendTimeout)
 	defer cancel()
-	if !s.sendWithin(ctx, env) {
+	sent := s.sendWithin(ctx, env)
+	if !sent {
 		s.cfg.logger.Warn("codex: out send unavailable", "type", env.Type, "run_id", s.runID)
 	}
+	return sent
 }
 
 func (s *Session) sendWithin(ctx context.Context, env proto.Envelope) bool {
