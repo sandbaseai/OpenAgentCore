@@ -65,7 +65,7 @@ func (s *Service) view(snapshot Snapshot) (View, error) {
 		result.Configuration = configurationJSON(record.Public)
 		result.Metadata = configurationJSON(record.Metadata)
 		result.CredentialConfigured = d.CredentialStored
-		if result.Suspension, err = s.suspension(d.Provider); err != nil {
+		if result.Suspension, err = s.suspension(d.Provider, d.IdleSeconds); err != nil {
 			return View{}, err
 		}
 	}
@@ -108,7 +108,11 @@ func (s *Service) setup(d Record) (Setup, error) {
 	if err != nil {
 		return Setup{}, ErrConflict
 	}
-	return s.describe(result)
+	result, err = s.describe(result)
+	if result.Suspension != nil {
+		result.Suspension.IdleSeconds = d.IdleSeconds
+	}
+	return result, err
 }
 
 // describe adds the provider's declared operations, suspension policy and
@@ -119,7 +123,7 @@ func (s *Service) describe(setup Setup) (Setup, error) {
 		return Setup{}, err
 	}
 	setup.Operations = adapter.Operations()
-	if setup.Suspension, err = s.suspension(setup.Provider); err != nil {
+	if setup.Suspension, err = s.suspension(setup.Provider, 300); err != nil {
 		return Setup{}, err
 	}
 	setup.UsesCredential, err = s.registry.UsesCredential(setup.Provider)
@@ -251,13 +255,13 @@ func (s *Service) SetupForSelection(installationID string, input sandbox.Selecti
 }
 
 // suspension returns Core's idle suspension policy for a provider that
-// declares checkpoint support, and nil for any other provider.
-func (s *Service) suspension(provider string) (*Suspension, error) {
+// declares suspension support, and nil for any other provider.
+func (s *Service) suspension(provider string, idleSeconds int64) (*Suspension, error) {
 	checkpoint, err := s.registry.SupportsSuspension(provider)
 	if err != nil || !checkpoint {
 		return nil, err
 	}
-	return &Suspension{IdleSeconds: 5 * 60, RetentionSeconds: 24 * 60 * 60}, nil
+	return &Suspension{IdleSeconds: idleSeconds, RetentionSeconds: 24 * 60 * 60}, nil
 }
 
 // validateSelection rejects a selection its provider cannot normalize.
@@ -305,12 +309,42 @@ func (s *Service) ValidateWorkspaceConfiguration(ctx context.Context, declaratio
 	if adapter.Policy.Workspace == nil {
 		return workspacefs.ErrUnsupported
 	}
-	capacity := uint32(0)
-	if setup.Specification.Workspace != nil {
-		if *setup.Specification.Workspace != declaration {
-			return workspacefs.ErrUnsupported
-		}
-		capacity = setup.Specification.Resources.EnvironmentDiskMiB
+	// An external deployment may change only quota semantics: workspaces keep
+	// their own admitted capacity, and new ones are validated against the
+	// selected declaration until the deployment's capacity request matches it.
+	if current := setup.Specification.Workspace; current != nil && (current.Attachment != declaration.Attachment || current.UserXAttr != declaration.UserXAttr) {
+		return workspacefs.ErrUnsupported
 	}
-	return workspacefs.ValidateCombination(*adapter.Policy.Workspace, declaration, capacity)
+	return workspacefs.ValidateCombination(*adapter.Policy.Workspace, declaration, 0)
+}
+
+// UpdateIdleSeconds changes only the shared idle policy, without a new generation.
+func (s *Service) UpdateIdleSeconds(ctx context.Context, seconds int64) (View, error) {
+	if seconds < 30 || seconds > 86400 {
+		return View{}, ErrInvalidInput
+	}
+	err := s.storage.WithNodes(ctx, func(tx NodeTx) error {
+		d, err := tx.LoadDeployment()
+		if err != nil {
+			return err
+		}
+		if d.Provider == "" {
+			return ErrNotConfigured
+		}
+		if d.Reset != nil {
+			return ErrResetInProgress
+		}
+		supported, err := s.registry.SupportsSuspension(d.Provider)
+		if err != nil {
+			return err
+		}
+		if !supported {
+			return ErrInvalidInput
+		}
+		return tx.SaveIdleSeconds(seconds)
+	})
+	if err != nil {
+		return View{}, err
+	}
+	return s.View(ctx)
 }

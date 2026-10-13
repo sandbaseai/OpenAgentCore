@@ -37,7 +37,7 @@ Evidence for a status comes from the pinned official SDK and raw HTTP against th
 | Items | list | Partial: messages, commands, MCP calls, functions, web search, reasoning and Subagent coordination Items; other native variants are not projected | [Turns and Items](./sessions-events.md#turns-and-items) |
 | Artifacts | retrieve, list, delete, content | Implemented | [Environment files and Artifacts](./environment-files.md) |
 | Subagents | retrieve, list; Items; Turns retrieve and list; Turn Items | Partial: read-only child work; no live child progress or optional native operations | [Subagents](./subagents.md) |
-| Environments | retrieve | Implemented | [Environments](./environments.md) |
+| Environments | retrieve | Implemented; Session-scoped ([ownership](./environments.md#resources-and-states)). The pinned contract rejects `environment.environment_id`; existing hosted Environments cannot be attached across Sessions. Workspaces shared across Sessions belong to the application ([Projects own assets](../../docs/concepts.md#projects-own-assets)) | [Environments](./environments.md) |
 | Environment files | create, list | Implemented; the list is not recursive | [Environment files and Artifacts](./environment-files.md) |
 | Environment Templates | create, retrieve, update, list, delete | Implemented; execution limits are listed under [known gaps](#known-gaps) | [Environment Templates](./environments.md#templates) |
 | Vaults | create, retrieve, list, delete | Implemented; no archive operation | [Vaults and Credentials](./vaults.md) |
@@ -125,9 +125,10 @@ Each item is Core's deliberate or native behavior where the official service beh
 
 **Environments and Templates**
 
+- Hosted workspace admission is limited by the [tenant capacity policy](../../docs/configuration.md#tenant-capacity) and the existing [input reservation deadline](./environments.md#reservations).
 - Runtimes do not enforce `disabled` or `restricted` networks, so Sessions that need them are rejected ([restricted network policy](./environments.md#restricted-network)).
 - `packages.system` is rejected; system packages must be preinstalled.
-- Cold continuation does not restore process memory, background processes or temporary system-disk changes; completed setup is not replayed. See [Environment persistence](./environments.md#runtime-capability-preparation). Cross-node memory restoration and takeover of an unconfirmed old writer are not qualified.
+- Cold continuation does not restore process memory, background processes or temporary system-disk changes; completed setup is not replayed. See [Environment persistence](./environments.md#runtime-capability-preparation). Codex and Claude Code passed cross-node memory restoration on compatible microsandbox nodes with retained NFS storage under the [checkpoint transfer requirements](../../docs/sandbox-provider.md#checkpoint-transfer). Takeover of an unconfirmed old writer remains unqualified. On microsandbox with retained NFS storage, Codex and Claude Code passed [confirmed compute loss](../../docs/sandbox-provider.md#confirmed-compute-loss) continuation checks after idle and interrupted Turns and within two seconds of completion acknowledgement. Missing-history checks preserved the native identity and failed explicitly with generic `engine_failed` or `environment_unavailable` outcomes. Host-crash durability and completeness of arbitrary crash-damaged history remain unqualified.
 
 **Files and Environment files**
 

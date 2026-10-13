@@ -1,7 +1,7 @@
 ---
 title: "添加 Sandbox Provider"
 source: docs/sandbox-provider.md
-source_hash: fc14797b2af53ed0e2bd64828c83c19e711e5bf30bb1cdfa24574be522b1c13c
+source_hash: 54a0f998bf8d851e52229b3e06b6feeb1f21c1c922f4c1649bc093c6c724c6bf
 ---
 
 **Sandbox Provider** 为 Core 管理的 Environment 提供 Runtime daemon 运行所需的外层计算资源，以及启动 daemon 的有界引导流程。本指南说明如何添加 Provider，并作为 Core 驱动 Provider 的参考。接口为 [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go)。
@@ -91,7 +91,7 @@ Microsandbox 在返回创建不存在回执前永久关闭初始 Create 准入�
 
 `ErrInvalid`、`ErrOwnership`、`ErrExists`、`ErrNotFound`、`ErrComputeUnconfirmed` 和 `ErrCommandUnconfirmed` 保持其定义含义。未分类原生或 transport error 表示未知，不授权重试 mutation。Core 不将 provider diagnostics 读作生命周期事实，也不暴露原生错误文本或凭据；node transport 将错误映射为固定 code，直接 SDK 细节保持私有。
 
-暂停支持增加精确的 `Compute` 代次、名称和 ID，以及不透明的 `RetainedState` 收据。原样持久化操作 ID 和 Provider 保留状态的来源。暂停或恢复中的 `ReconcileOnly` 观察原始尝试，不会开始另一次捕获或恢复。`ResumeCompute` 仅解冻保留的源实例，绝不冷启动已停止的源实例。清理针对精确计算实例和保留状态，而非当前恰好同名的实例。声明支持前请阅读 [`runtime_compute.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/execution/runtime_compute.go) 及其失败测试。
+暂停支持增加精确的 `Compute` 代次、名称和 ID，以及不透明的 `RetainedState` 收据。原样持久化操作 ID 和 Provider 保留状态的来源。暂停或恢复中的 `ReconcileOnly` 观察原始尝试，不会开始另一次捕获或恢复。`ResumeCompute` 仅解冻保留的源实例，绝不冷启动已停止的源实例。清理针对精确计算实例和保留状态，而非当前恰好同名的实例。只有所属节点已验证精确 incarnation 不再存在时，`GetCompute` 才返回 `ErrNotFound`；同名但 native ID 不同的实例为 `ErrOwnership`，节点或后端不可达属于未知结果。`ComputeState.Status` 为 `stopped` 或 `crashed` 表示 adapter 已验证该精确 incarnation 的进程不再存在；其记录或磁盘可保留到 `KillCompute` 将其移除。`paused`、没有 Runtime 连接的 `running` 和未知状态均不证明进程已终止。声明支持前请阅读 [`runtime_compute.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/execution/runtime_compute.go) 及其失败测试。
 
 ### 四个独立就绪事实 {#four-distinct-readiness-facts}
 
@@ -168,7 +168,7 @@ allocation、专用 daemon credential digest 和精确 Session binding 在 `Crea
 
 配置 provider 后，Worker 扫描已提交且没有 allocation 的 pending hosted Environment，涵盖空闲 Session 创建以及 commit 与 bootstrap 之间中断后的恢复；已有 allocation 不重新进入此路径。scan 有界，由 lifecycle owner 串行化，不需要调用方操作。没有 Turn 的初始预约让 Session 保持空闲，daemon 连接不被当作原生 readiness。同一 scan 在验证精确 Session、device binding 和已结算 bootstrap 后，发布带持久 generation 的认证连接观测。
 
-Core 在 Turn 之间检查已连接且已观察的计算资源仍是其 Session 正在运行的 allocation；该检查不做任何修改，也不复活 cleanup 请求。正在运行的计算资源不会到期：显式生命周期清理和保留状态期限策略管理资源回收。停止或缺失 container 不授权丢弃保留工作区或历史，也不授权选择替代计算资源。禁用 provider 停止新 hosted admission 与 bootstrap，但不阻止现有 Session 的取消、function result 或 input retry outcome。
+Core 在 Turn 之间检查已连接且已观察的计算资源仍是其 Session 正在运行的 allocation；该检查不做任何修改，也不复活 cleanup 请求。正在运行的计算资源不会到期：显式生命周期清理、保留状态期限策略和[已确认的计算资源丢失](#confirmed-compute-loss)管理资源回收。不可达的 container，以及未经该确认的停止或缺失 container，不授权丢弃保留工作区或历史，也不授权选择替代计算资源。禁用 provider 停止新 hosted admission 与 bootstrap，但不阻止现有 Session 的取消、function result 或 input retry outcome。
 
 终结清理原子撤销 device authority、记录 Environment 失败或到期、结算 pending input 并请求取消，然后才调用 `Kill`；原 input deadline 与 retry outcome 保留。临时 provider outage、未知 Create result 和停止的计算资源不证明永久失败。公开 Session 删除后 Core 保留 allocation，仅在所属 compute 与 volume 清理完成且原 Create 已结算的证明成立后标记 released；未知创建即使观察到不存在也保留 cleanup ownership，有界 scan 继续捕捉延迟资源，不再调用 `Create`。
 
@@ -198,7 +198,7 @@ placement 自动完成：Session 创建提交持久的 pending 工作，共同�
 
 `ResumeRequest.Workspace` 携带 allocation 独立拥有的文件系统绑定；Core 在恢复前获取 ready 绑定。源实例必须已释放活跃执行能力，目标才可成为写者。adapter 在原生副作用前校验绑定；不支持独立文件系统的 adapter 拒绝非空绑定。`DeleteRetained` 仅删除 adapter 的计算保留状态，绝不删除 workspace。显式 Session 删除先完成 compute 清理，再删除独立存储，恢复期间保持单一活跃写者。
 
-Core 对所有声明暂停支持的 Provider 应用统一共享策略：通常在工作空闲 5 分钟（300 秒）后暂停，保留状态期限为 24 小时（86400 秒）；部署的 [`suspension`](../../contracts/agents-api/zh/sandbox-deployment.md#safe-response) 返回这些值。Core 暂停已经初始化的 Environment，包括尚未执行 Turn 的 Environment，前提是没有 root 或 Subagent Turn 排队、执行或等待，没有输入、文件操作或初始化待处理，且真实活动已空闲达到该时长。空闲时钟不早于 allocation 进入 running compute phase 的时刻，包括唤醒后。Core 在同一事务中使用数据库时钟记录 allocation 的初始化完成和 root 或 child 终结转换。候选筛选和持有 Session 锁的复查比较数据库经过时间与空闲时长，初始保留状态期限也锚定同一数据库观测，因此 Core 与数据库主机的时钟无需一致。公开历史中的原生完成时间戳保持不变，但不驱动空闲准入，心跳也不重置活动时间。确认计划暂停前，daemon 关闭准入并排空原生清理、输出收据和文件工作。
+Core 对所有声明暂停支持的 Provider 应用统一共享策略：[可配置的空闲时长](../../contracts/agents-api/zh/sandbox-deployment.md#suspension-policy)默认为 5 分钟（300 秒），保留状态期限为 24 小时（86400 秒）；部署的 [`suspension`](../../contracts/agents-api/zh/sandbox-deployment.md#safe-response) 返回这些值。Core 暂停已经初始化的 Environment，包括尚未执行 Turn 的 Environment，前提是没有 root 或 Subagent Turn 排队、执行或等待，没有输入、文件操作或初始化待处理，且真实活动已空闲达到该时长。空闲时钟不早于 allocation 进入 running compute phase 的时刻，包括唤醒后。Core 在同一事务中使用数据库时钟记录 allocation 的初始化完成和 root 或 child 终结转换。候选筛选和持有 Session 锁的复查比较数据库经过时间与空闲时长，初始保留状态期限也锚定同一数据库观测，因此 Core 与数据库主机的时钟无需一致。公开历史中的原生完成时间戳保持不变，但不驱动空闲准入，心跳也不重置活动时间。确认计划暂停前，daemon 关闭准入并排空原生清理、输出收据和文件工作。
 
 容量压力可以让已经空闲的 node allocation 在通常超时之前暂停，但仍需经过 15 秒无活动宽限期。Session 锁内的决策重新检查 pending work、wake request 和 activity，再获取共享 deployment 容量锁并确认兼容的等待需求。它不会中断活动 Turn，也不会在普通 quiesce、capture 和 source-stop 证明完成前释放容量。压力触发的回收采用保守策略：只有进行中回收所属的节点当前有资格服务同一需求时，它才会推迟另一次回收。不可用或不兼容的节点保留其 ownership receipt，但不会阻挡健康节点的容量。如果暂停无法使容量可用，等待请求仍保留原始期限。
 
@@ -235,6 +235,12 @@ Core 在释放 allocation 和 placement 归属前，确认原始创建已结算�
 容量压力不会缩短检查点保留期。在配置的期限到达前，已挂起的 allocation 保留快照并继续占用 retained slot；容量不足或节点不兼容不允许降级为冷替换。等待请求保持原有的输入期限。保留期到期后，常规 expiry cleanup 必须确认资源已删除，其他 allocation 才能预留该 slot；文件与已验证的原生历史继续保留。
 
 新 input 或实时 Environment 文件访问会在兼容 node 上预约新 allocation，并引导新的 Runtime device。准备流程复用同一文件系统和已完成的初始化，不重放初始化。验证替代 Runtime 的声明后，执行从保留历史续接同一原生 Session。原生历史缺失或无效时明确失败；Core 不替换为新的原生 Session，也不重放已完成的 input。读取历史和已发布 Artifact 不预约计算资源。此路径不保留 VM 内存、后台进程或开放连接，也不为未声明能力的 Runtime、Harness 或文件系统组合提供资格。
+
+### 已确认的计算资源丢失 {#confirmed-compute-loss}
+
+正在运行的计算资源没有保留期限，因此主机崩溃或重启后，其 allocation 原本会无限期保持归属。所属节点重新上线后，对于计算阶段为 `running` 且支持检查点的 allocation，只有同时满足以下条件时，`GetCompute` 对已持久化的精确 incarnation 返回 `ErrNotFound` 或已验证的 `stopped`、`crashed` 状态才会释放该 allocation：原始创建已结算，该 incarnation 有 native ID，未记录 capture、restore 或 rollback 意图，allocation 的 device 没有已认证的 Runtime 连接，且 Session 满足[冷替换](#cold-replacement-after-checkpoint-retention)条件。随后 Core 对该精确 incarnation 调用 `KillCompute`。只有其结果得到确认，才允许一次持有 Session 锁的提交：重新检查计算 revision 与上述条件，撤销 device，并释放 allocation 和 placement。Session、Environment、等待中的 input、原生 Session 身份和文件系统均保留，新 input 或实时文件访问按冷替换续接。
+
+其他观察结果均保留归属及其诊断：`paused`、`running` 或未知原生状态、身份不匹配、超时或传输错误、未知创建、已记录的 restore、存在 Runtime 实时连接、自带工作区存储、初始化未完成、Session 已终结，或缺少 `retained_native_history` 声明。`KillCompute` 失败时不做任何修改，并发的归档、删除或计算阶段变更优先。节点离线时 Core 从不执行此操作，因为没有节点就无权停止计算资源。续接保留文件系统并使用已记录的原生 Session ID；Harness 恢复出错时执行失败，不创建另一个原生 Session。Core 不重放已中断或已完成的输入。[覆盖台账](../../contracts/agents-api/zh/index.md)记录已通过资格验证的续接场景，包括完成确认后立即崩溃。任意崩溃受损原生历史的完整性仍未通过资格验证；身份检查无法检测已截断但仍可解析的历史尾部。
 
 ### 重置与归档 {#reset-and-archive}
 

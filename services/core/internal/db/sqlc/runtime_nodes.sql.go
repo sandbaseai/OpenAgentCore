@@ -119,7 +119,7 @@ func (q *Queries) DisconnectRuntimeNode(ctx context.Context, arg DisconnectRunti
 }
 
 const getRuntimeDeployment = `-- name: GetRuntimeDeployment :one
-SELECT singleton, installation_id, backend_fingerprint, updated_at, provider_kind, owner_epoch, generation, mode, provider_credential, specification, reset_clear, reset_requested_at, reset_deadline_at, reset_forced_at, reset_audit, provider_config, provider_metadata FROM runtime_deployment WHERE singleton=true
+SELECT singleton, installation_id, backend_fingerprint, updated_at, provider_kind, owner_epoch, generation, mode, provider_credential, specification, reset_clear, reset_requested_at, reset_deadline_at, reset_forced_at, reset_audit, provider_config, provider_metadata, idle_seconds FROM runtime_deployment WHERE singleton=true
 `
 
 func (q *Queries) GetRuntimeDeployment(ctx context.Context) (RuntimeDeployment, error) {
@@ -143,6 +143,7 @@ func (q *Queries) GetRuntimeDeployment(ctx context.Context) (RuntimeDeployment, 
 		&i.ResetAudit,
 		&i.ProviderConfig,
 		&i.ProviderMetadata,
+		&i.IdleSeconds,
 	)
 	return i, err
 }
@@ -490,6 +491,23 @@ func (q *Queries) LockRuntimeNodePresence(ctx context.Context, id pgtype.UUID) (
 	row := q.db.QueryRow(ctx, lockRuntimeNodePresence, id)
 	err := row.Scan(&id)
 	return id, err
+}
+
+const releaseFailedRuntimePlacement = `-- name: ReleaseFailedRuntimePlacement :exec
+UPDATE runtime_placements SET released_at = clock_timestamp()
+WHERE runtime_placements.environment_id = $1 AND runtime_placements.node_id = $2 AND runtime_placements.deployment_generation = $3 AND runtime_placements.released_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM runtime_allocations a WHERE a.environment_id = $1 AND a.state <> 'released')
+`
+
+type ReleaseFailedRuntimePlacementParams struct {
+	EnvironmentID        pgtype.UUID `json:"environment_id"`
+	NodeID               pgtype.UUID `json:"node_id"`
+	DeploymentGeneration pgtype.Int8 `json:"deployment_generation"`
+}
+
+func (q *Queries) ReleaseFailedRuntimePlacement(ctx context.Context, arg ReleaseFailedRuntimePlacementParams) error {
+	_, err := q.db.Exec(ctx, releaseFailedRuntimePlacement, arg.EnvironmentID, arg.NodeID, arg.DeploymentGeneration)
+	return err
 }
 
 const releaseRuntimePlacement = `-- name: ReleaseRuntimePlacement :exec

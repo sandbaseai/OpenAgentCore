@@ -116,12 +116,6 @@ export interface AdminauditPage {
 export const adminauditPageFields = ["data", "has_more", "next_cursor"] as const;
 export const attachmentKindValues = ["host_directory"] as const;
 export type AttachmentKind = (typeof attachmentKindValues)[number];
-export interface Configuration {
-  adapter: string;
-  id: string;
-  parameters: Record<string, unknown>;
-}
-export const configurationFields = ["adapter", "id", "parameters"] as const;
 export interface ConfigurationDiscoveryInput {
   configuration?: Record<string, unknown>;
   credential?: Record<string, unknown>;
@@ -582,6 +576,35 @@ export interface Range {
   start: string;
 }
 export const rangeFields = ["end", "resolution_seconds", "start"] as const;
+export interface RequestLogEntry {
+  duration_ms: number;
+  error_code: string | null;
+  method: string;
+  request_id: string;
+  response_bytes: number;
+  route: string;
+  started_at: string;
+  state: RequestLogEntryState;
+  status: number | null;
+  trace_id: string;
+}
+export const requestLogEntryFields = ["duration_ms", "error_code", "method", "request_id", "response_bytes", "route", "started_at", "state", "status", "trace_id"] as const;
+export const requestLogEntryStateValues = ["active", "completed", "aborted"] as const;
+export type RequestLogEntryState = (typeof requestLogEntryStateValues)[number];
+export interface RequestLogList {
+  capacity: number;
+  data: RequestLogEntry[];
+  has_more: boolean;
+  instance_id: string;
+  instance_started_at: string;
+  object: string;
+  retained_count: number;
+  surface: RequestLogListSurface;
+  total_matching: number;
+}
+export const requestLogListFields = ["capacity", "data", "has_more", "instance_id", "instance_started_at", "object", "retained_count", "surface", "total_matching"] as const;
+export const requestLogListSurfaceValues = ["public", "admin"] as const;
+export type RequestLogListSurface = (typeof requestLogListSurfaceValues)[number];
 export interface Reset {
   clear: ResetMode;
   deadline_at: string | null;
@@ -819,6 +842,10 @@ export interface SandboxEnrollmentTokenRequest {
 }
 export const sandboxEnrollmentTokenRequestFields = ["max_active", "max_retained"] as const;
 export const sandboxEnrollmentTokenRequestRequired = [] as const;
+export interface SandboxIdlePolicyInput {
+  idle_seconds: number;
+}
+export const sandboxIdlePolicyInputFields = ["idle_seconds"] as const;
 export interface SandboxMutationResponse {
   deleted?: boolean;
   id: string;
@@ -838,6 +865,13 @@ export interface SandboxResources {
 }
 export const sandboxResourcesFields = ["cpus", "environment_disk_mib", "memory_mib", "root_disk_mib"] as const;
 export const sandboxResourcesRequired = ["cpus", "memory_mib"] as const;
+export interface Selection {
+  adapter: string;
+  id: string;
+  parameters: Record<string, unknown>;
+  tenant_capacity_mib: number;
+}
+export const selectionFields = ["adapter", "id", "parameters", "tenant_capacity_mib"] as const;
 export interface ServiceState {
   execution_owner: boolean | null;
   revision: string | null;
@@ -901,6 +935,15 @@ export interface TurnDiagnostics {
   turn_id: string;
 }
 export const turnDiagnosticsFields = ["failure", "items", "items_truncated", "object", "session_id", "status", "turn_id"] as const;
+export interface WorkspaceStorageInput {
+  adapter: string;
+  credential?: Record<string, unknown>;
+  id: string;
+  parameters: Record<string, unknown>;
+  tenant_capacity_mib: number;
+}
+export const workspaceStorageInputFields = ["adapter", "credential", "id", "parameters", "tenant_capacity_mib"] as const;
+export const workspaceStorageInputRequired = ["adapter", "id", "parameters", "tenant_capacity_mib"] as const;
 export interface WriteauditAPIKey {
   id: string;
   kind: "issued";

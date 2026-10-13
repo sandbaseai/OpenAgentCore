@@ -12,6 +12,7 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment/placement"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
@@ -62,7 +63,10 @@ type runtimeLifecycle struct {
 	cursor          string
 	pendingCursor   string
 	connections     map[string]*runtimeConnection
+	awaiting        map[string]deployment.AllocationKey
+	connectionWake  chan *runtimegateway.Session
 	wakeHints       chan struct{}
+	pendingWake     chan struct{}
 	hintDestination func(string)
 }
 
@@ -105,7 +109,7 @@ func validatedRuntimeProvider(config *RuntimeProvider, registry *runtimegateway.
 	}
 	if config.Suspension != nil {
 		policy := *config.Suspension
-		if !sandbox.SupportsSuspension(config.Provider) || policy.IdleTimeout < time.Second || policy.Retention < time.Second || (copied.Mode == string(sandbox.DeploymentDirect) && (policy.MaxActive < 1 || policy.MaxRetained < policy.MaxActive)) {
+		if !sandbox.SupportsSuspension(config.Provider) || policy.Retention < time.Second || (copied.Mode == string(sandbox.DeploymentDirect) && (policy.MaxActive < 1 || policy.MaxRetained < policy.MaxActive)) {
 			return RuntimeProvider{}, sandbox.ErrInvalid
 		}
 		copied.Suspension = &policy
@@ -179,7 +183,7 @@ func (w *Worker) ProvisionEnvironment(ctx context.Context, tenant, environment, 
 }
 
 // provision runs under the lifecycle gate and uses the durable one-shot receipt.
-func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, providerKey string) (deployment.Allocation, error) {
+func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, providerKey string) (result deployment.Allocation, resultErr error) {
 	provider := r.config.Provider
 	// The lifecycle lane, not provider configuration, owns node identity.
 	if (r.nodeID == "") != (r.config.Mode == string(sandbox.DeploymentDirect)) {
@@ -187,6 +191,31 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	}
 	if providerKey != r.config.InstallationID {
 		return deployment.Allocation{}, sandbox.ErrInvalid
+	}
+
+	if r.nodeID != "" {
+		key := deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}
+		target, err := r.reader.LifecyclePlacement(ctx, key)
+		if err != nil {
+			return deployment.Allocation{}, err
+		}
+		if target.PlacementNodeID != r.nodeID {
+			return deployment.Allocation{}, sandbox.ErrOwnership
+		}
+		if target.PlacementReleased && target.AllocationID == "" {
+			return deployment.Allocation{}, deployment.ErrAllocationConflict
+		}
+		if !target.PlacementReleased {
+			expected := placement.Reserved{NodeID: target.PlacementNodeID, Generation: target.PlacementGeneration}
+			defer func() {
+				if resultErr == nil || result.ID != "" {
+					return
+				}
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				resultErr = errors.Join(resultErr, r.deployment.ReleaseFailedPlacement(cleanup, key, expected))
+			}()
+		}
 	}
 	environmentValue, err := r.sessions.GetEnvironment(ctx, tenant, environment)
 	if err != nil {
@@ -239,7 +268,7 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 				return deployment.Allocation{}, err
 			}
 		} else if existing.State == "released" {
-			workspace, err = r.workspaces.GetReady(ctx, tenant, environment, r.config.WorkspaceRequirements, spec.Resources.EnvironmentDiskMiB)
+			workspace, err = r.workspaces.GetReady(ctx, tenant, environment, r.config.WorkspaceRequirements)
 			if err != nil {
 				return deployment.Allocation{}, err
 			}
@@ -272,13 +301,14 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	if err != nil {
 		return deployment.Allocation{}, err
 	}
-	createAt := time.Now()
+	started := time.Now()
 	info, err := provider.Create(ctx, sandbox.Bootstrap{
 		Reference: runtimeReference(owner), SessionID: owner.SessionID, DeviceID: owner.DeviceID,
 		Workspace: workspace, Harness: session.Engine, CoreURL: r.config.CoreURL, Credential: token, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
 	})
-	observeExecutionStage(ctx, "provider_create", createAt, err, "allocation_id", owner.ID,
+	observeExecutionStage(ctx, "provider_create", started, err, "allocation_id", owner.ID,
 		"session_id", owner.SessionID, "environment_id", environment, "device_id", owner.DeviceID, "node_id", r.nodeID)
+	logComputeStep(ctx, owner, "create", started, err)
 	if info.Reference == runtimeReference(owner) && info.CreateSettled && info.State == "absent" {
 		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		released, releaseErr := r.deployment.ReleaseAbsentCreation(record, owner)
@@ -312,7 +342,13 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	if info.Reference != runtimeReference(owner) || info.ProviderID == "" || info.State != "running" || !info.BootstrapComplete {
 		return owner, sandbox.ErrOwnership
 	}
-	return r.deployment.ObserveRunning(ctx, owner)
+	owner, err = r.deployment.ObserveRunning(ctx, owner)
+	if err != nil {
+		return owner, err
+	}
+	// Bootstrap may already have established its authenticated Runtime connection.
+	// Publish it now rather than waiting for the next maintenance observation.
+	return owner, r.observeConnection(ctx, owner)
 }
 
 // ReconcileManagedRuntimes is also callable before serving admission. One scan
@@ -493,6 +529,7 @@ func (r *runtimeLifecycle) observe(ctx context.Context, owner deployment.Allocat
 // Environment identity owns connectivity; preparation has an independent owner.
 func (r *runtimeLifecycle) clearRuntimeState(owner deployment.Allocation) {
 	delete(r.connections, owner.EnvironmentID)
+	r.forgetAwaitingConnection(owner.DeviceID)
 }
 
 func runtimeReference(owner deployment.Allocation) sandbox.Reference {
