@@ -33,7 +33,7 @@ func (b *safeObservationBuffer) Bytes() []byte {
 func TestWorkspaceObservationActualWebsocketLoops(t *testing.T) {
 	var logs safeObservationBuffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	slog.SetDefault(slog.New(&slowPredecodeHandler{Handler: slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})}))
 	defer slog.SetDefault(previous)
 	gw := newFakeGateway()
 	server := httptest.NewServer(http.HandlerFunc(gw.handler))
@@ -48,12 +48,21 @@ func TestWorkspaceObservationActualWebsocketLoops(t *testing.T) {
 	if err = peer.WriteJSON(request); err != nil {
 		t.Fatal(err)
 	}
-	// Allow readLoop to enqueue while the CLI-equivalent consumer is stopped.
+	// Wait for decode, then delay the CLI-equivalent consumer independently.
+	deadline := time.Now().Add(time.Second)
+	for len(conn.Recv()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("not enqueued")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	time.Sleep(30 * time.Millisecond)
 	received := <-conn.Recv()
 	scope := workspaceobs.New(received.Context(context.Background()), received.ID, "export")
 	reply, _ := proto.NewEnvelope(proto.TypeWorkspaceExportResult, "export", proto.WorkspaceExportResultPayload{Outcome: "completed"})
-	if err = conn.Send(scope.Context(t.Context()), reply); err != nil {
+	roundCtx := scope.RoundContext(scope.Context(t.Context()), received.Context(t.Context()), "next", 0)
+	workspaceobs.RoundFromContext(roundCtx).SetResponse("completed")
+	if err = conn.Send(roundCtx, reply); err != nil {
 		t.Fatal(err)
 	}
 	scope.Finish("completed")
@@ -72,10 +81,25 @@ func TestWorkspaceObservationActualWebsocketLoops(t *testing.T) {
 	if row["outbound_write_count"] != float64(1) || row["outbound_encode_count"] != float64(1) || row["connection_id"] == "" || row["outbound_unfinished_count"] != float64(0) {
 		t.Fatal(row)
 	}
+	if row["read_return_to_decode_begin_count"] != float64(1) || row["inbound_decode_count"] != float64(1) {
+		t.Fatal("predecode missing", row)
+	}
+	if row["request_read_to_response_write_count"] != float64(1) || row["read_return_to_decode_begin_total_ms"].(float64) < 20 {
+		t.Fatal("round/predecode delay absent", row)
+	}
 	if row["receive_dispatch_wait_total_ms"].(float64) < 10 {
 		t.Fatal("receive interval missing", row)
 	}
 	if bytes.Contains(logs.Bytes(), []byte("canary-secret")) {
 		t.Fatal("credential logged")
 	}
+}
+
+type slowPredecodeHandler struct{ slog.Handler }
+
+func (h *slowPredecodeHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "transport: received WS frame" {
+		time.Sleep(30 * time.Millisecond)
+	}
+	return h.Handler.Handle(ctx, r)
 }

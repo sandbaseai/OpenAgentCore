@@ -1,7 +1,7 @@
 ---
 title: "运维"
 source: docs/getting-started/operations.md
-source_hash: 2321c6997e3e8e63ff31747fb9cd31501cedc45ebcd2250b1b16bd7a8d36497e
+source_hash: f347ef5959e6d79cf10411a48c6064cd890a2e358f7719e91d01cafc19d59203
 ---
 
 安装运维人员负责 Core 主机、存储和可用性。节点主机运行各自的服务；参阅[节点](nodes.md)。设置见[配置参考](../configuration.md)。
@@ -248,6 +248,8 @@ Web 使用 Core 密钥让管理员登录，检查每个请求来源，并用保�
 
 `execution stage` 记录 `stage`、`duration_ms` 与 `status`（`ok`、`error`、`cancelled`、`timeout`）。阶段覆盖输入验证/ownership、预留和等待 admission、执行配置与 admission 提升、生命周期 gate 等待、Runtime 观察和供给、provider create/resume、Environment 初始化。Runtime 连接日志记录已确认观察到的连接变化，不是 socket 建立的精确时间。通过 Environment、allocation、node ID 将后台 Runtime 记录与输入关联；缺少输入 Trace 的后台记录不能视为连续的请求 span。阶段耗时使用本进程单调时钟。`queue_age_ms` 则比较选择时间与数据库预留创建时间，可能受到时钟偏差影响，不能当作单独测量的调度等待。
 
+`execution scheduling observation` 是 worker 本地 reservation 汇总，记录 `owner_observation_id`、reservation/Session 身份、固定状态 observed 标记及从首次候选观测开始的偏移。`eligible_seen` 表示本 owner 首次观察原有就绪检查全部通过，不是资源物理就绪时间。固定配对 `eligible_to_selected_ms`、`selected_to_prepare_ms`、`ready_to_promote_ms`、`promote_to_notify_ms`、`notify_to_handler_ms` 要求同一 observer 内锚点顺序有效且不超过 1800000 ms；缺失、乱序或超界为 null。既有 handler 读取仅可为同 Worker、Session、reservation 标记 `handler_observed`，不增加数据库读取。成功 dispatch 或观察到 cancelled/failed/expired reservation 后释放条目；若 handler 没有读取终态，条目可能保留至 owner 关闭。终态字段冻结、条目释放后，才在所有观测锁外同步输出日志；慢日志 sink 可延迟调用者，但不持有共享观测锁。owner 本地单调 fence 防止在观测完成之前启动的候选页重新打开已释放条目。已有条目仍可使用；旧页中尚未跟踪的条目可能保守跳过，直至新查询页出现；不改变业务调度、不增加查询。这是额外观测缺口，不能据此声称完整候选历史。最多保留 256 个活跃条目、不淘汰；超额只跳过观测，业务继续。`execution scheduling owner observation` 用饱和 uint64 `overflow_count` 与 `overflow_saturated` 报告跳过量。`prefix_observed=false`、`observation_complete=false` 保留候选前缀未观测的事实。outcome 为 `completed/cancelled/owner_lost/failed/unknown`；诊断完成不是执行成功。不能跨 owner ID 合成单调区间，也不能据此推断未观测的数据库、容量或候选分页等待。
+
 `execution_prepare_send` 测量 Core 控制消息发送；`execution_prepare_wait` 测量随后等待 Runtime 执行器就绪或预留进入终态的区间，两者都携带 Session、预留与准备请求 ID。`environment_initialize_commit` 测量初始化完成事务；成功提交后唤醒调度器，已有提示扫描绕过一秒候选扫描间隔，但不绕过准入检查。`input_admission_wait` 增加 `notification_wakeups`、`poll_wakeups` 和 `last_wake_source`（`none`、`notification`、`poll`）；它们统计等待 HTTP handler 实际选中的分支，不代表通知发送或丢失数量。选中轮询不证明漏通知。`runtime_reconcile` 仅对非空 allocation 页记录，测量清单查询及 gate 获取之后的观察批次和随后 pending 供给，附 `allocation_count` 与 `observed_count`；它与单独 provider/观察阶段重叠，不含之前的 gate 等待。这些记录不改变生命周期顺序，也不隔离慢实例观察。
 
 每轮生命周期协调在调用者 Trace 上使用新 span，没有 Trace 时创建后台 Trace。同一 trace/span 关联 `runtime reconciliation started`、`runtime_gate_wait`、`runtime_inventory`、各个 `runtime_observe` 和 `runtime_provision`、`runtime_pending_inventory`、`runtime_pending` 与 `runtime_reconcile_total`，包括 `node_id` 为空的直接 Provider 扫描。`runtime_inventory` 测量每次 allocation 页查询，`refill` 区分可选的回绕页；查询失败时 `allocation_count` 为 null，而不是空页。`runtime_pending_inventory` 测量待处理页查询；`runtime_pending` 包括该查询及返回候选的供给尝试，查询失败时 `candidate_count` 为 null，`attempted_count` 只统计开始尝试数，不代表成功数。`runtime_reconcile_total` 在获取 gate 前开始，每次返回都结束，包括空页和错误；原有非空页 `runtime_reconcile` 保留较窄区间。扫描成功仍可能含失败的单实例观察，需要查看各阶段状态。同轮身份能够证明旧实例观察是否先于 pending 供给；不同轮次仅时间重叠不能证明阻塞。跟踪不改变扫描顺序、公平性或取消语义。
@@ -289,6 +291,12 @@ Artifact capture 使用不可变 `capture_id` 关联原有阶段与有界汇总�
 `runtime workspace transport` 为每个已接纳的 workspace-only preparation 和 export owner 输出有界快照。Runtime scope 包含 Core artifact capture 之外的 workspace 操作，不观测 Harness preparation，单凭 Runtime 记录不能认定它属于 artifact。`scope=preparation` 携带 `preparation_request_id`，`scope=export` 携带 `export_id`。使用这些既有请求身份连接 Core 的 capture 映射。`connection_id` 属于 Runtime 本地，不等于 Core 的连接身份。`identity_valid=false` 将不安全的请求身份留为空值；`connection_mismatch=true` 防止把传输工作归到另一连接。两种情况下都不能用时间邻近替代身份关联。
 
 Runtime 阶段名称为 `receive_dispatch_wait`、`request_queue_wait`、`export_producer`、`export_read`、`export_done_wait`、`prepare_local`、`release_local`、`sender_call`、`outbound_queue_wait`、`outbound_encode` 和 `outbound_write`。接收延迟从解码到达计至 dispatcher 消费，包含接收通道背压；请求队列延迟从请求入队成功后开始。producer 时长覆盖本地导出生产，read 时长覆盖 pipe 读取，done wait 是发送完成结果前既有的 producer 完成等待。本地准备和释放覆盖相应本地工作，sender 与 transport 阶段测量状态或结果发送。各阶段采用 Core 快照的字段后缀，并增加 `_cancelled_count`；null 总时长和最大时长表示没有已完成测量。`read_bytes`、`chunk_count` 和 `local_eof` 表示本地 pipe 消费，不表示 Core 接收或 staging。`transport_observed` 表示匹配的 transport 接纳了观测元数据。`outcome` 与 `snapshot_complete` 描述不同事实：完整观测可以包含失败操作，关闭、暂停发布或在途工作仍属于部分观测。Workspace-only preparation 忽略已过时的状态 revision；终态通知失败不会重新启动已经完成的清理。如果关闭或暂停抑制了发布，owner 在 router 锁外以 `outcome=shutdown` 或 `outcome=suspended` 及 `snapshot_complete=false` 结束快照，即使已经清理的 preparation 记录被移除也如此。这不构成 release acknowledgement。
+
+Core 与 Runtime capture 汇总还测量成功 WebSocket read 返回至 JSON 解码前的 `read_return_to_decode_begin`，Runtime 增加 `inbound_decode`。只有解码后关联既有 scope 的帧才计入；它包含本地解码前工作与调度，不包含阻塞 read，也不是纯网络耗时。各阶段提供 `_overflow`；有界计数饱和，超额或未完成测量保持 unknown，不回绕。
+
+`artifact export reader` 与 Runtime export 汇总增加 `rounds_json` 字符串，内部最多前八轮，字段为 `round_index`、`phase=begin/next`、`offset`、`observed`、固定 `outcome` 与 nullable duration。Core 的 `request_send_to_receipt_dispatch_ms` 从原 Send 调用前到匹配本地回执 dispatch；Runtime 的 `request_read_to_response_write_ms` 从成功 read 返回到原响应 write 返回，终点在获取后续观测锁之前立即保存。count/total/max/unknown 聚合覆盖更多轮，另有 `round_count`、`rounds_truncated`、`rounds_overflow`；计数上限 1000000，duration/total 上限 1800000 ms。未尝试时 Core rounds 为 null，Runtime 为空数组。Core outcome 为 `chunk/completed/unknown`，Runtime 另允许 `ok/error/failed/rejected`。unknown 轮的 duration 为 null。不补造 write-return-to-receipt 区间或新的 completion 请求。这些包络与既有队列、write、receipt 测量重叠，不能隔离单向传输。
+
+Runtime `export_writer` 测量原 pipe writer 调用，记录 count/total/max/failed/cancelled/unknown/overflow 与 `export_writer_observed`，保持原字节、返回 n/error 和背压。区间包含 consumer 消费与本地调度，不是纯阻塞或磁盘时间。`export_producer` 包含 writer 调用。仅完整串行 producer 与完整 writer 测量之差可称 writer 外包络，不能称 filesystem 或 tar CPU 时间。在途快照和饱和仍不完整。这些 Runtime 增量需要重建 daemon 并验证模板，单独部署 Core 不能提供。
 
 这些记录使用进程内单调时长和固定大小汇总，不逐帧输出日志。sender 返回、WebSocket 写调用返回、Core 验证完成 receipt 和 staging 确认是不同边界。异步状态发布不证明 socket 已写出，`local_eof` 不证明对端已接收。未知或未完成测量保持未知；实测 `0.000` 毫秒仅反映精度。父子区间及 producer 与 pipe consumer 区间存在重叠，不能相加。跨进程时间戳用于关联，不构成网络 RTT。Runtime 记录需要对应 daemon 构建；替换 Core 或其 E2B Provider helper 不会升级既有 Runtime 模板。E2B Provider helper 运行在 Core 侧，不内嵌于 Runtime。
 

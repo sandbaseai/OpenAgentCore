@@ -77,6 +77,7 @@ type envelopeWithAck struct {
 	ack         chan error
 	observation *workspaceobs.Scope
 	stamp       *workspaceobs.QueueStamp
+	round       *workspaceobs.Round
 }
 
 // Dial opens the reverse WebSocket. Read/write goroutines are live
@@ -166,6 +167,9 @@ func (c *Conn) DeviceID() string { return c.deviceID }
 func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
 	ack := make(chan error, 1)
 	wrapped := envelopeWithAck{env: env, ack: ack, observation: workspaceobs.ForConnection(ctx, c.connectionID)}
+	if wrapped.observation != nil {
+		wrapped.round = workspaceobs.RoundFromContext(ctx)
+	}
 	if wrapped.observation != nil {
 		wrapped.stamp = &workspaceobs.QueueStamp{}
 	}
@@ -308,7 +312,9 @@ func (c *Conn) writeLoop() {
 			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			started = msg.observation.Begin(workspaceobs.OutboundWrite)
 			err = c.ws.WriteMessage(websocket.TextMessage, raw)
+			writeReturned := time.Now()
 			msg.observation.End(workspaceobs.OutboundWrite, started, err)
+			msg.round.Written(writeReturned, err)
 			if err != nil {
 				wrapped := fmt.Errorf("transport: write envelope (type=%s): %w", msg.env.Type, err)
 				msg.observation.Pending(-1)
@@ -352,7 +358,9 @@ func (c *Conn) readLoop() {
 			c.fail(fmt.Errorf("transport: read frame: %w", err))
 			return
 		}
+		readReturned := time.Now()
 		log.Bg().Debug("transport: received WS frame", "bytes", len(raw))
+		decodeStarted := time.Now()
 		var env proto.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			// Skip malformed frames rather than tearing down — server
@@ -362,7 +370,7 @@ func (c *Conn) readLoop() {
 				"bytes", len(raw), "err", err.Error(), "head", string(raw[:min(len(raw), 200)]))
 			continue
 		}
-		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), connectionID: c.connectionID}
+		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), readReturned: readReturned, decodeStarted: decodeStarted, connectionID: c.connectionID}
 		log.Bg().Info("transport: dispatching envelope", "type", env.Type, "id", env.ID)
 		select {
 		case c.recvCh <- received:
@@ -429,14 +437,15 @@ func withQueryParams(raw string, params map[string]string) (string, error) {
 // ReceivedEnvelope carries process-local timing only; it is never serialized.
 type ReceivedEnvelope struct {
 	proto.Envelope
-	decoded      time.Time
-	connectionID string
+	decoded                     time.Time
+	readReturned, decodeStarted time.Time
+	connectionID                string
 }
 
 func (e ReceivedEnvelope) Context(ctx context.Context) context.Context {
 	switch e.Type {
 	case proto.TypeExecutionPrepare, proto.TypeExecutionRelease, proto.TypeWorkspaceExport:
-		return workspaceobs.ReceivedContext(ctx, e.connectionID, e.decoded)
+		return workspaceobs.ReceivedFrameContext(ctx, e.connectionID, e.readReturned, e.decodeStarted, e.decoded)
 	default:
 		return ctx
 	}

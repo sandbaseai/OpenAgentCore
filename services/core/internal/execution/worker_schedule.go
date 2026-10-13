@@ -18,6 +18,7 @@ type workerSchedule struct {
 type scheduledWork struct {
 	sessions.ExecutionWork
 	reservationID string
+	observation   *schedulingObservation
 }
 
 func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []string, active map[string]bool, hinted bool) ([]scheduledWork, error) {
@@ -36,7 +37,9 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 		}
 	}
 	var environments []sessions.EnvironmentInputWork
+	var environmentScanStarted time.Time
 	if !time.Now().Before(s.nextEnvironmentScan) {
+		environmentScanStarted = time.Now()
 		environments, err = w.dispatcher.SessionsReader.ListEnvironmentInputWork(ctx, s.environmentCursor, devices)
 		if err != nil {
 			return nil, err
@@ -46,6 +49,7 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 			s.environmentCursor = ""
 			// Retry the first page now instead of spending a scan interval on EOF.
 			// A single refill preserves the candidate bound and cannot spin when empty.
+			environmentScanStarted = time.Now()
 			environments, err = w.dispatcher.SessionsReader.ListEnvironmentInputWork(ctx, "", devices)
 			if err != nil {
 				return nil, err
@@ -60,6 +64,7 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 			environments = environments[1:]
 			s.environmentCursor = value.ReservationID
 			item = scheduledWork{ExecutionWork: sessions.ExecutionWork{TenantID: value.TenantID, SessionID: value.SessionID}, reservationID: value.ReservationID}
+			item.observation = w.schedulingObservations.candidateFromScan(value.ReservationID, value.SessionID, environmentScanStarted)
 			s.environmentFirst = false
 		} else {
 			item.ExecutionWork = turns[0]
@@ -74,7 +79,7 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 		if item.reservationID == "" {
 			ready, err = w.bind(ctx, item.ExecutionWork)
 		} else {
-			ready, err = w.bindDevice(ctx, item.TenantID, item.SessionID, nil)
+			ready, err = w.bindDevice(schedulingContext(ctx, item.observation), item.TenantID, item.SessionID, nil)
 			if errors.Is(err, sessions.ErrNotFound) || errors.Is(err, sessions.ErrDeviceBindingConflict) {
 				continue
 			}
@@ -85,6 +90,8 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 		if !ready {
 			continue
 		}
+		observeSchedulingState(schedulingContext(ctx, item.observation), "eligible_seen")
+		observeSchedulingState(schedulingContext(ctx, item.observation), "selected")
 		active[item.SessionID] = true
 		selected = append(selected, item)
 	}
@@ -92,12 +99,28 @@ func (s *workerSchedule) selectWork(ctx context.Context, w *Worker, devices []st
 }
 
 func (w *Worker) runEnvironmentInput(ctx context.Context, item scheduledWork) error {
+	ctx = schedulingContext(ctx, item.observation)
 	run, err := w.dispatcher.RunEnvironmentInput(ctx, w.lease, item.TenantID, item.SessionID, item.reservationID)
+	if run.Reservation.State != "" && run.Reservation.State != sessions.EnvironmentInputPending {
+		outcome := "unknown"
+		if run.Reservation.State == sessions.EnvironmentInputAdmitted && err == nil {
+			outcome = "completed"
+		} else if errors.Is(err, context.Canceled) || run.Reservation.State == sessions.EnvironmentInputCancelled {
+			outcome = "cancelled"
+		} else if err != nil {
+			outcome = "failed"
+		}
+		w.schedulingObservations.finish(ctx, item.observation, outcome)
+	}
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, errPreparationFailed) && run.Reservation.State == sessions.EnvironmentInputPending {
-		return w.dispatcher.sessionExecution.FailEnvironmentInput(ctx, item.TenantID, item.SessionID, item.reservationID, "runtime_preparation_failed")
+		err = w.dispatcher.sessionExecution.FailEnvironmentInput(ctx, item.TenantID, item.SessionID, item.reservationID, "runtime_preparation_failed")
+		if err == nil {
+			w.schedulingObservations.finish(ctx, item.observation, "failed")
+		}
+		return err
 	}
 	if run.Reservation.State == sessions.EnvironmentInputAdmitted {
 		return err

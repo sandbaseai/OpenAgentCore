@@ -123,7 +123,7 @@ type Session struct {
 	workspaceReadMu   sync.Mutex
 	workspaceReads    map[string]chan proto.Envelope
 	workspaceExportMu sync.Mutex
-	workspaceExports  map[string]chan proto.Envelope
+	workspaceExports  map[string]chan workspaceExportReceipt
 
 	ackMu      sync.Mutex
 	ackWaiters map[string]chan proto.InteractionDecisionAckPayload
@@ -419,6 +419,7 @@ func (s *Session) readLoop() {
 			s.log("agentdaemon gateway: read frame: %v", err)
 			return
 		}
+		readReturned := time.Now()
 		if !s.receiptDraining() {
 			s.markSeen()
 			if !s.renewOwnerLease() {
@@ -438,6 +439,7 @@ func (s *Session) readLoop() {
 			o.mu.Lock()
 			if !o.closed {
 				o.stages[artifactDecode].add(decodeElapsed, false)
+				o.stages[artifactPredecode].add(decodeStarted.Sub(readReturned), false)
 			}
 			o.mu.Unlock()
 		}

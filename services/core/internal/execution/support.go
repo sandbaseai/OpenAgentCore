@@ -79,7 +79,7 @@ func (p Policy) validateEngineInputs(engine string, configuration json.RawMessag
 
 // engineCapabilities is shared by device selection and the final preclaim check.
 // Capability bits describe the adapter; supported values still depend on its profile.
-func (p Policy) engineCapabilities(peer *runtimegateway.Session, engine string, snapshot Snapshot) (runtimedevice.KindCapabilities, error) {
+func (p Policy) engineCapabilities(ctx context.Context, peer *runtimegateway.Session, engine string, snapshot Snapshot) (runtimedevice.KindCapabilities, error) {
 	fail := func(message string) (runtimedevice.KindCapabilities, error) {
 		return runtimedevice.KindCapabilities{}, errors.New(message)
 	}
@@ -93,30 +93,39 @@ func (p Policy) engineCapabilities(peer *runtimegateway.Session, engine string, 
 	info, found, known := peer.AgentKindStatus(engine)
 	caps := info.Capabilities
 	if !known || !found || !info.Available || !caps.Streaming || !caps.Steering || !caps.DurableTurns || !caps.DurableInputReceipts {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise streaming, steering and durable turns for this engine")
 	}
 	if !caps.Preparation {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise executor preparation")
 	}
 	if !caps.ExecutionControls {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise execution_controls")
 	}
 	if profile.WebSearchControl.IsSupported() && !caps.WebSearchControl {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise web_search_control")
 	}
 	if snapshot.Agent.Text.Format.Type == "json_schema" && (!caps.StructuredOutput || !caps.MessageItems) {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must support structured output and message observations")
 	}
 	if profile.TextVerbosity.IsSupported() && !caps.TextVerbosity {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise text_verbosity")
 	}
 	if !caps.ToolObservations {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise tool_observations")
 	}
 	if snapshot.Agent.MultiAgent.Enabled && !caps.SubagentObservations {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must support durable subagent observations")
 	}
 	if !snapshot.Agent.MultiAgent.Enabled && !caps.SubagentControl {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise subagent_control")
 	}
 	tools, err := executionTools(snapshot.Agent.Tools)
@@ -127,9 +136,11 @@ func (p Policy) engineCapabilities(peer *runtimegateway.Session, engine string, 
 		return fail(err.Error())
 	}
 	if tools.DisableProgrammatic && !caps.ProgrammaticToolCallingDisable {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must support disabling programmatic tool calling")
 	}
 	if len(tools.Functions) > 0 && !caps.FunctionTools {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise function_tools")
 	}
 	if _, err := p.mcpExecutionCredentials(engine, snapshot, tools.MCP, caps); err != nil {
@@ -137,10 +148,12 @@ func (p Policy) engineCapabilities(peer *runtimegateway.Session, engine string, 
 	}
 	if snapshot.Environment != nil && (snapshot.Environment.Type == "openai_hosted" || snapshot.Environment.Type == "self_hosted") {
 		if !caps.Preparation || !caps.LocalEnvironment || !caps.WorkspaceReadPreparation || !caps.WorkspaceOutputExport {
+			observeSchedulingState(ctx, "capability_unavailable")
 			return fail("device must advertise local preparation, workspace reads and output export")
 		}
 	}
 	if environmentNone(snapshot) && !caps.EnvironmentNone {
+		observeSchedulingState(ctx, "capability_unavailable")
 		return fail("device must advertise environment_none")
 	}
 	return caps, nil
@@ -150,7 +163,7 @@ func (p Policy) engineCapabilities(peer *runtimegateway.Session, engine string, 
 // and the final preparation gate. The immutable binding, not today's deployment,
 // determines whether this Session requires native history outside compute.
 func (d *Dispatcher) sessionCapabilities(ctx context.Context, peer *runtimegateway.Session, session sessions.Session, snapshot Snapshot) (runtimedevice.KindCapabilities, error) {
-	caps, err := d.engineCapabilities(peer, session.Engine, snapshot)
+	caps, err := d.engineCapabilities(ctx, peer, session.Engine, snapshot)
 	if err != nil {
 		return caps, err
 	}

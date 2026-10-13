@@ -8,6 +8,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
@@ -51,10 +52,12 @@ func (w *Worker) bindDevice(ctx context.Context, tenantID, sessionID string, inp
 		return false, nil
 	}
 	if err != nil {
+		observeSchedulingState(ctx, "unknown")
 		return false, err
 	}
 	var snapshot Snapshot
 	if err := json.Unmarshal(session.Configuration, &snapshot); err != nil {
+		observeSchedulingState(ctx, "unknown")
 		return false, err
 	}
 	return w.bindSessionDevice(ctx, session, func(id string) bool {
@@ -72,31 +75,41 @@ func (w *Worker) bindDevice(ctx context.Context, tenantID, sessionID string, inp
 func (w *Worker) bindSessionDevice(ctx context.Context, session sessions.Session, ready func(string) bool) (bool, error) {
 	var snapshot Snapshot
 	if json.Unmarshal(session.Configuration, &snapshot) != nil {
+		observeSchedulingState(ctx, "unknown")
 		return false, sessions.ErrInvalidInput
 	}
 	if snapshot.Environment != nil && (snapshot.Environment.Type == "openai_hosted" || snapshot.Environment.Type == "self_hosted") {
 		environment, err := w.dispatcher.SessionsReader.GetSessionEnvironment(ctx, session.TenantID, session.ID)
 		if err != nil {
+			observeSchedulingState(ctx, "unknown")
 			return false, err
 		}
 		if _, err := parseEnvironmentPlacement(environment.Configuration); err != nil {
+			observeSchedulingState(ctx, "unknown")
 			return false, nil
 		}
 		allocation, err := w.dispatcher.DeploymentReader.EnvironmentAllocation(ctx, deployment.AllocationKey{TenantID: session.TenantID, EnvironmentID: environment.ID})
 		if errors.Is(err, deployment.ErrNotFound) {
 			if snapshot.Environment.Type == "openai_hosted" {
+				observeSchedulingState(ctx, "allocation_missing")
 				return false, nil
 			}
 		} else if err != nil {
+			observeSchedulingState(ctx, "unknown")
 			return false, err
 		} else if allocation.ComputePhase != "disabled" && allocation.ComputePhase != "running" {
+			observeSchedulingState(ctx, "compute_not_ready")
 			// A reconnect authenticates transport before the retained Environment
 			// resumes. Its first control frame must remain the lifecycle's Resume.
 			return false, nil
 		}
 		bound, err := w.dispatcher.SessionsReader.GetSessionDevice(ctx, session.TenantID, session.ID)
 		if errors.Is(err, sessions.ErrNotFound) {
+			observeSchedulingState(ctx, "binding_unavailable")
 			return false, nil
+		}
+		if err != nil || !environmentDeviceMatches(session, environment, bound) {
+			observeSchedulingState(ctx, "unknown")
 		}
 		return err == nil && environmentDeviceMatches(session, environment, bound) && ready(bound.ID), err
 	}
@@ -105,10 +118,12 @@ func (w *Worker) bindSessionDevice(ctx context.Context, session sessions.Session
 		return bound.EnvironmentID == "" && ready(bound.ID), nil
 	}
 	if !errors.Is(err, sessions.ErrNotFound) {
+		observeSchedulingState(ctx, "unknown")
 		return false, err
 	}
 	devices, err := w.dispatcher.SessionsReader.ListExecutionDevices(ctx, session.TenantID)
 	if err != nil {
+		observeSchedulingState(ctx, "unknown")
 		return false, err
 	}
 	for _, device := range devices {
@@ -124,8 +139,16 @@ func (w *Worker) bindSessionDevice(ctx context.Context, session sessions.Session
 func (w *Worker) ready(ctx context.Context, deviceID string, session sessions.Session, snapshot Snapshot) bool {
 	peer, err := w.dispatcher.authorizedPeer(ctx, deviceID)
 	if err != nil {
+		if errors.Is(err, runtimegateway.ErrDeviceNotRegistered) || errors.Is(err, runtimegateway.ErrSessionClosed) || errors.Is(err, sessions.ErrNotFound) {
+			observeSchedulingState(ctx, "peer_unavailable")
+		} else {
+			observeSchedulingState(ctx, "unknown")
+		}
 		return false
 	}
 	_, err = w.dispatcher.sessionCapabilities(ctx, peer, session, snapshot)
+	if err != nil {
+		observeSchedulingState(ctx, "unknown")
+	}
 	return err == nil
 }
