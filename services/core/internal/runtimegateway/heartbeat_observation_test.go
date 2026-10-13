@@ -88,11 +88,19 @@ func TestHeartbeatObservationCloseDuringStore(t *testing.T) {
 	s.Close("fixture")
 	close(store.release)
 	<-done
-	t.Logf("OBSERVATION_FIXTURE %s", bytes.TrimSpace(logs.Bytes()))
-	var row map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &row); err != nil {
-		t.Fatal(err, logs.String())
+	var rows []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var row map[string]any
+		if json.Unmarshal([]byte(line), &row) == nil && row["msg"] == "runtime first heartbeat observed" {
+			rows = append(rows, row)
+		}
 	}
+	if len(rows) != 1 {
+		t.Fatalf("summary count %d: %s", len(rows), logs.String())
+	}
+	row := rows[0]
+	fixture, _ := json.Marshal(row)
+	t.Logf("OBSERVATION_FIXTURE %s", fixture)
 	if row["outcome"] != "unknown" || row["heartbeat_store_ms"] != nil {
 		t.Fatal(row)
 	}

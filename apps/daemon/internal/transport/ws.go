@@ -67,6 +67,10 @@ type Conn struct {
 
 	hbCancel       context.CancelFunc
 	firstHeartbeat heartbeatObservation
+
+	eventCredit bool // Immutable selection confirmed by the upgrade response.
+	flowMu      sync.Mutex
+	flows       map[string]*eventFlow
 }
 
 // envelopeWithAck pairs an outbound frame with a done channel so Send
@@ -106,6 +110,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		headers = make(http.Header)
 	}
 	headers.Set("Authorization", "Bearer "+opts.Credential)
+	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {
 		// 401/403/426 are operator-fixable and MUST NOT be retried —
@@ -127,11 +132,17 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		// Upgrade errors can include peer-controlled text; never log credentials.
 		return nil, fmt.Errorf("transport.Dial: ws upgrade failed")
 	}
+	eventCredit, err := proto.NegotiateExecutionFlow(resp.Header.Values(proto.ExecutionFlowHeader))
+	if err != nil {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: invalid execution flow selection: %w", ErrPermanent)
+	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
 	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
+		eventCredit:  eventCredit,
 		ws:           wsConn,
 		deviceID:     opts.DeviceID,
 		recvCh:       make(chan ReceivedEnvelope, 64),
@@ -165,6 +176,24 @@ func (c *Conn) DeviceID() string { return c.deviceID }
 // / conn closes). Safe for concurrent callers — the write goroutine is
 // the only thing touching the underlying ws write path.
 func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-c.closed:
+		return errClosedOrErr(c)
+	default:
+	}
+	reservation, err := c.reserveEvent(ctx, env)
+	if err != nil {
+		if errors.Is(err, errEventCredit) {
+			// A frame that cannot fit the legal wire window must also end
+			// the peer's stream; a local-only error leaves Core waiting.
+			c.fail(err)
+			_ = c.Close()
+		}
+		return err
+	}
 	ack := make(chan error, 1)
 	wrapped := envelopeWithAck{env: env, ack: ack, observation: workspaceobs.ForConnection(ctx, c.connectionID)}
 	if wrapped.observation != nil {
@@ -179,13 +208,18 @@ func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
 		wrapped.stamp.Admitted()
 	case <-c.closed:
 		wrapped.observation.Pending(-1)
+		reservation.refund()
 		return errClosedOrErr(c)
 	case <-ctx.Done():
 		wrapped.observation.Pending(-1)
+		reservation.refund()
 		return ctx.Err()
 	}
 	select {
 	case err := <-ack:
+		if err == nil {
+			c.finishEventFlow(env)
+		}
 		return err
 	case <-c.closed:
 		return errClosedOrErr(c)
@@ -368,6 +402,12 @@ func (c *Conn) readLoop() {
 			// yet, and dropping is friendlier than disconnecting.
 			log.Bg().Warn("transport: dropping malformed WS frame",
 				"bytes", len(raw), "err", err.Error(), "head", string(raw[:min(len(raw), 200)]))
+			continue
+		}
+		if handled, err := c.handleEventFlow(env); err != nil {
+			c.fail(err)
+			return
+		} else if handled {
 			continue
 		}
 		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), readReturned: readReturned, decodeStarted: decodeStarted, connectionID: c.connectionID}

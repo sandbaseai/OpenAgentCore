@@ -1,7 +1,8 @@
 package proto
 
 // Version identifies the complete Core–Runtime wire contract. Change it when
-// removing or changing a payload or its semantics; deploy both endpoints together.
+// removing or changing required semantics. Additive extensions must explicitly
+// negotiate support and retain the base contract when not selected.
 const Version = "0.16.0"
 
 // VersionCompatible accepts only this contract. Patch drift, prerelease suffixes

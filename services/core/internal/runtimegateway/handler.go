@@ -127,7 +127,16 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, status, code, err.Error())
 		return
 	}
-	conn, err := h.upgrader.Upgrade(w, r, nil)
+	eventCredit, err := proto.NegotiateExecutionFlow(r.Header.Values(proto.ExecutionFlowHeader))
+	if err != nil {
+		writeAuthError(w, http.StatusBadRequest, "unsupported_execution_flow", "unsupported execution flow offer")
+		return
+	}
+	responseHeader := make(http.Header)
+	if eventCredit {
+		responseHeader.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
+	}
+	conn, err := h.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		// Upgrader has already written a response.
 		h.cfg.Log("agentdaemon gateway: ws upgrade: %v", err)
@@ -167,6 +176,7 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sess := NewSessionWithOwner(conn, auth.DeviceID, auth.WorkspaceID, version, h.cfg.Registry, h.cfg.Log, lease)
+	sess.eventCredit = eventCredit
 	sess.heartbeat = h.cfg.Heartbeat
 	sess.archivedCancellations = h.cfg.ArchivedCancellations
 	sess.credentialHash = runtimedevice.HashCredential(token)
@@ -177,7 +187,7 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 		prev.Close("preempted by newer connection from same device_id")
 	}
 	h.cfg.Log("agentdaemon gateway: device_id=%s registered in registry, starting session", auth.DeviceID)
-	obslog.Ctx(r.Context()).Info("runtime transport registered", "device_id", auth.DeviceID, "protocol_version", version,
+	obslog.Ctx(r.Context()).Info("runtime transport registered", "device_id", auth.DeviceID, "protocol_version", version, "event_credit", eventCredit,
 		"allocation_id", auth.RuntimeAllocationID, "node_id", auth.RuntimeNodeID)
 	sess.Start()
 }

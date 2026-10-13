@@ -29,6 +29,7 @@ type fakeGateway struct {
 	dialAuth string
 	frames   []proto.Envelope
 	wantAuth bool
+	legacy   bool
 
 	connCh chan *websocket.Conn
 }
@@ -46,7 +47,11 @@ func (g *fakeGateway) handler(w http.ResponseWriter, r *http.Request) {
 	g.dialAuth = r.Header.Get("Authorization")
 	g.mu.Unlock()
 
-	conn, err := g.upgrader.Upgrade(w, r, nil)
+	response := make(http.Header)
+	if !g.legacy && r.Header.Get(proto.ExecutionFlowHeader) == proto.ExecutionFlowCreditV1 {
+		response.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
+	}
+	conn, err := g.upgrader.Upgrade(w, r, response)
 	if err != nil {
 		return
 	}
@@ -144,6 +149,15 @@ func TestDialRoundTripsEnvelope(t *testing.T) {
 	}
 	defer conn.Close()
 
+	start, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prep", proto.ExecutionStartPayload{RunID: "run_1"})
+	if err := (<-gw.connCh).WriteJSON(start); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.Recv():
+	case <-time.After(time.Second):
+		t.Fatal("start not received")
+	}
 	env, err := proto.NewEnvelope(proto.TypeDelta, "run_1", proto.DeltaPayload{Delta: "hello", Sequence: 1})
 	if err != nil {
 		t.Fatalf("NewEnvelope: %v", err)
@@ -460,5 +474,154 @@ func TestDialDoesNotExposePeerReflectedCredential(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "private-credential") || strings.Contains(err.Error(), "Bearer") {
 		t.Fatal("upgrade error exposed authorization")
+	}
+}
+
+// The gateway pauses consumption for a complete window, then acknowledges
+// bounded batches. The producer must retain every event including Done.
+func TestExecutionBurstSurvivesSlowConsumer(t *testing.T) {
+	gw := newFakeGateway()
+	srv := httptest.NewServer(http.HandlerFunc(gw.handler))
+	defer srv.Close()
+	conn, err := transport.Dial(context.Background(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	peer := <-gw.connCh
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, run := range []string{"slow", "other"} {
+		env, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prep", proto.ExecutionStartPayload{RunID: run})
+		if err := peer.WriteJSON(env); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-conn.Recv():
+		case <-ctx.Done():
+			t.Fatal("start timed out")
+		}
+	}
+	finished := make(chan error, 1)
+	const total = 1500
+	go func() {
+		for i := 0; i < total; i++ {
+			env, _ := proto.NewEnvelope(proto.TypeDelta, "slow", proto.DeltaPayload{Sequence: uint64(i), Delta: "fragment"})
+			if err := conn.Send(ctx, env); err != nil {
+				finished <- err
+				return
+			}
+		}
+		finished <- conn.Send(ctx, proto.Envelope{Type: proto.TypeDone, ID: "slow"})
+	}()
+	for len(gw.recordedFrames()) < proto.ExecutionEventWindow {
+		select {
+		case <-ctx.Done():
+			t.Fatal("window never filled")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	// Independent control and a second Run still cross the same socket.
+	for _, env := range []proto.Envelope{{Type: proto.TypeHeartbeat}, {Type: proto.TypeInteractionDecisionAck, ID: "slow"}, {Type: proto.TypeDone, ID: "other"}} {
+		if err := conn.Send(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frames := gw.recordedFrames()
+	slow := 0
+	for _, env := range frames {
+		if env.ID == "slow" && proto.IsExecutionEvent(env.Type) {
+			slow++
+		}
+	}
+	if slow != proto.ExecutionEventWindow {
+		t.Fatalf("producer exceeded window: %d", slow)
+	}
+	cursor := 0
+	var ack proto.ExecutionEventsAckPayload
+	for ack.Count < total+1 {
+		frames = gw.recordedFrames()
+		for cursor < len(frames) {
+			env := frames[cursor]
+			cursor++
+			if env.ID != "slow" || !proto.IsExecutionEvent(env.Type) {
+				continue
+			}
+			if ack.Count < total {
+				var delta proto.DeltaPayload
+				if env.Type != proto.TypeDelta || env.DecodePayload(&delta) != nil || delta.Sequence != ack.Count {
+					t.Fatalf("event lost or reordered at %d", ack.Count)
+				}
+			} else if env.Type != proto.TypeDone {
+				t.Fatal("missing tail Done")
+			}
+			ack.Count++
+			ack.Bytes += proto.ExecutionEventBytes(env)
+		}
+		frame, _ := proto.NewEnvelope(proto.TypeExecutionEventsAck, "slow", ack)
+		if err := peer.WriteJSON(frame); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("burst timed out")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("producer did not finish")
+	}
+}
+
+func TestNewRuntimeOnOldCoreDoesNotWaitForCredit(t *testing.T) {
+	gw := newFakeGateway()
+	gw.legacy = true
+	srv := httptest.NewServer(http.HandlerFunc(gw.handler))
+	defer srv.Close()
+	conn, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: "0.16.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	peer := <-gw.connCh
+	start, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prep", proto.ExecutionStartPayload{RunID: "old-core-run"})
+	if err := peer.WriteJSON(start); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	select {
+	case <-conn.Recv():
+	case <-ctx.Done():
+		t.Fatal("start missing")
+	}
+	for range proto.ExecutionEventWindow + 10 {
+		if err := conn.Send(ctx, proto.Envelope{Type: proto.TypeDelta, ID: "old-core-run"}); err != nil {
+			t.Fatal("unnegotiated credit blocked output", err)
+		}
+	}
+	if err := conn.Send(ctx, proto.Envelope{Type: proto.TypeDone, ID: "old-core-run"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRejectsUnknownFlowSelection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{}
+		c, err := up.Upgrade(w, r, http.Header{proto.ExecutionFlowHeader: {"unknown"}})
+		if err == nil {
+			defer c.Close()
+			_, _, _ = c.ReadMessage()
+		}
+	}))
+	defer srv.Close()
+	_, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+	if !errors.Is(err, transport.ErrPermanent) {
+		t.Fatalf("invalid selection accepted: %v", err)
 	}
 }

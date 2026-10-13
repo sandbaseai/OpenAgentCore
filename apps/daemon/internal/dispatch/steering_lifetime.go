@@ -34,9 +34,9 @@ func (r *Router) publishSteeringReceipt(ctx context.Context, state *sessionState
 	r.mu.Lock()
 	state.steering[input.InputID] = steeringReceipt{fingerprint: fingerprint, ack: ack, durable: input.DurableReceipt}
 	r.mu.Unlock()
-	sendCtx, cancel := context.WithTimeout(ctx, steeringSendTimeout)
-	defer cancel()
-	if err := r.sendSteeringAck(sendCtx, env, ack); err != nil {
+	// Credit waits follow the Run/connection lifetime, not a short native-call
+	// budget. Dropping an accepted receipt would make its outcome unknown.
+	if err := r.sendSteeringAck(ctx, env, ack); err != nil {
 		r.log.WarnContext(ctx, "steering receipt delivery failed", "run_id", env.ID, "input_id", input.InputID, "err", err)
 		return false
 	}
