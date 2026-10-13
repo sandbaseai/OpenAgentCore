@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: dc9221be87d923d9c5826e68f96e0156a7b766493e9c447151d31449fd678535
+source_hash: 8dbdf3f8170a6328b4db8282a48e6ffc3b2f68d025c60ed623c75799d7cc6ebf
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -139,7 +139,7 @@ Executor 空闲到期属于 Runtime 资源策略，与 Core 的活动 Turn 并�
 
 Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `execution_events_ack`。重复确认不增加额度；倒退或超前的值终止连接。确认只代表 transport 已消费，不代表 journal 已提交或原生执行成功。Core 仍须具备有序 journal 与终结回执才能完成 Turn。因此数据库暂停会暂停事件生产，而不是使订阅溢出。Core 拒绝超出任一窗口上限的生产者，并保留流不完整结果。
 
-Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。部署本次变更时 Core 与 Runtime 必须使用同一协议版本。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，沿用可被 shutdown 中断的五秒发送预算；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
+Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。部署本次变更时 Core 与 Runtime 必须使用同一协议版本。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
 
 ## 活动输入回执 {#active-input-receipts}
 
@@ -149,9 +149,9 @@ Core 通过 `prompt_steer` 交付活动输入，设置 `durable_receipt: true`�
 | --- | --- |
 | 原生写入 | Runtime 将 adapter 原生写入限制为 10 秒；写入完成后停止计时 |
 | `written` 确认 | Core 从交付开始最多等待 30 秒取得 `written`；否则输入结果未知 |
-| 回执发送 | 每次发送回执都有独立的 5 秒预算，并感知 shutdown |
+| 回执发送 | 输入回执在 Run/连接生命周期内等待事件额度；shutdown、STOP 或连接关闭会终止等待 |
 | 原生接受 | `accepted` 在 Turn 生命周期内到达，不自动重新交付 |
-| Done | Runtime 在原生 Turn 结算完成、且正在处理的输入的回执发送结束后才发送 `done`；该输入受原生写入与回执发送预算限制 |
+| Done | Runtime 在原生 Turn 结算完成、且正在处理的输入的回执发送结束后才发送 `done`；原生写入仍有时间限制，回执投递遵循事件流量控制 |
 
 `written` 和发送失败都不会推进 Core 的 input cursor。取消发出后，即使输入先变为未知，终结结果也由取消回执负责；15 秒内没有取消确认时，Core 记录 `cancel_unconfirmed`。未发出 `done` 时，取消回执携带已停止 Turn 的已确认 continuity snapshot。
 

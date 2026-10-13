@@ -136,7 +136,7 @@ Each `execution_start` opens one connection-local Run window: at most 256 uncons
 
 After processing a frame, Core sends `execution_events_ack` with the Run ID and cumulative `count` and `bytes`. Duplicate acknowledgements grant no additional credit; regressive or future values terminate the connection. This acknowledges transport consumption only: it is neither a journal commit nor proof of native success. Core still requires its ordered journal and a terminal receipt before completing a Turn. A stalled database therefore pauses event production instead of overflowing a subscription. Core rejects a producer that exceeds either window bound and preserves the incomplete-stream outcome.
 
-On leaving delivery, Core sends `execution_events_stop` with the Run ID to release any producer waiting for credit. This message stops event delivery, not native execution; cancellation keeps its separate application-receipt contract. Connection closure and caller cancellation also release credit waits. Windows and credit never survive reconnection and authorize no replay. Core and Runtime must use the same protocol version when deploying this change. Immediate input receipts run outside the shared control loop, with at most 64 concurrent sends and the existing five-second, shutdown-aware send budget; excess receipt work is refused without blocking other control messages.
+On leaving delivery, Core sends `execution_events_stop` with the Run ID to release any producer waiting for credit. This message stops event delivery, not native execution; cancellation keeps its separate application-receipt contract. Connection closure and caller cancellation also release credit waits. Windows and credit never survive reconnection and authorize no replay. Core and Runtime must use the same protocol version when deploying this change. Immediate input receipts run outside the shared control loop, with at most 64 concurrent sends and shutdown-aware lifetime; excess receipt work is refused without blocking other control messages.
 
 ## Active input receipts
 
@@ -146,9 +146,9 @@ Core delivers active input as `prompt_steer` with `durable_receipt: true`, one i
 | --- | --- |
 | Native write | The Runtime bounds the adapter's native write at 10 seconds; the timer stops once the write is complete |
 | `written` acknowledgement | Core waits at most 30 seconds from delivery for `written`; otherwise the input outcome is unknown |
-| Receipt send | Each receipt send has its own 5-second, shutdown-aware budget |
+| Receipt send | Input receipts wait for event credit under the Run/connection lifetime; shutdown, STOP or connection closure ends the wait |
 | Native acceptance | `accepted` arrives under the Turn lifetime, with no automatic redelivery |
-| Done | The Runtime sends `done` after native Turn settlement and after the receipt send of any in-flight input; the native write and receipt send budgets bound that input |
+| Done | The Runtime sends `done` after native Turn settlement and after the receipt send of any in-flight input; native writing remains time-bounded, while receipt delivery follows event flow control |
 
 Neither `written` nor a send failure advances Core's input cursor. Once cancellation is sent, its receipt owns the terminal outcome even if an input becomes unknown first; Core records `cancel_unconfirmed` when no cancellation confirmation arrives within 15 seconds. A cancellation receipt carries the stopped Turn's confirmed continuity snapshot when no `done` is emitted.
 

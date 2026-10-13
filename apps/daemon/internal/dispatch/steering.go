@@ -17,7 +17,6 @@ import (
 const (
 	maxSteeringInputs   = 256
 	steeringCallTimeout = 10 * time.Second
-	steeringSendTimeout = 5 * time.Second
 )
 
 type steeringReceipt struct {
@@ -63,8 +62,6 @@ func (r *Router) handlePromptSteer(ctx context.Context, env proto.Envelope) erro
 		defer func() { <-r.steeringReplySlots }()
 		sendCtx, stop := r.shutdownContext(ctx)
 		defer stop()
-		sendCtx, cancel := context.WithTimeout(sendCtx, steeringSendTimeout)
-		defer cancel()
 		if err := r.sendSteeringAck(sendCtx, env, ack); err != nil {
 			r.log.WarnContext(sendCtx, "steering receipt delivery incomplete", "run_id", env.ID)
 		}
