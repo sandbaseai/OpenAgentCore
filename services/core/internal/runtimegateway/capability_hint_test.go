@@ -108,13 +108,13 @@ func TestCapabilityObservationsExcludeRejectedAndStalePeers(t *testing.T) {
 	}
 	logs.Reset()
 	old.handleHeartbeat(proto.Envelope{Type: proto.TypeHeartbeat, Payload: json.RawMessage(`{"supported_agent_kinds":[{"kind":"fake","available":true,"capabilities":{"streaming":"invented"}}]}`)})
-	if logs.Len() != 0 {
+	if strings.Contains(logs.String(), "runtime capability snapshot observed") {
 		t.Fatal("invalid declaration logged as an accepted snapshot")
 	}
 	newer := NewSession(newFakeConn(), "device", "tenant", "version", reg, nil)
 	reg.Register(newer)
 	publishCapabilityHeartbeat(t, old, kinds)
-	if logs.Len() != 0 {
+	if strings.Contains(logs.String(), "runtime capability snapshot observed") {
 		t.Fatal("superseded connection logged as an accepted snapshot")
 	}
 	publishCapabilityHeartbeat(t, newer, kinds)
@@ -125,7 +125,7 @@ func TestCapabilityObservationsExcludeRejectedAndStalePeers(t *testing.T) {
 	reg.Deregister(newer)
 	kinds[0].Version = "changed"
 	publishCapabilityHeartbeat(t, newer, kinds)
-	if logs.Len() != 0 {
+	if strings.Contains(logs.String(), "runtime capability snapshot observed") {
 		t.Fatal("disconnected connection logged as an accepted snapshot")
 	}
 }

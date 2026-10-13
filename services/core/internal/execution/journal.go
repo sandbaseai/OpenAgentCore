@@ -127,7 +127,7 @@ func (j *journal) flushObserved(ctx context.Context, trigger string) error {
 // Cancellation receipts use a separate waiter; preceding frames can still be queued.
 func (j *journal) drain(upstream <-chan proto.Envelope, result *Result) error {
 	var observedErr error
-	for range 256 {
+	for range proto.ExecutionEventWindow {
 		select {
 		case env, ok := <-upstream:
 			if !ok {

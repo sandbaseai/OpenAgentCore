@@ -65,6 +65,7 @@ type Credentials interface {
 }
 
 type Result struct {
+	EventStreamError string            `json:"event_stream_error,omitempty"`
 	EngineErrorCode  string            `json:"engine_error_code,omitempty"`
 	EngineHTTPStatus *int              `json:"engine_http_status,omitempty"`
 	EngineRequestID  string            `json:"engine_request_id,omitempty"`

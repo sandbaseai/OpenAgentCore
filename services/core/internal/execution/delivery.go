@@ -7,9 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
-
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
@@ -68,6 +67,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 	}
 	upstream := subscription.Events
 	defer peer.Unsubscribe(runID)
+	defer subscription.Stop()
 	defer func() {
 		if status == sessions.TurnFailed {
 			abort(peer, runID)
@@ -104,6 +104,8 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
 		}
 		if subscription.Err() != nil {
+			result.EventStreamError = subscription.FailureReason()
+			obslog.Ctx(ctx).Warn("execution event stream incomplete", "session_id", sessionID, "turn_id", runID, "device_id", peer.DeviceID, "reason", subscription.FailureReason())
 			result.ErrorCode, status = "event_stream_incomplete", sessions.TurnFailed
 		}
 	}()
@@ -233,6 +235,12 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 			}
 			if writeErr != nil {
 				result.ErrorCode = "event_persistence_failed"
+				return
+			}
+			if err := subscription.Consumed(ctx, env); err != nil {
+				result.EventStreamError = "credit_delivery_failed"
+				obslog.Ctx(ctx).Warn("execution event credit delivery failed", "session_id", sessionID, "turn_id", runID, "device_id", peer.DeviceID)
+				result.ErrorCode = "event_stream_incomplete"
 				return
 			}
 			switch env.Type {

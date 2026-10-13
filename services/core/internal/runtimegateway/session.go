@@ -254,6 +254,7 @@ func (s *Session) observeConfirmedCapabilities(kinds []runtimedevice.SupportedAg
 // releases connection ownership. It establishes no execution outcome. Idempotent.
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
+		obslog.Bg().Info("runtime connection closed", "device_id", s.DeviceID, "reason", connectionCloseReason(reason))
 		s.stopReceiptTimer()
 		close(s.closed)
 		_ = s.conn.Close()
@@ -670,8 +671,9 @@ func (s *Session) dispatch(env proto.Envelope) {
 		return
 	}
 
-	// All run-correlated frames fan to the matching subscriber.
-	if env.ID == "" {
+	// Only execution events consume the Run window. Control traffic has its
+	// own waiters above and unknown frames cannot consume event credit.
+	if env.ID == "" || !proto.IsExecutionEvent(env.Type) {
 		return
 	}
 	s.dispatchToSubscriber(env)
@@ -681,4 +683,24 @@ func (s *Session) dispatch(env proto.Envelope) {
 // The digest is never accepted from a daemon frame.
 func (s *Session) AuthenticatedWith(digest string) bool {
 	return s.credentialHash != "" && subtle.ConstantTimeCompare([]byte(s.credentialHash), []byte(digest)) == 1
+}
+
+// Never log caller or peer-provided close prose.
+func connectionCloseReason(reason string) string {
+	switch reason {
+	case "read loop exit":
+		return "read_ended"
+	case "owner lease renew failed":
+		return "owner_renewal_failed"
+	case "owner lease lost to a newer connection":
+		return "owner_lost"
+	case "invalid heartbeat declaration":
+		return "invalid_heartbeat"
+	case "execution service shutting down":
+		return "service_shutdown"
+	}
+	if strings.HasPrefix(reason, "write error:") {
+		return "write_failed"
+	}
+	return "closed"
 }

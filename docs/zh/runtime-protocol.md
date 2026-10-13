@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 807bb18c315e8e4b8b104a9ec8a46377617c20383c3c9dabc867293a60dc983c
+source_hash: dc9221be87d923d9c5826e68f96e0156a7b766493e9c447151d31449fd678535
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -132,6 +132,14 @@ Executor 空闲到期属于 Runtime 资源策略，与 Core 的活动 Turn 并�
 
 
 挂起先关闭准入、排空已接纳工作与回执，同时保留已结算的空闲 Executor，随后才确认 `environment_quiesced`。活动、准备中、失效或其他未结算的所有者会阻止挂起。整个挂起期间停止空闲到期计时并隔离其回调；精确匹配且已认证的 `environment_resume` 为同一批所有者恢复一个新的空闲计时间隔。只有这种计划性重连跨 socket 保留 Router 与原生所有者；普通断连、shutdown 和连接生命周期取消仍要求确认清理完成。排空失败后，准入保持关闭直到 shutdown。恢复后的准备仍检查相同的原生身份与不可变配置，包括凭据冲突；绝不静默替换配置冲突的驻留 Executor。Sandbox Provider 仍负责其 checkpoint 实现的文件系统刷新和计算停止保证；Runtime 静止本身既不证明这些保证，也不证明原生 RAM 或外部网络连接已恢复。
+
+## 执行事件流控 {#execution-event-flow-control}
+
+每个 `execution_start` 为一个 Run 打开连接内窗口：最多 256 条未消费执行帧和 4 MiB + 64 字节的计量存储（保证最大合法 wire 帧仍可容纳）。同一活动 Run 的重复 start 不重置额度。Runtime transport 每条连接最多接纳 1024 个活动窗口；终结 `done` 或 `execution_events_stop` 释放窗口。共享的[流控定义](../../internal/agentdaemon/proto/event_flow.go)声明覆盖的帧类型和字节算法，包括规范化 JSON wire 编码及 envelope 元数据。所有覆盖帧，包括 `error`、`done`、function call 和输入回执，进入共享 socket writer 前都消耗额度。阻塞的生产者只暂停自己的 Run；heartbeat、preparation status 以及取消/function-result 应用回执保持独立。
+
+Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `execution_events_ack`。重复确认不增加额度；倒退或超前的值终止连接。确认只代表 transport 已消费，不代表 journal 已提交或原生执行成功。Core 仍须具备有序 journal 与终结回执才能完成 Turn。因此数据库暂停会暂停事件生产，而不是使订阅溢出。Core 拒绝超出任一窗口上限的生产者，并保留流不完整结果。
+
+Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。部署本次变更时 Core 与 Runtime 必须使用同一协议版本。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，沿用可被 shutdown 中断的五秒发送预算；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
 
 ## 活动输入回执 {#active-input-receipts}
 
