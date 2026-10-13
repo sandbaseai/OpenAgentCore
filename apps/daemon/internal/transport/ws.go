@@ -68,8 +68,9 @@ type Conn struct {
 	hbCancel       context.CancelFunc
 	firstHeartbeat heartbeatObservation
 
-	flowMu sync.Mutex
-	flows  map[string]*eventFlow
+	eventCredit bool // Immutable selection confirmed by the upgrade response.
+	flowMu      sync.Mutex
+	flows       map[string]*eventFlow
 }
 
 // envelopeWithAck pairs an outbound frame with a done channel so Send
@@ -109,6 +110,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		headers = make(http.Header)
 	}
 	headers.Set("Authorization", "Bearer "+opts.Credential)
+	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {
 		// 401/403/426 are operator-fixable and MUST NOT be retried —
@@ -130,11 +132,17 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		// Upgrade errors can include peer-controlled text; never log credentials.
 		return nil, fmt.Errorf("transport.Dial: ws upgrade failed")
 	}
+	eventCredit, err := proto.NegotiateExecutionFlow(resp.Header.Values(proto.ExecutionFlowHeader))
+	if err != nil {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: invalid execution flow selection: %w", ErrPermanent)
+	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
 	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
+		eventCredit:  eventCredit,
 		ws:           wsConn,
 		deviceID:     opts.DeviceID,
 		recvCh:       make(chan ReceivedEnvelope, 64),

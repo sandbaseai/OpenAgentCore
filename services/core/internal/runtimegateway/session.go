@@ -77,6 +77,7 @@ type Session struct {
 	DeviceID      string
 	WorkspaceID   string
 	DaemonVersion string
+	eventCredit   bool // Immutable per authenticated WebSocket upgrade.
 	ConnectedAt   time.Time
 
 	conn WSConn

@@ -22,6 +22,12 @@ type eventFlow struct {
 func (f *eventFlow) wakeLocked() { close(f.changed); f.changed = make(chan struct{}) }
 
 func (c *Conn) handleEventFlow(env proto.Envelope) (bool, error) {
+	if !c.eventCredit {
+		if env.Type == proto.TypeExecutionEventsAck || env.Type == proto.TypeExecutionEventsStop {
+			return true, errEventCredit
+		}
+		return false, nil
+	}
 	c.flowMu.Lock()
 	defer c.flowMu.Unlock()
 	switch env.Type {
@@ -65,7 +71,7 @@ func (c *Conn) handleEventFlow(env proto.Envelope) (bool, error) {
 }
 
 func (c *Conn) reserveEvent(ctx context.Context, env proto.Envelope) (*eventReservation, error) {
-	if !proto.IsExecutionEvent(env.Type) {
+	if !c.eventCredit || !proto.IsExecutionEvent(env.Type) {
 		return nil, nil
 	}
 	size := proto.ExecutionEventBytes(env)
@@ -111,7 +117,7 @@ func (c *Conn) reserveEvent(ctx context.Context, env proto.Envelope) (*eventRese
 }
 
 func (c *Conn) finishEventFlow(env proto.Envelope) {
-	if env.Type != proto.TypeDone {
+	if !c.eventCredit || env.Type != proto.TypeDone {
 		return
 	}
 	_, _ = c.handleEventFlow(proto.Envelope{Type: proto.TypeExecutionEventsStop, ID: env.ID})

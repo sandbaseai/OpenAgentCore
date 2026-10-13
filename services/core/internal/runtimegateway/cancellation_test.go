@@ -148,6 +148,7 @@ func TestArchivedReceiptDeadlineDoesNotRenew(t *testing.T) {
 
 func TestArchivedCancellationDrainsEventCredit(t *testing.T) {
 	peer := NewSession(newFakeConn(), "device", "", proto.Version, NewRegistry(), nil)
+	peer.eventCredit = true
 	defer peer.Close("test complete")
 	peer.credentialHash = "original-hash"
 	peer.archivedCancellations = &receiptStore{receipt: runtimedevice.ArchivedCancellationReceipt{RunID: "run", Deadline: time.Now().Add(time.Minute)}}

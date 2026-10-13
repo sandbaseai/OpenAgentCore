@@ -12,6 +12,7 @@ import (
 
 func TestDurableSubscriptionOverflowIsExplicitAndIsolated(t *testing.T) {
 	s := NewSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s.eventCredit = true
 	defer s.Close("test finished")
 	sub, err := s.SubscribeDurable("slow")
 	if err != nil {
@@ -38,6 +39,7 @@ func TestDurableSubscriptionOverflowIsExplicitAndIsolated(t *testing.T) {
 func TestSubscriptionCloseAndDispatchAreSerialized(t *testing.T) {
 	for range 100 {
 		s := NewSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+		s.eventCredit = true
 		sub, _ := s.SubscribeDurable("run")
 		var wg sync.WaitGroup
 		wg.Add(3)
@@ -57,6 +59,7 @@ func TestSubscriptionCloseAndDispatchAreSerialized(t *testing.T) {
 
 func TestSubscriptionCreditPreservesBurstAndTail(t *testing.T) {
 	s := NewSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s.eventCredit = true
 	defer s.Close("test finished")
 	sub, err := s.SubscribeDurable("run")
 	if err != nil {
@@ -99,6 +102,7 @@ func TestSubscriptionCreditPreservesBurstAndTail(t *testing.T) {
 
 func TestSubscriptionRejectsByteWindowViolation(t *testing.T) {
 	s := NewSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s.eventCredit = true
 	defer s.Close("test")
 	sub, _ := s.SubscribeDurable("run")
 	env := proto.Envelope{Type: proto.TypeDelta, ID: "run"}
@@ -124,6 +128,7 @@ func TestConnectionCloseReasonDoesNotExposeProse(t *testing.T) {
 
 func TestReceivedDoneDoesNotRequireLiveCreditTransport(t *testing.T) {
 	s := NewSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s.eventCredit = true
 	sub, _ := s.SubscribeDurable("run")
 	s.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDelta, ID: "run"})
 	s.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDone, ID: "run"})
@@ -137,5 +142,37 @@ func TestReceivedDoneDoesNotRequireLiveCreditTransport(t *testing.T) {
 	}
 	if len(types) != 2 || types[1] != proto.TypeDone || sub.Err() != nil {
 		t.Fatalf("complete stream lost: %v %v", types, sub.Err())
+	}
+}
+
+func TestBaseProtocolConsumerNeverSendsCredit(t *testing.T) {
+	s := NewSession(newFakeConn(), "old-runtime", "tenant", "0.16.0", NewRegistry(), nil)
+	defer s.Close("test")
+	sub, err := s.SubscribeDurable("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An old peer never reserves a byte window; retain its existing frame/channel limits.
+	env := proto.Envelope{Type: proto.TypeDelta, ID: "run", Payload: []byte(`"` + strings.Repeat("x", proto.MaxFrameBytes/2) + `"`)}
+	s.dispatchToSubscriber(env)
+	s.dispatchToSubscriber(env)
+	for range 2 {
+		if err := sub.Consumed(t.Context(), <-sub.Events); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 300 {
+		s.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDelta, ID: "run"})
+		if err := sub.Consumed(t.Context(), <-sub.Events); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDone, ID: "run"})
+	if event := <-sub.Events; event.Type != proto.TypeDone || sub.Err() != nil {
+		t.Fatal("base stream lost")
+	}
+	sub.Stop()
+	if len(s.sendCh) != 0 {
+		t.Fatal("new control sent to an old Runtime")
 	}
 }

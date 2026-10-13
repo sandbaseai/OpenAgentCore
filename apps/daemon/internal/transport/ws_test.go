@@ -29,6 +29,7 @@ type fakeGateway struct {
 	dialAuth string
 	frames   []proto.Envelope
 	wantAuth bool
+	legacy   bool
 
 	connCh chan *websocket.Conn
 }
@@ -46,7 +47,11 @@ func (g *fakeGateway) handler(w http.ResponseWriter, r *http.Request) {
 	g.dialAuth = r.Header.Get("Authorization")
 	g.mu.Unlock()
 
-	conn, err := g.upgrader.Upgrade(w, r, nil)
+	response := make(http.Header)
+	if !g.legacy && r.Header.Get(proto.ExecutionFlowHeader) == proto.ExecutionFlowCreditV1 {
+		response.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
+	}
+	conn, err := g.upgrader.Upgrade(w, r, response)
 	if err != nil {
 		return
 	}
@@ -570,5 +575,53 @@ func TestExecutionBurstSurvivesSlowConsumer(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("producer did not finish")
+	}
+}
+
+func TestNewRuntimeOnOldCoreDoesNotWaitForCredit(t *testing.T) {
+	gw := newFakeGateway()
+	gw.legacy = true
+	srv := httptest.NewServer(http.HandlerFunc(gw.handler))
+	defer srv.Close()
+	conn, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: "0.16.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	peer := <-gw.connCh
+	start, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prep", proto.ExecutionStartPayload{RunID: "old-core-run"})
+	if err := peer.WriteJSON(start); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	select {
+	case <-conn.Recv():
+	case <-ctx.Done():
+		t.Fatal("start missing")
+	}
+	for range proto.ExecutionEventWindow + 10 {
+		if err := conn.Send(ctx, proto.Envelope{Type: proto.TypeDelta, ID: "old-core-run"}); err != nil {
+			t.Fatal("unnegotiated credit blocked output", err)
+		}
+	}
+	if err := conn.Send(ctx, proto.Envelope{Type: proto.TypeDone, ID: "old-core-run"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRejectsUnknownFlowSelection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		up := websocket.Upgrader{}
+		c, err := up.Upgrade(w, r, http.Header{proto.ExecutionFlowHeader: {"unknown"}})
+		if err == nil {
+			defer c.Close()
+			_, _, _ = c.ReadMessage()
+		}
+	}))
+	defer srv.Close()
+	_, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+	if !errors.Is(err, transport.ErrPermanent) {
+		t.Fatalf("invalid selection accepted: %v", err)
 	}
 }

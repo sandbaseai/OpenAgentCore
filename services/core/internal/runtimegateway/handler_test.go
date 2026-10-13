@@ -62,3 +62,40 @@ func TestWebSocketRequiresAuthorizationBearer(t *testing.T) {
 		})
 	}
 }
+
+func TestWebSocketNegotiatesEventCredit(t *testing.T) {
+	const credential = "fixture-runtime-key"
+	for _, tc := range []struct {
+		name     string
+		offer    []string
+		want     int
+		selected string
+	}{
+		{"old runtime", nil, http.StatusSwitchingProtocols, ""},
+		{"new runtime", []string{proto.ExecutionFlowCreditV1}, http.StatusSwitchingProtocols, proto.ExecutionFlowCreditV1},
+		{"unknown", []string{"unknown"}, http.StatusBadRequest, ""},
+		{"duplicate", []string{proto.ExecutionFlowCreditV1, proto.ExecutionFlowCreditV1}, http.StatusBadRequest, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := NewRegistry()
+			handler := NewHandler(HandlerConfig{Registry: registry, Authenticator: NewAuthenticator(&stubRuntimeStore{ok: true, row: runtimedevice.Credential{ID: "device", WorkspaceID: "tenant", Type: runtimedevice.RuntimeTypeAgentDaemon, CredentialHash: runtimedevice.HashCredential(credential)}})})
+			server := httptest.NewServer(http.HandlerFunc(handler.WS))
+			defer server.Close()
+			header := http.Header{"Authorization": {"Bearer " + credential}}
+			if tc.offer != nil {
+				header[proto.ExecutionFlowHeader] = tc.offer
+			}
+			conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?device_id=device&version=0.16.0", header)
+			if resp == nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if conn != nil {
+				defer conn.Close()
+			}
+			if resp.StatusCode != tc.want || resp.Header.Get(proto.ExecutionFlowHeader) != tc.selected {
+				t.Fatalf("status=%d selection=%q", resp.StatusCode, resp.Header.Get(proto.ExecutionFlowHeader))
+			}
+		})
+	}
+}

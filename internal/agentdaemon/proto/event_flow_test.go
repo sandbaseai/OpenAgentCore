@@ -39,3 +39,20 @@ func TestMaximumWireFrameFitsExecutionWindow(t *testing.T) {
 		t.Fatalf("maximum legal frame requires %d credits, window %d", got, ExecutionEventWindowBytes)
 	}
 }
+
+func TestExecutionFlowNegotiation(t *testing.T) {
+	for _, tc := range []struct {
+		values           []string
+		enabled, invalid bool
+	}{
+		{nil, false, false}, {[]string{ExecutionFlowCreditV1}, true, false},
+		{[]string{""}, false, true}, {[]string{"unknown"}, false, true},
+		{[]string{ExecutionFlowCreditV1, ExecutionFlowCreditV1}, false, true},
+		{[]string{ExecutionFlowCreditV1 + ", unknown"}, false, true},
+	} {
+		enabled, err := NegotiateExecutionFlow(tc.values)
+		if enabled != tc.enabled || (err != nil) != tc.invalid {
+			t.Fatalf("values=%v enabled=%v err=%v", tc.values, enabled, err)
+		}
+	}
+}

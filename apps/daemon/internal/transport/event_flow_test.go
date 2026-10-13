@@ -12,7 +12,7 @@ import (
 
 func flowConn(t *testing.T, runs ...string) *Conn {
 	t.Helper()
-	c := &Conn{closed: make(chan struct{})}
+	c := &Conn{closed: make(chan struct{}), eventCredit: true}
 	for _, run := range runs {
 		env, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prep", proto.ExecutionStartPayload{RunID: run})
 		if _, err := c.handleEventFlow(env); err != nil {

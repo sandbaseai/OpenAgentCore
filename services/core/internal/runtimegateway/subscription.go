@@ -90,7 +90,7 @@ func (s *Session) dispatchToSubscriber(env proto.Envelope) {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	size := proto.ExecutionEventBytes(env)
-	if sub.received.Count-sub.consumed.Count >= proto.ExecutionEventWindow || sub.received.Bytes-sub.consumed.Bytes+size > proto.ExecutionEventWindowBytes {
+	if s.eventCredit && (sub.received.Count-sub.consumed.Count >= proto.ExecutionEventWindow || sub.received.Bytes-sub.consumed.Bytes+size > proto.ExecutionEventWindowBytes) {
 		sub.closeLocked(ErrSubscriberOverflow)
 	} else {
 		select {
@@ -113,6 +113,9 @@ func (s *Session) dispatchToSubscriber(env proto.Envelope) {
 // Consumed returns transport credit after the caller has processed an event.
 // It is not a persistence receipt. Call exactly once per received event.
 func (s *Subscription) Consumed(ctx context.Context, env proto.Envelope) error {
+	if !s.peer.eventCredit {
+		return nil
+	}
 	s.mu.Lock()
 	s.consumed.Count++
 	s.consumed.Bytes += proto.ExecutionEventBytes(env)
@@ -141,6 +144,9 @@ func (s *Subscription) Consumed(ctx context.Context, env proto.Envelope) error {
 
 // Stop tells a producer blocked on credit that this consumer has finished.
 func (s *Subscription) Stop() {
+	if !s.peer.eventCredit {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = s.peer.Send(ctx, proto.Envelope{Type: proto.TypeExecutionEventsStop, ID: s.runID})

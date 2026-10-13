@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 8dbdf3f8170a6328b4db8282a48e6ffc3b2f68d025c60ed623c75799d7cc6ebf
+source_hash: 873cd7d9517675d5b409daedbe664b015e33bf49e04a41bd9ff3e55020cebf48
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -22,7 +22,7 @@ Runtime 按以下顺序连接：
 4. 立即发送 heartbeat，之后按 bootstrap 返回的间隔发送。每个 heartbeat 声明 `supported_agent_kinds`、其可用性和[能力](#capability-declarations)。第一个 heartbeat 之前能力未知；heartbeat 中缺失的 kind 视为未声明。两者都不允许推断。
 5. 交换有序 JSON [envelope](#envelope-and-identity)。Heartbeat 仅证明存活，不证明执行进度，也不充当此前消息的回执。
 
-wire 版本为 [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/version.go)，独立于 heartbeat 报告的 Runtime 构建版本。Core 仅接受精确匹配，包括 patch 部分。不匹配时，在任何 dispatch 前返回 HTTP 426 `incompatible_version`；daemon 将其视为永久错误并停止重连。应一起部署版本匹配的两端。
+wire 版本为 [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/version.go)，独立于 heartbeat 报告的 Runtime 构建版本。Core 仅接受精确匹配，包括 patch 部分。不匹配时，在任何 dispatch 前返回 HTTP 426 `incompatible_version`；daemon 将其视为永久错误并停止重连。破坏性变更仍要求两端版本匹配。新增的传输能力可通过本文定义的显式、带版本的协商启用，无需改变基础 wire 版本。
 
 每条物理连接拥有新的路由、admission handle 和传输状态。同一设备的新连接替代旧连接：Core 隔离 owner lease，移除旧 Run 路由，新连接不继承这些状态。有效凭据和连接不授权选择其他 Session 或 Environment 绑定。
 
@@ -135,11 +135,15 @@ Executor 空闲到期属于 Runtime 资源策略，与 Core 的活动 Turn 并�
 
 ## 执行事件流控 {#execution-event-flow-control}
 
-每个 `execution_start` 为一个 Run 打开连接内窗口：最多 256 条未消费执行帧和 4 MiB + 64 字节的计量存储（保证最大合法 wire 帧仍可容纳）。同一活动 Run 的重复 start 不重置额度。Runtime transport 每条连接最多接纳 1024 个活动窗口；终结 `done` 或 `execution_events_stop` 释放窗口。共享的[流控定义](../../internal/agentdaemon/proto/event_flow.go)声明覆盖的帧类型和字节算法，包括规范化 JSON wire 编码及 envelope 元数据。所有覆盖帧，包括 `error`、`done`、function call 和输入回执，进入共享 socket writer 前都消耗额度。阻塞的生产者只暂停自己的 Run；heartbeat、preparation status 以及取消/function-result 应用回执保持独立。
+本可选扩展保持基础 wire 协议为 `0.16.0`。支持流控的 Runtime 在经过认证的 WebSocket upgrade 中发送且仅发送一个 `X-Oac-Execution-Flow: credit-v1` header。Core 在 101 响应中返回同一 header 表示选择；两端在该物理连接内固定选择结果。缺少请求声明或响应选择时，明确使用基础协议，不发送事件额度消息，也不等待额度。未知、空值或重复声明返回 HTTP 400；响应选择无效属于永久握手失败。重连时重新协商。只有新 Runtime 连接到选择了该能力的 Core 才启用流控。旧 Runtime 连接保持原有 256 帧订阅上限和溢出行为；单独升级 Core 不能修复其生产者行为。
+
+先升级 Core，再选择新的不可变 Runtime 模板。现存 allocation 保留旧 Runtime，并继续按基础协议连接；新 allocation 使用新模板。新 Runtime 连接旧 Core 时也使用基础协议，因此回滚 Core 不会仅因本扩展而使 Session 无法连接。模板变更不改写保留的沙箱、文件或原生历史。这是本扩展明确约定的升级契约，不代表接受任意基础版本。
+
+选择事件额度后，每个 `execution_start` 为一个 Run 打开连接内窗口：最多 256 条未消费执行帧和 4 MiB + 64 字节的计量存储（保证最大合法 wire 帧仍可容纳）。同一活动 Run 的重复 start 不重置额度。Runtime transport 每条连接最多接纳 1024 个活动窗口；终结 `done` 或 `execution_events_stop` 释放窗口。共享的[流控定义](../../internal/agentdaemon/proto/event_flow.go)声明覆盖的帧类型和字节算法，包括规范化 JSON wire 编码及 envelope 元数据。所有覆盖帧，包括 `error`、`done`、function call 和输入回执，进入共享 socket writer 前都消耗额度。阻塞的生产者只暂停自己的 Run；heartbeat、preparation status 以及取消/function-result 应用回执保持独立。
 
 Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `execution_events_ack`。重复确认不增加额度；倒退或超前的值终止连接。确认只代表 transport 已消费，不代表 journal 已提交或原生执行成功。Core 仍须具备有序 journal 与终结回执才能完成 Turn。因此数据库暂停会暂停事件生产，而不是使订阅溢出。Core 拒绝超出任一窗口上限的生产者，并保留流不完整结果。
 
-Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。部署本次变更时 Core 与 Runtime 必须使用同一协议版本。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
+Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。Core 仅向已选择事件额度的连接发送 ACK/STOP，包括归档后正在排空的精确 Run。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
 
 ## 活动输入回执 {#active-input-receipts}
 
