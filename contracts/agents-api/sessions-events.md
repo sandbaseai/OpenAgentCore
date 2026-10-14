@@ -41,6 +41,27 @@ A Session stays usable after a Turn fails: new input starts a new Turn. Later re
 - **Queueing.** A queued Turn starts when a Runtime that supports the Session's harness and configuration is connected and one of Core's [`core.execution_concurrency`](../../docs/configuration.md#settings) work slots is free. A Session stays bound to the Runtime that first ran it.
 - **Execution availability.** While Core shuts down, or after its Worker loses execution ownership, requests return 503 `execution_unavailable`.
 
+### Input receipts
+
+`GET /v1/agents/sessions/{session_id}/input-receipts` is a Core extension authenticated by the same Project key and `OpenAI-Beta: agents=v1` header. Send the exact events request's nonblank `Idempotency-Key` (at most 128 bytes). Session authorization precedes key validation; missing, malformed, deleted and foreign Sessions return 404. Responses use `Cache-Control: no-store`.
+
+```json
+{"object":"agent.session.input_receipts","session_id":"<session-id>","status":"admitted","receipts":[{"input_index":0,"sequence":1,"turn_id":"<turn-id>","item_ids":["<item-id>"]}]}
+```
+
+| Status | HTTP | Meaning |
+| --- | --- | --- |
+| `admitted` | 200 | The exact ordered batch committed. `receipts` has one entry per input event, at most 64 |
+| `pending` | 202 | The Environment holds the exact key's reservation but has not admitted its batch; `receipts` is `[]` |
+| `failed` | 200 | The reservation failed, expired or was cancelled without admission; `receipts` is `[]` |
+| `absent` | 200 | This snapshot has neither an admitted batch nor a reservation for the key; `receipts` is `[]` |
+
+`input_index` is the zero-based event position in the submitted batch. `sequence` is its durable Session input identity. `turn_id` is null for an idle cancellation. `item_ids` always is an array: for message events it contains the exact user Item IDs in message order, including multiple messages in one event; for cancellation and function-result events it is empty. The receipt does not track function-result Item application. Different batches appended to the same Turn retain different input identities and Item IDs.
+
+The query reads one database snapshot. It reuses the same deterministic input projection as admission and verifies the corresponding stored user Items; it never matches text, the latest Turn or the latest history entry. Message input and its Items commit atomically, before Runtime execution, and remain readable after Core restarts or the live event buffer expires. Only IDs and admission state are returned, never message content, model configuration or credentials.
+
+A typed `absent` response on an authorized Session also confirms that the deployment supports this extension. It does **not** prove that an earlier timed-out or concurrent request will never commit. Recover a lost response by polling this key or explicitly retrying the identical batch with the same key; never switch keys to recover an uncertain send. The official POST still returns empty 202, and an empty events batch creates no receipt. The endpoint performs no writes, wakes no Runtime, and makes no completion or exactly-once native execution guarantee.
+
 ### Sessions with an Environment
 
 On `openai_hosted` and `self_hosted` Sessions, messages sent while a Turn runs join it at once. Messages sent to an idle Session reserve the batch for the Environment: the request waits until a Turn starts, for at most five minutes from the reservation. While the reservation waits for a `self_hosted` machine, the Session reads `requires_action` with an `environment_connection` action. A batch that carries messages on these placements may contain only messages. Cancellation-only and result-only batches are admitted at once and create no Turn.

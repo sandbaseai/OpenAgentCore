@@ -641,6 +641,8 @@ export interface InputMessageParam {
 }
 export const inputMessageParamFields = ["type", "role", "content"] as const;
 export const inputMessageParamRequired = ["role", "content"] as const;
+export const inputReceiptStatusValues = ["admitted", "pending", "failed", "absent"] as const;
+export type InputReceiptStatus = (typeof inputReceiptStatusValues)[number];
 export interface InputTokensDetailsResource {
   cached_tokens: number;
 }
@@ -1431,6 +1433,20 @@ export interface SessionInputParamAgentSessionInputToolResult {
 }
 export const sessionInputParamAgentSessionInputToolResultFields = ["type", "turn_id", "call_id", "success", "output", "error"] as const;
 export const sessionInputParamAgentSessionInputToolResultRequired = ["type", "turn_id", "call_id", "success"] as const;
+export interface SessionInputReceipt {
+  input_index: number;
+  item_ids: string[];
+  sequence: number;
+  turn_id: string | null;
+}
+export const sessionInputReceiptFields = ["input_index", "item_ids", "sequence", "turn_id"] as const;
+export interface SessionInputReceipts {
+  object: "agent.session.input_receipts";
+  receipts: SessionInputReceipt[];
+  session_id: string;
+  status: InputReceiptStatus;
+}
+export const sessionInputReceiptsFields = ["object", "receipts", "session_id", "status"] as const;
 export interface SessionItemListResource {
   object: "list";
   data: SessionTurnItemResource[];

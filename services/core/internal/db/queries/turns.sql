@@ -52,3 +52,17 @@ ORDER BY i.sequence LIMIT $5;
 -- name: HasUnappliedMessages :one
 SELECT EXISTS(SELECT 1 FROM turn_inputs
 WHERE session_id = $1 AND turn_id = $2 AND sequence > $3 AND kind = 'message');
+
+-- name: ReadInputReceiptBatch :many
+SELECT sequence, turn_id, kind, payload, batch_position
+FROM turn_inputs WHERE session_id = $1 AND idempotency_key = $2
+ORDER BY batch_position LIMIT 64;
+
+-- name: ReadInputReceiptReservation :one
+SELECT state FROM environment_input_reservations
+WHERE session_id = $1 AND idempotency_key = $2;
+
+-- name: ReadInputReceiptItems :many
+SELECT id, turn_id FROM session_items
+WHERE session_id = $1 AND id = ANY(sqlc.arg(item_ids)::uuid[])
+  AND payload->>'role' = 'user';

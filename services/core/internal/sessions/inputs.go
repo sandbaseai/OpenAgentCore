@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
+
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/jsonobject"
 )
 
@@ -296,6 +298,10 @@ type InputStorage interface {
 // InputReader reads a Session's admitted inputs, its Environment input
 // reservations and the reservations execution may admit.
 type InputReader interface {
+	// GetInputReceipts reads the exact admitted batch or Environment reservation
+	// under key from one visible Session snapshot. An unknown key is absent;
+	// it does not prove that an in-flight request will not subsequently commit.
+	GetInputReceipts(ctx context.Context, tenant, session, key string) (v1.SessionInputReceipts, error)
 	// ListTurnInputs pages a Turn's admitted inputs in sequence order after
 	// sequence after, at most limit of 1..100. It is an internal recovery
 	// read, not the public event stream. A malformed ID, a negative after and

@@ -322,7 +322,7 @@ def public_document(source, extensions, owners, beta_header, extension_paths=Non
             operation.pop('consumes', None)
             for parameter in operation.get('parameters', []):
                 if 'schema' not in parameter:
-                    parameter['schema'] = {k: parameter.pop(k) for k in ('type', 'format', 'enum') if k in parameter}
+                    parameter['schema'] = {k: parameter.pop(k) for k in ('type', 'format', 'maxLength', 'minLength', 'enum', 'items') if k in parameter}
             operation['parameters'] = operation.get('parameters', []) + [{'name': 'OpenAI-Beta', 'in': 'header', 'required': True, 'schema': {'type': 'string', 'const': beta_header}}]
             for response in operation.get('responses', {}).values():
                 if 'schema' in response:
