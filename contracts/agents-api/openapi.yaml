@@ -6422,6 +6422,88 @@
         "x-agents-core-extension": true
       }
     },
+    "/agents/sessions/{session_id}/input-receipts": {
+      "get": {
+        "description": "Project key. Core extension: exact Idempotency-Key batch admission, not execution completion. A missing batch can still be in flight.",
+        "parameters": [
+          {
+            "description": "Session ID",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact input batch key",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "OpenAI-Beta",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "agents=v1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.SessionInputReceipts"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.SessionInputReceipts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse-2"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse-2"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Session input receipts",
+        "tags": [
+          "Session input receipts"
+        ],
+        "x-agents-core-extension": true
+      }
+    },
     "/agents/sessions/{session_id}/turns/{turn_id}/diagnostics": {
       "get": {
         "description": "OpenAgentCore extension. Project key only. Safe committed failure classification without private execution details.",
@@ -17967,6 +18049,21 @@
         ],
         "type": "object"
       },
+      "v1.InputReceiptStatus": {
+        "enum": [
+          "admitted",
+          "pending",
+          "failed",
+          "absent"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "InputReceiptAdmitted",
+          "InputReceiptPending",
+          "InputReceiptFailed",
+          "InputReceiptAbsent"
+        ]
+      },
       "v1.InstallationStatus": {
         "enum": [
           "available",
@@ -18157,6 +18254,72 @@
             "$ref": "#/components/schemas/v1.ModelProviderInput"
           }
         },
+        "type": "object"
+      },
+      "v1.SessionInputReceipt": {
+        "properties": {
+          "input_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "input_index",
+          "item_ids",
+          "sequence",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "v1.SessionInputReceipts": {
+        "properties": {
+          "object": {
+            "enum": [
+              "agent.session.input_receipts"
+            ],
+            "type": "string"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/v1.SessionInputReceipt"
+            },
+            "type": "array"
+          },
+          "session_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/v1.InputReceiptStatus"
+          }
+        },
+        "required": [
+          "object",
+          "receipts",
+          "session_id",
+          "status"
+        ],
         "type": "object"
       },
       "v1.TurnDiagnostics": {

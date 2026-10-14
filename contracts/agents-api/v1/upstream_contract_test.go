@@ -107,15 +107,16 @@ func TestPublicOperationsPreserveOfficialContract(t *testing.T) {
 		}
 		delete(published, path)
 	}
-	// These two GET operations are Core extensions, never official operations.
+	// These GET operations are Core extensions, never official operations.
 	// Keep this allowlist exact so another path or method requires review.
 	for _, path := range []string{
 		"/agents/sessions/{session_id}/diagnostics",
+		"/agents/sessions/{session_id}/input-receipts",
 		"/agents/sessions/{session_id}/turns/{turn_id}/diagnostics",
 	} {
 		item, ok := published[path].(map[string]any)
 		if !ok {
-			t.Errorf("missing Core diagnostic extension %s", path)
+			t.Errorf("missing Core extension %s", path)
 			continue
 		}
 		operation, ok := item["get"].(map[string]any)
@@ -123,7 +124,7 @@ func TestPublicOperationsPreserveOfficialContract(t *testing.T) {
 			t.Errorf("GET %s must explicitly identify a Core extension", path)
 		}
 		if len(item) != 1 {
-			t.Errorf("unexpected methods on Core diagnostic extension %s", path)
+			t.Errorf("unexpected methods on Core extension %s", path)
 		}
 		delete(published, path)
 	}

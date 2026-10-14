@@ -35,7 +35,7 @@ class PublicAPITests(unittest.TestCase):
 
     def test_diagnostic_extensions_do_not_change_official_routes(self):
         extensions = [p for p, item in self.public['paths'].items() if item.get('get', {}).get('x-agents-core-extension')]
-        self.assertEqual(sorted(extensions), ['/agents/sessions/{session_id}/diagnostics', '/agents/sessions/{session_id}/turns/{turn_id}/diagnostics'])
+        self.assertEqual(sorted(extensions), ['/agents/sessions/{session_id}/diagnostics', '/agents/sessions/{session_id}/input-receipts', '/agents/sessions/{session_id}/turns/{turn_id}/diagnostics'])
         routes = json.loads((generator.CONTRACT / 'upstream-routes.json').read_text())['routes']
         self.assertEqual(len(routes), 58)
         self.assertTrue(all('/diagnostics' not in p for p in routes))
@@ -44,6 +44,17 @@ class PublicAPITests(unittest.TestCase):
         self.assertEqual(set(schemas['v1.TurnDiagnostics']['properties']['status']['enum']), {'queued', 'in_progress', 'waiting', 'completed', 'failed', 'cancelled'})
         with self.assertRaisesRegex(ValueError, 'cannot replace official path'):
             generator.public_document(self.source, {}, {}, self.pin['beta_header'], {'/agents': {}})
+
+    def test_extension_receipts_have_required_arrays_and_closed_state(self):
+        schemas = self.public['components']['schemas']
+        receipt = schemas['v1.SessionInputReceipt']
+        self.assertIn('item_ids', receipt['required'])
+        self.assertEqual(receipt['properties']['item_ids']['type'], 'array')
+        states = schemas['v1.InputReceiptStatus']['enum']
+        self.assertEqual(set(states), {'admitted', 'pending', 'failed', 'absent'})
+        inventory = json.loads((generator.CONTRACT / 'upstream-routes.json').read_text())
+        self.assertEqual(len(inventory['routes']), 58)
+        self.assertFalse(any('input-receipts' in route for route in inventory['routes']))
 
     def test_union_and_nullable_fields_keep_the_official_schema(self):
         schemas = self.public['components']['schemas']

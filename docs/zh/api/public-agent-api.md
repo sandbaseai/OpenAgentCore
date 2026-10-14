@@ -1,7 +1,7 @@
 ---
 title: "Agents API 指南"
 source: docs/api/public-agent-api.md
-source_hash: 3210c3c7d871de2dc2fa8601d213bb93eacc830ee1643e56fd308673d2b68bf8
+source_hash: 1a02cc18bb574746fc924780febca0079e6d0d328b5d58ad622d5db9dbeb06ac
 ---
 
 Core 在 `/v1` 提供 [OpenAI Agents API](https://platform.openai.com/docs/api-reference)。可以使用官方 OpenAI SDK 或普通 HTTP。本指南针对每项常见操作同时展示这两种方式，并说明 Core 与 OpenAI 存在差异的地方。
@@ -58,7 +58,7 @@ oac /agents
 | [Vaults](#vaults) | `/vaults` | MCP 服务器的只写凭据 |
 | Subagents | `/agents/sessions/{id}/subagents` | 只读的子任务；请参阅 [subagents](../../../contracts/agents-api/zh/subagents.md) |
 
-Core 的路由与固定版本 SDK 中的路由完全一致，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。Core 不添加任何路由；其扩展内容位于 [`x_agents_core`](#core-extensions-x-agents-core)。
+Core 保留固定版本 SDK 的全部路由，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。配置扩展位于 [`x_agents_core`](#core-extensions-x-agents-core)。使用 Project key 的[输入回执扩展](../../../contracts/agents-api/zh/sessions-events.md#input-receipts)可准确识别批次受理产生的用户 Item，不改变官方 events 响应。
 
 ## 常见任务 {#common-tasks}
 

@@ -56,7 +56,7 @@ On a shared host, `-H @<(printf 'Authorization: Bearer %s\n' "$OPENAI_API_KEY")`
 | [Vaults](#vaults) | `/vaults` | Write-only credentials for MCP servers |
 | Subagents | `/agents/sessions/{id}/subagents` | Read-only child work; see [subagents](../../contracts/agents-api/subagents.md) |
 
-Core has exactly the routes of the pinned SDK, listed in [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json). It adds no route; its additions live in [`x_agents_core`](#core-extensions-x_agents_core).
+Core preserves the pinned SDK routes listed in [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json). Configuration additions live in [`x_agents_core`](#core-extensions-x_agents_core). The Project-key [input receipt extension](../../contracts/agents-api/sessions-events.md#input-receipts) identifies the exact user Items admitted by a batch without changing the official events response.
 
 ## Common tasks
 
