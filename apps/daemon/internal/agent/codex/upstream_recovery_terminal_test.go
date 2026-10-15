@@ -30,3 +30,17 @@ func TestAttachRecoveriesSkipsSnapshotAlreadyRecorded(t *testing.T) {
 		t.Fatalf("unexpected records: %+v", meta)
 	}
 }
+
+func TestEndRecoveryRecordsAbortWhenTerminalWonRace(t *testing.T) {
+	s := &Session{}
+	s.recovery.snapshot.Store(&recoverySnapshot{oldThreadID: "old", fingerprint: "fp"})
+	s.terminal.Store(true)
+	s.endRecovery()
+	s.recordInflightRecoveryAbort()
+	meta := map[string]any{}
+	s.attachRecoveries(meta, true)
+	got, _ := meta[proto.DoneMetaUpstreamRecoveries].([]proto.UpstreamRecovery)
+	if len(got) != 1 || got[0].Outcome != proto.RecoveryOutcomeAborted || got[0].OldNativeSessionID != "old" {
+		t.Fatalf("records = %+v", got)
+	}
+}

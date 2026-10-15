@@ -591,7 +591,18 @@ func (s *Session) endRecovery() {
 	s.threadIDMu.Lock()
 	s.recovery.gateThread = ""
 	s.threadIDMu.Unlock()
+	// A terminal that won the race may not have recorded the aborted attempt
+	// yet; do it here under the same lock that clears the snapshot.
+	s.recovery.mu.Lock()
+	if snap := s.recovery.snapshot.Load(); snap != nil && !snap.recorded && s.terminal.Load() {
+		snap.recorded = true
+		s.appendRecoveryLocked(proto.UpstreamRecovery{
+			Fingerprint: snap.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: 0,
+			Outcome: proto.RecoveryOutcomeAborted, Reason: proto.RecoveryAbortCancelled, OldNativeSessionID: snap.oldThreadID,
+		})
+	}
 	s.recovery.snapshot.Store(nil)
+	s.recovery.mu.Unlock()
 	s.recovery.state.Store(recoveryIdle)
 }
 
