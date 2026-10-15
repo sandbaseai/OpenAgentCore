@@ -266,6 +266,19 @@ func (s *Session) stepReason(reason string) string {
 	return reason
 }
 
+// recoveryThreadUsed reports whether a thread already served this Turn as a
+// recovery source or target, so a rebuild never lands in an earlier thread.
+func (s *Session) recoveryThreadUsed(id string) bool {
+	s.recovery.mu.Lock()
+	defer s.recovery.mu.Unlock()
+	for _, r := range s.recovery.records {
+		if r.OldNativeSessionID == id || r.NewNativeSessionID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, run *recoveryRun) {
 	defer s.endOperation()
 	defer cancel()
@@ -295,7 +308,7 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 	startCtx, stop := context.WithTimeout(ctx, t.ThreadStart)
 	_, err = s.rpc.requestWithTimeout(startCtx, "thread/start", startParams, func(frame any) error { return s.rpc.writeFrameContext(startCtx, frame) }, 0, func(raw json.RawMessage) error {
 		var res ThreadStartResult
-		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" || res.Thread.ID == snap.oldThreadID {
+		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" || res.Thread.ID == snap.oldThreadID || s.recoveryThreadUsed(res.Thread.ID) {
 			return errors.New("codex: recovery thread response has no new identity")
 		}
 		run.set(func() { run.newThreadID, run.newModel = res.Thread.ID, res.Model })

@@ -106,7 +106,11 @@ func TestParseUpstreamRecoveriesAcceptsValidRecords(t *testing.T) {
 		t.Fatal("aborted must be final")
 	}
 	exhausted := with(recovered(), "outcome", "exhausted")
-	entries, ok = ParseUpstreamRecoveries([]any{exhausted, with(with(with(recovered(), "attempt", 2), "old_native_session_id", "019e0000-0000-7000-8000-000000000002"), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")})
+	chainedSecond := with(with(with(with(recovered(), "attempt", 2), "fingerprint", FingerprintModelNoImageInput), "old_native_session_id", "019e0000-0000-7000-8000-000000000002"), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")
+	if _, ok := ParseUpstreamRecoveries([]any{exhausted, with(chainedSecond, "fingerprint", FingerprintReasoningEncryptedUnverifiable)}); ok {
+		t.Fatal("a fingerprint may recover only once per Turn")
+	}
+	entries, ok = ParseUpstreamRecoveries([]any{exhausted, chainedSecond})
 	if !ok || len(entries) != 2 || RecoveryAttemptCount(entries) != 2 || entries[0].Dropped.ReasoningItems != 3 {
 		t.Fatalf("%+v %v", entries, ok)
 	}

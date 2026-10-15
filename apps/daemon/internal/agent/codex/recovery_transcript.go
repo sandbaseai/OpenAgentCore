@@ -524,6 +524,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 				return nil
 			}
 		}
+		// A search with no query, URL or pattern cannot tell the model what already ran.
+		if strings.TrimSpace(strings.TrimPrefix(call, "web search:")) == "" {
+			stats.unsupported++
+			return nil
+		}
 		if item.Status != "" {
 			call += " (status: " + escapeTranscript(item.Status) + ")"
 		}

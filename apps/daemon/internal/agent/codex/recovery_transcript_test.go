@@ -89,6 +89,18 @@ func TestTranscriptWebSearchActions(t *testing.T) {
 	if reason == "" {
 		t.Fatal("openPage without url must abandon recovery")
 	}
+	for name, search := range map[string]map[string]any{
+		"no query or action":   {"query": "", "status": "completed"},
+		"search without query": {"query": "", "status": "completed", "action": map[string]any{"type": "search"}},
+	} {
+		_, reason = planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
+			{ID: "t1", Status: "completed", Items: []json.RawMessage{userItem(text("q")), item("reasoning", map[string]any{"encryptedContent": canaryReasoning}), item("webSearch", search)}},
+			{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
+		}, oldTurn, proto.TextInput("current request"), 100000)
+		if reason == "" {
+			t.Fatalf("%s: a search without a target must abandon recovery", name)
+		}
+	}
 }
 func TestTranscriptRendering(t *testing.T) {
 	in, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{

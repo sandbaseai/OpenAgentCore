@@ -191,6 +191,7 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 	}
 	attempts := 0
 	previousNew := ""
+	seen := map[string]bool{}
 	for i, entry := range entries {
 		if !entry.valid() {
 			return nil, false
@@ -206,6 +207,11 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 			return nil, false
 		}
 		if entry.Attempt != 0 {
+			// The adapter permits each fingerprint one recovery per Turn.
+			if seen[entry.Fingerprint] {
+				return nil, false
+			}
+			seen[entry.Fingerprint] = true
 			attempts++
 			if entry.Attempt != attempts {
 				return nil, false

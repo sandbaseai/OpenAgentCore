@@ -227,3 +227,19 @@ func TestAbandonedRecoveryMatchesTheRunWithoutRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryThreadUsedCoversEveryEarlierThread(t *testing.T) {
+	s := &Session{}
+	s.recovery.records = []proto.UpstreamRecovery{
+		{OldNativeSessionID: "thread-a", NewNativeSessionID: "thread-b"},
+		{OldNativeSessionID: "thread-b", NewNativeSessionID: "thread-c"},
+	}
+	for _, id := range []string{"thread-a", "thread-b", "thread-c"} {
+		if !s.recoveryThreadUsed(id) {
+			t.Fatalf("%s must be rejected as a recovery target", id)
+		}
+	}
+	if s.recoveryThreadUsed("thread-d") {
+		t.Fatal("a fresh thread must be accepted")
+	}
+}
