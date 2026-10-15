@@ -60,7 +60,10 @@ func (s *Session) steer(ctx context.Context, input proto.PromptSteerPayload, wri
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.steering.mu.Lock()
-	turnID, stopped, recovering := s.steering.id, s.steering.stopped, s.steering.recovering
+	// The atomic state flips before beginRecovery takes this lock, so consulting
+	// it here closes the window where a steer could reach the finished Turn.
+	turnID, stopped := s.steering.id, s.steering.stopped
+	recovering := s.steering.recovering || s.recovery.state.Load() == recoveryRecovering
 	slotTaken := false
 	var gen uint64
 	if !stopped && !recovering {
