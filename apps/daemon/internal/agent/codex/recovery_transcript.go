@@ -325,13 +325,53 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		return []transcriptEntry{toolEntry("tool: "+item.Tool+" "+string(item.Arguments), out)}
 	case "webSearch":
 		var item struct {
-			Query string `json:"query"`
+			Query  string `json:"query"`
+			Action *struct {
+				Type    string   `json:"type"`
+				Query   *string  `json:"query"`
+				Queries []string `json:"queries"`
+				URL     *string  `json:"url"`
+				Pattern *string  `json:"pattern"`
+			} `json:"action"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
 			stats.unsupported++
 			return nil
 		}
-		return []transcriptEntry{toolEntry("web search: "+item.Query, "")}
+		call := "web search: " + escapeTranscript(item.Query)
+		if a := item.Action; a != nil {
+			switch a.Type {
+			case "openPage", "open_page":
+				if a.URL == nil {
+					stats.unsupported++
+					return nil
+				}
+				call = "web search: open page " + escapeTranscript(*a.URL)
+			case "findInPage", "find_in_page":
+				if a.URL == nil && a.Pattern == nil {
+					stats.unsupported++
+					return nil
+				}
+				call = "web search: find in page"
+				if a.URL != nil {
+					call += " " + escapeTranscript(*a.URL)
+				}
+				if a.Pattern != nil {
+					call += " pattern: " + escapeTranscript(*a.Pattern)
+				}
+			case "search":
+				if item.Query == "" && a.Query != nil {
+					call = "web search: " + escapeTranscript(*a.Query)
+				} else if item.Query == "" && len(a.Queries) > 0 {
+					call = "web search: " + escapeTranscript(strings.Join(a.Queries, "; "))
+				}
+			case "other", "":
+			default:
+				stats.unsupported++
+				return nil
+			}
+		}
+		return []transcriptEntry{toolEntry(call, "")}
 	case "imageView", "imageGeneration":
 		var item struct {
 			Path string `json:"path"`

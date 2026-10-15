@@ -160,7 +160,7 @@ var _ agent.Turn = (*Session)(nil)
 func (s *Session) onServerRequest(method string, handler ServerRequestHandler) {
 	s.rpc.OnServerRequest(method, func(raw json.RawMessage, id any) (any, error) {
 		// A rebuilt Turn's request waits for its recovery to be acknowledged.
-		if !s.awaitAckGate(raw) {
+		if !s.awaitAckGate(raw, id) {
 			return nil, errors.New("codex: request arrived before its recovery was acknowledged")
 		}
 		if s.executor != nil {

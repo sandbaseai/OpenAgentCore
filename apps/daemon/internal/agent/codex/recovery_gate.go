@@ -108,7 +108,7 @@ func (s *Session) gated(h NotificationHandler) NotificationHandler {
 // awaitAckGate blocks a server request of the rebuilt thread until the
 // recovery is acknowledged. It reports false when the request must be refused:
 // the recovery was abandoned or the Session was cancelled.
-func (s *Session) awaitAckGate(raw json.RawMessage) bool {
+func (s *Session) awaitAckGate(raw json.RawMessage, id any) bool {
 	var scope struct {
 		ThreadID string `json:"threadId"`
 	}
@@ -128,7 +128,9 @@ func (s *Session) awaitAckGate(raw json.RawMessage) bool {
 	}
 	g.waiters++
 	// A waiting request retains its raw params, so it counts against the byte limit too.
-	g.bytes += len(raw)
+	// The handler goroutine also retains the JSON-RPC ID, which is unbounded.
+	idBytes, _ := json.Marshal(id)
+	g.bytes += len(raw) + len(idBytes)
 	if len(g.queue)+g.waiters > maxGatedFrames || g.bytes > maxGatedBytes {
 		s.overflowLocked(g)
 		g.waiters--

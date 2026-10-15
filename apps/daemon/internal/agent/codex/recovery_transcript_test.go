@@ -63,6 +63,33 @@ func TestPlanRecoveryPreconditionsPerClass(t *testing.T) {
 	}
 }
 
+func TestTranscriptWebSearchActions(t *testing.T) {
+	in, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
+		{ID: "t1", Items: []json.RawMessage{
+			userItem(text("q")),
+			item("reasoning", map[string]any{"encryptedContent": canaryReasoning}),
+			item("webSearch", map[string]any{"query": "", "action": map[string]any{"type": "openPage", "url": "https://example.com/p"}}),
+			item("webSearch", map[string]any{"query": "", "action": map[string]any{"type": "findInPage", "url": "https://example.com/p", "pattern": "needle"}}),
+		}},
+		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
+	}, oldTurn, proto.TextInput("current request"), 100000)
+	if reason != "" {
+		t.Fatal(reason)
+	}
+	got := planText(t, in)
+	for _, want := range []string{"web search: open page https://example.com/p", "web search: find in page https://example.com/p pattern: needle"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	_, reason = planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
+		{ID: "t1", Items: []json.RawMessage{userItem(text("q")), item("reasoning", map[string]any{"encryptedContent": canaryReasoning}), item("webSearch", map[string]any{"action": map[string]any{"type": "openPage"}})}},
+		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
+	}, oldTurn, proto.TextInput("current request"), 100000)
+	if reason == "" {
+		t.Fatal("openPage without url must abandon recovery")
+	}
+}
 func TestTranscriptRendering(t *testing.T) {
 	in, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
 		{ID: "t1", Items: []json.RawMessage{
