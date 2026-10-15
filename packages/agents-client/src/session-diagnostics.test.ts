@@ -117,6 +117,8 @@ it.each([
   { recovery_fingerprints: "reasoning_encrypted_unverifiable" },
   { recovery_outcomes: ["recovered"] },
   { recovery_outcomes: ["exhausted", "aborted"] },
+  { recovery_count: 0, recovery_outcomes: ["exhausted"] },
+  { recovery_count: 1, recovery_outcomes: ["exhausted", "exhausted"], recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"] },
   { recovery_dropped_reasoning_items: 2_000_001 },
   { recovery_dropped_images: 2_000_001 },
   { recovery_dropped_images: -1 },

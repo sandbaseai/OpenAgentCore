@@ -219,6 +219,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
+		// A command with neither an exit code nor a status has an unknown
+		// outcome; rebuilding from it could repeat side effects.
+		if item.ExitCode == nil && item.Status == "" {
+			stats.unsupported++
+			return nil
+		}
 		call := "command: " + item.Command
 		if item.ExitCode != nil {
 			call += fmt.Sprintf(" (exit %d)", *item.ExitCode)
