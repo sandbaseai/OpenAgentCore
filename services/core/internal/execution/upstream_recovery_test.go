@@ -30,6 +30,13 @@ func abortedRecord(reason string) map[string]any {
 		"dropped": map[string]any{"reasoning_items": 0, "images": 0}, "old_native_session_id": recoveryOldThread}
 }
 
+// abortedAfterSwitch is an aborted record that follows a thread switch, so it starts from the new thread.
+func abortedAfterSwitch(reason string) map[string]any {
+	record := abortedRecord(reason)
+	record["old_native_session_id"] = recoveryNewThread
+	return record
+}
+
 func doneWithRecoveries(t *testing.T, recoveries any) proto.Envelope {
 	t.Helper()
 	metadata := map[string]any{proto.DoneMetaAgentSessionID: recoveryNewThread}
@@ -172,7 +179,7 @@ func TestRecoveryCountCountsSwitchesNotAbandonedEntries(t *testing.T) {
 	}{
 		"recovered":      {[]any{recoveryRecord("recovered")}, 1},
 		"aborted only":   {[]any{abortedRecord("history_unreadable")}, 0},
-		"aborted second": {[]any{recoveryRecord("exhausted"), abortedRecord("not_applicable")}, 1},
+		"aborted second": {[]any{recoveryRecord("exhausted"), abortedAfterSwitch("not_applicable")}, 1},
 	} {
 		var result Result
 		if err := result.mergeObservation(doneWithRecoveries(t, test.records)); err != nil {
