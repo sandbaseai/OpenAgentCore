@@ -226,6 +226,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
+		// A command that is still running may finish after the history snapshot.
+		if item.ExitCode == nil && nonterminalStatus(item.Status) {
+			stats.unsupported++
+			return nil
+		}
 		// The outcome is rendered before the command so call truncation can
 		// never drop it.
 		outcome := ""
@@ -264,7 +269,13 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		for _, c := range item.Changes {
 			paths = append(paths, c.Path)
 		}
-		return []transcriptEntry{toolEntry("file change ("+"status: "+escapeTranscript(item.Status)+"): "+strings.Join(paths, ", "), "")}
+		fileCall := "file change (status: " + escapeTranscript(item.Status) + "): " + strings.Join(paths, ", ")
+		if callExceedsBudget(fileCall) {
+			// A truncated path list would hide files that were already changed.
+			stats.unsupported++
+			return nil
+		}
+		return []transcriptEntry{toolEntry(fileCall, "")}
 	case "mcpToolCall":
 		var item struct {
 			Server    string          `json:"server"`
@@ -326,6 +337,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Success      *bool           `json:"success"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
+			return nil
+		}
+		// Without a tool name the model cannot tell which operation completed.
+		if item.Tool == "" {
 			stats.unsupported++
 			return nil
 		}
@@ -449,6 +465,15 @@ func callExceedsBudget(call string) bool {
 
 // toolEntry builds a tool entry. The call is one escaped, bounded line; output
 // is expected to be escaped and bounded already.
+// nonterminalStatus reports whether a native status means work is still running.
+func nonterminalStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "inprogress", "in_progress", "running", "pending":
+		return true
+	}
+	return false
+}
+
 func toolEntry(call, output string) transcriptEntry {
 	return transcriptEntry{kind: entryTool, call: escapeTranscript(truncateRunes(strings.ReplaceAll(call, "\n", " "), maxToolCallChars)), output: output}
 }

@@ -614,3 +614,19 @@ func TestCommandCwdAndToolNamespaceAreRendered(t *testing.T) {
 		t.Fatalf("cwd or namespace missing:\n%s", got)
 	}
 }
+
+func TestDecodeItemRecoveryRejectsUnsafeHistory(t *testing.T) {
+	cases := map[string]map[string]any{
+		"running command":  {"type": "commandExecution", "command": "make", "status": "inProgress"},
+		"nameless dynamic": {"type": "dynamicToolCall", "status": "completed", "arguments": map[string]any{}},
+		"huge file change": {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
+	}
+	for name, m := range cases {
+		var stats historyStats
+		typ := m["type"].(string)
+		delete(m, "type")
+		if entries := decodeItem(item(typ, m), false, false, &stats); len(entries) != 0 || stats.unsupported != 1 {
+			t.Fatalf("%s: entries=%+v unsupported=%d", name, entries, stats.unsupported)
+		}
+	}
+}
