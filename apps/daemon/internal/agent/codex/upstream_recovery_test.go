@@ -196,6 +196,7 @@ func TestAbandonedRecoveryMatchesTheRunWithoutRecovery(t *testing.T) {
 		}},
 		{"thread/start refused", proto.RecoveryAbortThreadStartFailed, func(f *recoveryFixture) { f.native.fail["thread/start"] = "no capacity" }},
 		{"thread/start timeout", proto.RecoveryAbortThreadStartFailed, hold("thread/start")},
+		{"thread/start resolves another model", proto.RecoveryAbortModelChanged, func(f *recoveryFixture) { f.native.threadModel = "other-model" }},
 		{"turn/start refused", proto.RecoveryAbortTurnStartFailed, func(f *recoveryFixture) { f.native.fail["turn/start"] = "rejected" }},
 		{"turn/start timeout", proto.RecoveryAbortTurnStartFailed, hold("turn/start")},
 	} {
@@ -223,6 +224,9 @@ func TestAbandonedRecoveryMatchesTheRunWithoutRecovery(t *testing.T) {
 			f.s.usageMu.Unlock()
 			if !clean {
 				t.Fatal("usage recovery state was not restored")
+			}
+			if got := f.s.model(); got != "synthetic" {
+				t.Fatalf("model = %q, want the entry model restored", got)
 			}
 		})
 	}

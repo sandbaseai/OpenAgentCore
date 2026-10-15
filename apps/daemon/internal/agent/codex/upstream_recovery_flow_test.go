@@ -681,6 +681,7 @@ func TestEveryAbortReasonIsExercised(t *testing.T) {
 		proto.RecoveryAbortThreadStartFailed:     "TestAbandonedRecoveryMatchesTheRunWithoutRecovery/thread/start refused",
 		proto.RecoveryAbortTurnStartFailed:       "TestAbandonedRecoveryMatchesTheRunWithoutRecovery/turn/start refused",
 		proto.RecoveryAbortCancelled:             "TestRecoveryCancellationWins",
+		proto.RecoveryAbortModelChanged:          "TestAbandonedRecoveryMatchesTheRunWithoutRecovery/thread/start resolves another model",
 	}
 	for _, reason := range proto.RecoveryAbortReasons() {
 		if exercised[reason] == "" {

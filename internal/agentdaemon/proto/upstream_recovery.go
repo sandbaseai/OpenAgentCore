@@ -62,6 +62,7 @@ const (
 	RecoveryAbortThreadStartFailed     = "thread_start_failed"
 	RecoveryAbortTurnStartFailed       = "turn_start_failed"
 	RecoveryAbortCancelled             = "cancelled"
+	RecoveryAbortModelChanged          = "model_changed"
 )
 
 // DoneMetaUpstreamRecoveries is the Done.metadata key that carries the Turn's
@@ -91,7 +92,7 @@ var recoveryClassFingerprint = map[string]string{
 
 var recoveryAbortReasons = []string{
 	RecoveryAbortNotApplicable, RecoveryAbortCurrentInputHasImages, RecoveryAbortHistoryUnreadable,
-	RecoveryAbortThreadStartFailed, RecoveryAbortTurnStartFailed, RecoveryAbortCancelled,
+	RecoveryAbortThreadStartFailed, RecoveryAbortTurnStartFailed, RecoveryAbortCancelled, RecoveryAbortModelChanged,
 }
 
 var recoveryNativeSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)

@@ -325,13 +325,15 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 		return
 	}
 
-	// The rebuilt thread may resolve a different concrete model; the
-	// collaboration mode must be derived from it, as in bindThreadResult.
+	// Tokens already carried belong to the old model; a rebuilt thread that
+	// resolves another model would mislabel them, so abandon instead.
 	run.mu.Lock()
-	if run.newModel != "" {
-		s.setModel(run.newModel)
-	}
+	newModel := run.newModel
 	run.mu.Unlock()
+	if newModel != "" && newModel != snap.resolvedModel {
+		s.abandonRecovery(run, s.stepReason(proto.RecoveryAbortModelChanged))
+		return
+	}
 	mode, err := s.collaborationMode(*s.recovery.plan)
 	if err != nil {
 		s.abandonRecovery(run, proto.RecoveryAbortTurnStartFailed)

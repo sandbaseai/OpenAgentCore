@@ -158,6 +158,8 @@ type fakeNative struct {
 	fail map[string]string
 	// before runs ahead of the reply to a method (to model notification-before-reply).
 	before map[string]func(JsonRpcRequest)
+	// threadModel, when set, is the model thread/start resolves.
+	threadModel string
 }
 
 func newFakeNative(t *testing.T, server ServerSide) *fakeNative {
@@ -215,7 +217,11 @@ func (n *fakeNative) reply(req JsonRpcRequest, hold chan struct{}, held bool, me
 		if n.count("thread/start") > 1 {
 			id = secondThread
 		}
-		result = map[string]any{"thread": map[string]any{"id": id}, "model": "synthetic"}
+		model := "synthetic"
+		if n.threadModel != "" {
+			model = n.threadModel
+		}
+		result = map[string]any{"thread": map[string]any{"id": id}, "model": model}
 	case "turn/start":
 		id := newTurn
 		if n.count("turn/start") > 1 {
