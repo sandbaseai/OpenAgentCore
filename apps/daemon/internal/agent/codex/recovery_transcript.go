@@ -266,6 +266,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
+		// Without a typed outcome the model cannot tell whether the side effect completed.
+		if item.Status == "" && item.Result == nil && (strings.TrimSpace(string(item.Error)) == "" || strings.TrimSpace(string(item.Error)) == "null") {
+			stats.unsupported++
+			return nil
+		}
 		entry := toolEntry("tool: "+item.Server+"/"+item.Tool+" "+string(item.Arguments), "")
 		var parts []string
 		// The typed status tells the model whether the call's side effect completed.
@@ -507,7 +512,7 @@ func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bo
 		remaining -= cost
 		tail = append([]string{blocks[i]}, tail...)
 	}
-	if len(tail) == 0 && first < len(blocks)-1 && remaining > 200 && entries[len(entries)-1].kind != entryCarried {
+	if len(tail) == 0 && first < len(blocks)-1 && remaining > 200 && entries[len(entries)-1].kind != entryCarried && entries[len(entries)-1].kind != entryTool {
 		tail = []string{truncateRunes(blocks[len(blocks)-1], remaining)}
 	}
 	omitted := len(blocks) - 1 - len(tail)

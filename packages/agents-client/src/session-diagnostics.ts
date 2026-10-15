@@ -81,8 +81,8 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
         if (!safeCount(p.recovery_count, 2) || !safeCount(p.recovery_dropped_reasoning_items, 2_000_000) || !safeCount(p.recovery_dropped_images, 2_000_000) ||
             !Array.isArray(fingerprints) || !Array.isArray(outcomes) || fingerprints.length < 1 || fingerprints.length > 2 || outcomes.length !== fingerprints.length ||
             !fingerprints.every((item) => isOneOf(recoverableFingerprints, item)) || !outcomes.every((item) => item === "exhausted" || item === "aborted")) return invalidAdminResponse();
-        // Core marks a record exhausted only after its thread switch completed, so the count covers every exhausted record and never exceeds the records.
-        if ((p.recovery_count as number) < outcomes.filter((item) => item === "exhausted").length || (p.recovery_count as number) > outcomes.length) return invalidAdminResponse();
+        // Core marks a record exhausted only after its thread switch completed, so the count covers every exhausted record; recovered records are omitted from the arrays, so it may exceed their length.
+        if ((p.recovery_count as number) < outcomes.filter((item) => item === "exhausted").length) return invalidAdminResponse();
         params = { ...params, recovery_count: p.recovery_count as number, recovery_fingerprints: fingerprints as RecoverableUpstreamFingerprint[], recovery_outcomes: outcomes as ("exhausted" | "aborted")[],
           recovery_dropped_reasoning_items: p.recovery_dropped_reasoning_items as number, recovery_dropped_images: p.recovery_dropped_images as number };
       }

@@ -492,3 +492,16 @@ func TestPlanRecoveryAbortsWhenTargetTurnIsNotTerminal(t *testing.T) {
 		}
 	}
 }
+func TestDecodeMCPWithoutOutcomeIsUnsupported(t *testing.T) {
+	stats := &historyStats{}
+	decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":null,"error":null}`), false, false, stats)
+	if stats.unsupported != 1 {
+		t.Fatalf("unsupported = %d, want 1", stats.unsupported)
+	}
+}
+func TestRenderTranscriptDoesNotPartiallyTruncateToolTail(t *testing.T) {
+	entries := []transcriptEntry{{kind: entryUser, text: "hi"}, toolEntry("deploy", strings.Repeat("o", 3000))}
+	if _, ok := renderTranscript(entries, 1500); ok {
+		t.Fatal("a tool entry that cannot fit whole must abort rather than be cut")
+	}
+}
