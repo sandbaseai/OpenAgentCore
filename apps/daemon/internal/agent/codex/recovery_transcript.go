@@ -114,17 +114,20 @@ func decodeUserParts(raw json.RawMessage) []userPart {
 // first user message. It returns the transcript that message carried; the
 // request that followed it is the Turn's own input.
 func splitRecoveredInput(parts []userPart) (carried string, current []userPart, ok bool) {
-	if len(parts) == 0 || !strings.HasPrefix(parts[0].text, recoveryPreambleMarker) {
+	if len(parts) == 0 {
 		return "", nil, false
 	}
+	// Only the exact shape planRecovery emits counts as carried history: the full
+	// preamble first, and the history closed by the request marker line. Anything
+	// else that merely starts with the marker is ordinary user text and is escaped.
+	const opening = recoveryPreamble + recoveryHistoryOpen + "\n"
+	const closing = "\n" + recoveryHistoryClose + "\n" + recoveryRequestMarker + "\n"
 	head := parts[0].text
-	open := strings.Index(head, recoveryHistoryOpen+"\n")
-	closing := strings.LastIndex(head, "\n"+recoveryHistoryClose)
-	if open < 0 || closing < open+len(recoveryHistoryOpen)+1 {
+	if !strings.HasPrefix(head, opening) || !strings.HasSuffix(head, closing) || len(head) < len(opening)+len(closing) {
 		return "", nil, false
 	}
 	// A forged earlier message can embed raw delimiters; legitimate carried text never does.
-	carried = neutralizeDelimiters(head[open+len(recoveryHistoryOpen)+1 : closing])
+	carried = neutralizeDelimiters(head[len(opening) : len(head)-len(closing)])
 	current = parts[1:]
 	if n := len(current); n > 0 && strings.HasPrefix(strings.TrimLeft(current[n-1].text, "\n"), recoveryContinueMarker) {
 		current = current[:n-1]
