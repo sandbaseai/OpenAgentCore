@@ -323,7 +323,8 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// An unfinished call may complete after the snapshot and repeat its effect.
-		if item.Result == nil && (strings.TrimSpace(string(item.Error)) == "" || strings.TrimSpace(string(item.Error)) == "null") && nonterminalStatus(item.Status) {
+		// Populated outcome fields do not make an explicitly active call terminal.
+		if item.Status != "" && nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}
