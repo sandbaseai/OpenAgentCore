@@ -487,9 +487,9 @@ func (r *Result) mergeDone(raw json.RawMessage, terminal bool) error {
 }
 
 // recoveriesWithinPolicy reports whether the records respect the attempt
-// budget and enabled classes of the policy Core sent.
+// budget (every admission, including a final abort) and enabled classes of the policy Core sent.
 func recoveriesWithinPolicy(recoveries []proto.UpstreamRecovery, policy proto.UpstreamRecoveryControls) bool {
-	if !policy.Enabled || proto.RecoveryAttemptCount(recoveries) > policy.MaxAttempts {
+	if !policy.Enabled || len(recoveries) > policy.MaxAttempts {
 		return false
 	}
 	for _, record := range recoveries {

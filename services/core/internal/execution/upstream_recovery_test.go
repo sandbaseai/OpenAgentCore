@@ -399,6 +399,7 @@ func TestRecoveriesMustStayWithinSelectedPolicy(t *testing.T) {
 	}
 	second := recoveryRecord(proto.RecoveryOutcomeRecovered)
 	second["attempt"] = 2
+	second["fingerprint"] = proto.FingerprintModelNoImageInput
 	second["old_native_session_id"] = recoveryOldThread
 	first := recoveryRecord(proto.RecoveryOutcomeExhausted)
 	first["new_native_session_id"] = "019e0000-0000-7000-8000-000000000003"
@@ -420,5 +421,17 @@ func TestRecoveriesMustStayWithinSelectedPolicy(t *testing.T) {
 		if kept := result.Recoveries != nil; kept != test.keep || result.recoveriesDropped == test.keep {
 			t.Fatalf("%s: %+v", name, result)
 		}
+	}
+}
+
+func TestAbortAfterExhaustedBudgetIsDropped(t *testing.T) {
+	policy := proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}.Normalized()
+	first := recoveryRecord(proto.RecoveryOutcomeExhausted)
+	result := Result{recoveryPolicy: &policy}
+	if err := result.mergeObservation(doneWithRecoveries(t, []any{first, abortedAfterSwitch(proto.RecoveryAbortReasons()[0])})); err != nil {
+		t.Fatal(err)
+	}
+	if result.Recoveries != nil || !result.recoveriesDropped {
+		t.Fatalf("abort beyond budget kept: %+v", result)
 	}
 }

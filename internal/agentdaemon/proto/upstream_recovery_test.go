@@ -186,3 +186,30 @@ func TestExecutionControlsOmitUpstreamRecoveryUnlessSet(t *testing.T) {
 		t.Fatal(string(raw))
 	}
 }
+
+func TestParseUpstreamRecoveriesRejectsImpossibleSequences(t *testing.T) {
+	const a, b, c = "019e0000-0000-7000-8000-00000000000a", "019e0000-0000-7000-8000-00000000000b", "019e0000-0000-7000-8000-00000000000c"
+	rec := func(fp string, attempt int, outcome, old, next string) map[string]any {
+		r := map[string]any{"fingerprint": fp, "action": RecoveryActionRebuildThread, "attempt": attempt, "outcome": outcome,
+			"dropped": map[string]any{"reasoning_items": 0, "images": 0}, "old_native_session_id": old}
+		if next != "" {
+			r["new_native_session_id"] = next
+		}
+		if outcome == RecoveryOutcomeAborted {
+			r["reason"] = recoveryAbortReasons[0]
+		}
+		return r
+	}
+	cases := map[string][]any{
+		"aborted repeats fingerprint": {rec(FingerprintTrailingModelTurn, 1, RecoveryOutcomeExhausted, a, b), rec(FingerprintTrailingModelTurn, 0, RecoveryOutcomeAborted, b, "")},
+		"target reuses earlier id":    {rec(FingerprintTrailingModelTurn, 1, RecoveryOutcomeExhausted, a, b), rec(FingerprintModelNoImageInput, 2, RecoveryOutcomeRecovered, b, a)},
+	}
+	for name, entries := range cases {
+		if _, ok := ParseUpstreamRecoveries(entries); ok {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	if _, ok := ParseUpstreamRecoveries([]any{rec(FingerprintTrailingModelTurn, 1, RecoveryOutcomeExhausted, a, b), rec(FingerprintModelNoImageInput, 2, RecoveryOutcomeRecovered, b, c)}); !ok {
+		t.Fatal("valid chain rejected")
+	}
+}

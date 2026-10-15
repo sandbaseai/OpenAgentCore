@@ -192,6 +192,7 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 	attempts := 0
 	previousNew := ""
 	seen := map[string]bool{}
+	usedIDs := map[string]bool{}
 	for i, entry := range entries {
 		if !entry.valid() {
 			return nil, false
@@ -206,12 +207,24 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 		if previousNew != "" && entry.OldNativeSessionID != previousNew {
 			return nil, false
 		}
+		// The adapter permits each fingerprint one recovery admission per Turn,
+		// aborted ones included.
+		if seen[entry.Fingerprint] {
+			return nil, false
+		}
+		seen[entry.Fingerprint] = true
+		// A thread already used as a source or target cannot be reused.
+		if usedIDs[entry.OldNativeSessionID] && entry.OldNativeSessionID != previousNew {
+			return nil, false
+		}
+		if entry.NewNativeSessionID != "" && usedIDs[entry.NewNativeSessionID] {
+			return nil, false
+		}
+		usedIDs[entry.OldNativeSessionID] = true
+		if entry.NewNativeSessionID != "" {
+			usedIDs[entry.NewNativeSessionID] = true
+		}
 		if entry.Attempt != 0 {
-			// The adapter permits each fingerprint one recovery per Turn.
-			if seen[entry.Fingerprint] {
-				return nil, false
-			}
-			seen[entry.Fingerprint] = true
 			attempts++
 			if entry.Attempt != attempts {
 				return nil, false
