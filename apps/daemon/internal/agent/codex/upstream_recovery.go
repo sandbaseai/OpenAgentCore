@@ -397,6 +397,14 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 		Turn Turn `json:"turn"`
 	}
 	_ = json.Unmarshal(raw, &res)
+	// A cancellation can win the race against this reply: bindTurnResult then
+	// leaves the new Turn unbound. Treat that as ambiguous instead of acknowledged.
+	s.steering.mu.Lock()
+	bound := s.steering.id == res.Turn.ID
+	s.steering.mu.Unlock()
+	if !bound {
+		return errors.New("codex: recovery turn was not bound to the session")
+	}
 	run.set(func() { run.newTurnID, run.acked = res.Turn.ID, true })
 	newThreadID, _, _, _ := run.get()
 

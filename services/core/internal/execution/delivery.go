@@ -80,7 +80,11 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 		finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cleanupStarted := time.Now()
+		recoveriesBefore, droppedBefore := len(result.Recoveries), result.recoveriesDropped
 		drainErr := journal.drain(upstream, &result)
+		if len(result.Recoveries) != recoveriesBefore || result.recoveriesDropped != droppedBefore {
+			observeUpstreamRecoveries(ctx, sessionID, runID, result)
+		}
 		observeExecutionStage(ctx, "delivery_final_drain", cleanupStarted, drainErr, "session_id", sessionID, "turn_id", runID)
 		if drainErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed

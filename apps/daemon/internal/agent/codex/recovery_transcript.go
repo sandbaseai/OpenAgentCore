@@ -74,6 +74,9 @@ type historyStats struct {
 	reasoning  int
 	images     int
 	toolImages int
+	// unsupported counts history items that could not be rendered (unknown type
+	// or unexpected shape); a transcript missing them cannot be trusted.
+	unsupported int
 }
 
 type userPart struct {
@@ -159,6 +162,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 		Type string `json:"type"`
 	}
 	if json.Unmarshal(raw, &head) != nil {
+		stats.unsupported++
 		return nil
 	}
 	switch head.Type {
@@ -180,7 +184,11 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 		var item struct {
 			Text string `json:"text"`
 		}
-		if json.Unmarshal(raw, &item) != nil || item.Text == "" {
+		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
+			return nil
+		}
+		if item.Text == "" {
 			return nil
 		}
 		return []transcriptEntry{{kind: entryAssistant, text: escapeTranscript(item.Text)}}
@@ -194,6 +202,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			ExitCode *int   `json:"exitCode"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
 			return nil
 		}
 		call := "command: " + item.Command
@@ -208,6 +217,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			} `json:"changes"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
 			return nil
 		}
 		var paths []string
@@ -225,6 +235,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			} `json:"result"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
 			return nil
 		}
 		entry := toolEntry("tool: "+item.Server+"/"+item.Tool+" "+string(item.Arguments), "")
@@ -239,6 +250,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			ContentItems []rawContent    `json:"contentItems"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
 			return nil
 		}
 		return []transcriptEntry{toolEntry("tool: "+item.Tool+" "+string(item.Arguments), toolContent(item.ContentItems, stats))}
@@ -247,6 +259,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			Query string `json:"query"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
 			return nil
 		}
 		return []transcriptEntry{toolEntry("web search: "+item.Query, "")}
@@ -263,6 +276,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 		}
 		return []transcriptEntry{toolEntry("image: "+head.Type, output)}
 	}
+	stats.unsupported++
 	return nil
 }
 
@@ -452,6 +466,11 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 	history, tail, found := partitionHistory(turns, failedTurnID, &stats)
 	if !found {
 		// A stale or partial history may omit the failed Turn's completed effects.
+		return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
+	}
+	// An item this build cannot render may be a completed side effect; rebuilding
+	// without it could repeat that action.
+	if stats.unsupported > 0 {
 		return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
 	}
 	// A user message after the Turn's own input is an acknowledged steer. It is a

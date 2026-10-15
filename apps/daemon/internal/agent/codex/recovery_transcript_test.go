@@ -74,7 +74,6 @@ func TestTranscriptRendering(t *testing.T) {
 			item("mcpToolCall", map[string]any{"server": "s", "tool": "t", "arguments": map[string]any{"q": 1}, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}, map[string]any{"type": "image", "data": "CANARY_BASE64"}}}}),
 			item("fileChange", map[string]any{"changes": []any{map[string]any{"path": "a.go", "diff": "SECRET_DIFF"}}}),
 			item("webSearch", map[string]any{"query": "weather"}),
-			item("somethingNew", map[string]any{"text": "unknown shapes are skipped"}),
 		}},
 		{ID: oldTurn, Items: []json.RawMessage{userItem(text("current request"))}},
 	}, oldTurn, proto.TextInput("current request"), 100000)
@@ -92,7 +91,7 @@ func TestTranscriptRendering(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
-	for _, banned := range []string{canaryReasoning, canaryImageData, "CANARY_BASE64", "SECRET_DIFF", "unknown shapes", "data:image", "https://"} {
+	for _, banned := range []string{canaryReasoning, canaryImageData, "CANARY_BASE64", "SECRET_DIFF", "data:image", "https://"} {
 		if strings.Contains(got, banned) {
 			t.Fatalf("transcript carries %q", banned)
 		}
@@ -340,5 +339,23 @@ func TestPlanRecoveryAbortsWhenFailedTurnHasAcknowledgedSteer(t *testing.T) {
 	}, oldTurn, proto.TextInput("start"), 100000)
 	if reason != proto.RecoveryAbortNotApplicable {
 		t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortNotApplicable)
+	}
+}
+
+func TestPlanRecoveryRejectsUnrecognizedHistoryItems(t *testing.T) {
+	for name, bad := range map[string]json.RawMessage{
+		"unknown type":    item("somethingNew", map[string]any{"text": "x"}),
+		"malformed shape": item("commandExecution", map[string]any{"command": 5}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			history := []historyTurn{
+				{ID: "t1", Items: []json.RawMessage{userItem(text("q")), item("reasoning", map[string]any{}), bad}},
+				{ID: oldTurn, Items: []json.RawMessage{userItem(text("current request"))}},
+			}
+			_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, history, oldTurn, proto.TextInput("current request"), 100000)
+			if reason != proto.RecoveryAbortHistoryUnreadable {
+				t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortHistoryUnreadable)
+			}
+		})
 	}
 }
