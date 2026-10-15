@@ -211,6 +211,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 	case "commandExecution":
 		var item struct {
 			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
 			Output   string `json:"aggregatedOutput"`
 			ExitCode *int   `json:"exitCode"`
 			Status   string `json:"status"`
@@ -235,7 +236,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			// command finished, so it is not repeated or assumed complete.
 			outcome = " (status: " + escapeTranscript(item.Status) + ")"
 		}
-		call := "command" + outcome + ": " + item.Command
+		call := "command" + outcome
+		if item.Cwd != "" {
+			// The working directory decides which filesystem object a relative command touched.
+			call += " (cwd: " + escapeTranscript(item.Cwd) + ")"
+		}
+		call += ": " + item.Command
 		if callExceedsBudget(call) {
 			// A truncated command could hide the resource a completed side effect touched.
 			stats.unsupported++
@@ -312,6 +318,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		return []transcriptEntry{entry}
 	case "dynamicToolCall":
 		var item struct {
+			Namespace    string          `json:"namespace"`
 			Tool         string          `json:"tool"`
 			Arguments    json.RawMessage `json:"arguments"`
 			ContentItems []rawContent    `json:"contentItems"`
@@ -338,7 +345,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if len(outcome) > 0 {
 			out = strings.TrimSpace(strings.Join(outcome, ", ") + "\n" + out)
 		}
-		dynCall := "tool: " + item.Tool + " " + string(item.Arguments)
+		dynName := item.Tool
+		if item.Namespace != "" {
+			// Two namespaces may expose the same tool name.
+			dynName = item.Namespace + "/" + item.Tool
+		}
+		dynCall := "tool: " + dynName + " " + string(item.Arguments)
 		if callExceedsBudget(dynCall) {
 			stats.unsupported++
 			return nil
@@ -449,6 +461,11 @@ func partitionHistory(turns []historyTurn, failedTurnID string, stats *historySt
 	for _, turn := range turns {
 		if failedTurnID != "" && turn.ID == failedTurnID {
 			first := true
+			if !failedTurnStartsWithUser(turn.Items) {
+				// The first message carries earlier recovery history; without it
+				// completed side effects could be lost.
+				stats.unsupported++
+			}
 			for _, raw := range turn.Items {
 				var head struct {
 					Type string `json:"type"`
@@ -682,4 +699,15 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 	// The input ends with user content, which also avoids a trailing model turn.
 	native = append(native, UserInput{Type: UserInputText, Text: "\n\n" + recoveryContinuation})
 	return recoveryInput{native: native, dropped: proto.RecoveryDropped{ReasoningItems: stats.reasoning, Images: stats.images}}, ""
+}
+
+// failedTurnStartsWithUser reports whether a Turn's first item is a userMessage.
+func failedTurnStartsWithUser(items []json.RawMessage) bool {
+	if len(items) == 0 {
+		return false
+	}
+	var head struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(items[0], &head) == nil && head.Type == "userMessage"
 }

@@ -191,7 +191,9 @@ func TestAbandonedRecoveryMatchesTheRunWithoutRecovery(t *testing.T) {
 		setup  func(f *recoveryFixture)
 	}{
 		{"history unreadable", proto.RecoveryAbortHistoryUnreadable, func(f *recoveryFixture) { f.reader.err = context.DeadlineExceeded }},
-		{"history has nothing to drop", proto.RecoveryAbortNotApplicable, func(f *recoveryFixture) { f.reader.turns = []historyTurn{{ID: oldTurn, Status: "failed"}} }},
+		{"history has nothing to drop", proto.RecoveryAbortNotApplicable, func(f *recoveryFixture) {
+			f.reader.turns = []historyTurn{{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("request"))}}}
+		}},
 		{"thread/start refused", proto.RecoveryAbortThreadStartFailed, func(f *recoveryFixture) { f.native.fail["thread/start"] = "no capacity" }},
 		{"thread/start timeout", proto.RecoveryAbortThreadStartFailed, hold("thread/start")},
 		{"turn/start refused", proto.RecoveryAbortTurnStartFailed, func(f *recoveryFixture) { f.native.fail["turn/start"] = "rejected" }},
