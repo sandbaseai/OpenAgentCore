@@ -328,10 +328,11 @@ func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.R
 		return err
 	}
 	router, err := dispatch.New(dispatch.Config{
-		Registry:       registry,
-		Sender:         conn,
-		Log:            obslog.Bg(),
-		LocalWorkspace: local,
+		Registry:         registry,
+		Sender:           conn,
+		Log:              obslog.Bg(),
+		LocalWorkspace:   local,
+		UpstreamRecovery: conn.UpstreamRecovery(),
 	})
 	if err != nil {
 		return fmt.Errorf("router init: %w", err)

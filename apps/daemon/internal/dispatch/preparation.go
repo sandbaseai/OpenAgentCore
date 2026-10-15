@@ -45,6 +45,9 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 		return r.rejectPreparation(env, "invalid_request")
 	}
 	req := input.Configuration
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && !r.upstreamRecovery {
+		return r.rejectPreparation(env, "unsupported_configuration")
+	}
 	if !req.WorkspaceReadOnly {
 		return r.handleExecutorPrepare(ctx, env, input)
 	}

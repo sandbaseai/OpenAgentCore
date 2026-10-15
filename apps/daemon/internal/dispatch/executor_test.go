@@ -319,6 +319,18 @@ func TestExecutorRejectsUnsupportedConfigurationBeforeFactory(t *testing.T) {
 	}
 }
 
+func TestExecutionPrepareRejectsRecoveryControlsWithoutNegotiation(t *testing.T) {
+	r, s, calls := executorRouter(t, &reusableExecutor{}, time.Minute)
+	req := executorRequest()
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted without negotiated extension")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" || calls.Load() != 0 {
+		t.Fatalf("status=%+v factory calls=%d", status, calls.Load())
+	}
+}
+
 func TestExecutorRejectsOutputFromAnotherTurn(t *testing.T) {
 	e := &reusableExecutor{starts: make(chan *reusableTurn, 1)}
 	r, s, _ := executorRouter(t, e, time.Minute)

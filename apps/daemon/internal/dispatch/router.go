@@ -52,6 +52,7 @@ type Router struct {
 	workspaceExport     *workspaceExport
 	workspaceReads      map[string]struct{}
 	localWorkspace      *localworkspace.Binding
+	upstreamRecovery    bool
 }
 
 type appliedFunctionResult struct {
@@ -87,6 +88,9 @@ type Config struct {
 	IdleTimeout        time.Duration
 	PreparationTimeout time.Duration
 	LocalWorkspace     *localworkspace.Binding
+	// UpstreamRecovery records that the connection negotiated the upstream
+	// recovery extension; prepare requests carrying its controls are rejected otherwise.
+	UpstreamRecovery bool
 }
 
 const defaultIdleTimeout = time.Hour
@@ -126,6 +130,7 @@ func New(cfg Config) (*Router, error) {
 		preparationRequests: make(map[string]*preparationState),
 		preparationTimeout:  preparationTimeout,
 		localWorkspace:      cfg.LocalWorkspace,
+		upstreamRecovery:    cfg.UpstreamRecovery,
 	}, nil
 }
 
