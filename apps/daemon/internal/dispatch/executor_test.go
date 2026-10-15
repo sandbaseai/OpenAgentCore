@@ -23,6 +23,7 @@ type reusableExecutor struct {
 	mu       sync.Mutex
 	closeErr error
 	startErr error
+	policies []*proto.UpstreamRecoveryControls
 }
 
 func (e *reusableExecutor) Close(context.Context) error {
@@ -38,6 +39,13 @@ func (e *reusableExecutor) StartTurn(_ context.Context, id string, _ proto.Messa
 	t := &reusableTurn{id: id, out: out, settled: make(chan struct{})}
 	e.starts <- t
 	return t, nil
+}
+
+// SetUpstreamRecovery records the policy Core sent with the latest prepare.
+func (e *reusableExecutor) SetUpstreamRecovery(c *proto.UpstreamRecoveryControls) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.policies = append(e.policies, c)
 }
 
 type reusableTurn struct {
@@ -487,5 +495,50 @@ func TestRouterSetUpstreamRecoveryRefreshesSelection(t *testing.T) {
 	r.SetUpstreamRecovery(false)
 	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
 		t.Fatal("recovery controls accepted while unselected")
+	}
+}
+
+func TestRetainedOwnerReceivesCurrentRecoveryPolicy(t *testing.T) {
+	owner := &reusableExecutor{starts: make(chan *reusableTurn, 4)}
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, NativeSessionRecovery: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return owner, nil
+	})
+	sender := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: sender, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	on := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}
+	changed := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 2, Classes: []string{proto.RecoveryClassImageInput}}
+	// on -> off -> on -> changed: none of the policy changes may conflict with the retained owner.
+	steps := []*proto.UpstreamRecoveryControls{on, nil, on, changed}
+	for i, policy := range steps {
+		req := executorRequest()
+		req.Configuration.AgentKind = "codex"
+		if policy != nil {
+			req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: policy}
+		}
+		key := fmt.Sprintf("step-%d", i)
+		if i > 0 {
+			req.Configuration.AgentSessionID = "native-session"
+		}
+		status := executorAdmission(t, r, sender, key, req)
+		if (i > 0) != status.Reused {
+			t.Fatalf("step %d reuse = %v", i, status.Reused)
+		}
+		startExecutorTurn(t, r, sender, key, fmt.Sprintf("turn-%d", i), status)
+		(<-owner.starts).finish()
+		waitFor(t, func() bool { return r.ActiveRuns() == 0 }, "Turn settled")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	// The first prepare creates the owner with the policy; each reuse then applies the one Core sent.
+	if len(owner.policies) != 3 || owner.policies[0] != nil || owner.policies[1] == nil || owner.policies[1].MaxAttempts != 1 || owner.policies[2] == nil || owner.policies[2].MaxAttempts != 2 || len(owner.policies[2].Classes) != 1 {
+		t.Fatalf("applied policies = %+v", owner.policies)
+	}
+	if owner.closes.Load() != 0 {
+		t.Fatal("policy change retired the owner")
 	}
 }
