@@ -34,7 +34,8 @@ func (r rpcHistoryReader) call(ctx context.Context, method string, args, result 
 	return json.Unmarshal(raw, result)
 }
 
-// maxHistoryBytes bounds the raw item bytes retained across all pages.
+// maxHistoryBytes bounds the retained bytes (items and Turn metadata strings)
+// across all pages.
 const maxHistoryBytes = 64 * 1024 * 1024
 
 // historyPageLimit keeps each response well below rpcStdoutBufferMax.
@@ -83,6 +84,7 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 			if turn.ID == "" || turn.ItemsView != "full" {
 				return nil, errors.New("codex: thread history incomplete")
 			}
+			total += len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
 			for _, item := range turn.Items {
 				total += len(item)
 			}

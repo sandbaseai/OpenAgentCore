@@ -501,8 +501,13 @@ func toolEntry(call, output string) transcriptEntry {
 // and the Turn's own input is not part of the transcript. It also reports the
 // last entry kind of T, which the trailing-assistant check reads.
 func partitionHistory(turns []historyTurn, failedTurnID string, stats *historyStats) (history, tail []transcriptEntry, found bool) {
-	for _, turn := range turns {
+	for idx, turn := range turns {
 		if failedTurnID != "" && turn.ID == failedTurnID {
+			if idx != len(turns)-1 {
+				// Later Turns may hold completed side effects the rebuilt model
+				// would repeat; the failed Turn must be the last one.
+				return nil, nil, false
+			}
 			first := true
 			if !failedTurnStartsWithUser(turn.Items) {
 				// The first message carries earlier recovery history; without it
