@@ -164,9 +164,22 @@ func (u TurnUsage) completeTokens() bool {
 }
 
 func (s *Session) usagePayload(u TurnUsage) proto.Usage {
-	result := proto.Usage{Provider: "openai", Model: s.resolvedModel, InputTokens: int32(u.InputTokens), OutputTokens: int32(u.OutputTokens)}
+	result := proto.Usage{Provider: "openai", Model: s.model(), InputTokens: int32(u.InputTokens), OutputTokens: int32(u.OutputTokens)}
 	if u.completeTokens() {
 		result.Tokens = &proto.TokenUsage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens), CachedInputTokens: int64(u.CachedInputTokens), ReasoningOutputTokens: int64(u.ReasoningOutputTokens), TotalTokens: int64(u.TotalTokens)}
 	}
 	return result
+}
+
+// model returns the resolved model; safe against a concurrent recovery rebind.
+func (s *Session) model() string {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.resolvedModel
+}
+
+func (s *Session) setModel(m string) {
+	s.modelMu.Lock()
+	s.resolvedModel = m
+	s.modelMu.Unlock()
 }

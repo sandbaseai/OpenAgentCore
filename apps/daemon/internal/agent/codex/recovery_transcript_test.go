@@ -68,8 +68,8 @@ func TestTranscriptWebSearchActions(t *testing.T) {
 		{ID: "t1", Status: "completed", Items: []json.RawMessage{
 			userItem(text("q")),
 			item("reasoning", map[string]any{"encryptedContent": canaryReasoning}),
-			item("webSearch", map[string]any{"query": "", "action": map[string]any{"type": "openPage", "url": "https://example.com/p"}}),
-			item("webSearch", map[string]any{"query": "", "action": map[string]any{"type": "findInPage", "url": "https://example.com/p", "pattern": "needle"}}),
+			item("webSearch", map[string]any{"query": "", "status": "completed", "action": map[string]any{"type": "openPage", "url": "https://example.com/p"}}),
+			item("webSearch", map[string]any{"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "https://example.com/p", "pattern": "needle"}}),
 		}},
 		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
 	}, oldTurn, proto.TextInput("current request"), 100000)
@@ -100,7 +100,7 @@ func TestTranscriptRendering(t *testing.T) {
 			userItem(text("see"), map[string]any{"type": "localImage", "path": "/work/a.png"}, map[string]any{"type": "image", "url": canaryImageData}),
 			item("mcpToolCall", map[string]any{"server": "s", "tool": "t", "arguments": map[string]any{"q": 1}, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}, map[string]any{"type": "image", "data": "CANARY_BASE64"}}}}),
 			item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": "a.go", "diff": "SECRET_DIFF"}}}),
-			item("webSearch", map[string]any{"query": "weather"}),
+			item("webSearch", map[string]any{"query": "weather", "status": "completed"}),
 		}},
 		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
 	}, oldTurn, proto.TextInput("current request"), 100000)
@@ -633,14 +633,15 @@ func TestCommandCwdAndToolNamespaceAreRendered(t *testing.T) {
 
 func TestDecodeItemRecoveryRejectsUnsafeHistory(t *testing.T) {
 	cases := map[string]map[string]any{
-		"running command":     {"type": "commandExecution", "command": "make", "status": "inProgress"},
-		"nameless dynamic":    {"type": "dynamicToolCall", "status": "completed", "arguments": map[string]any{}},
-		"running file change": {"type": "fileChange", "status": "inProgress", "changes": []map[string]any{{"path": "a.go"}}},
-		"running mcp":         {"type": "mcpToolCall", "server": "s", "tool": "t", "status": "inProgress"},
-		"running dynamic":     {"type": "dynamicToolCall", "tool": "t", "status": "inProgress"},
-		"running web search":  {"type": "webSearch", "query": "q", "status": "inProgress"},
-		"queued web search":   {"type": "webSearch", "query": "q", "status": "queued"},
-		"huge file change":    {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
+		"running command":       {"type": "commandExecution", "command": "make", "status": "inProgress"},
+		"nameless dynamic":      {"type": "dynamicToolCall", "status": "completed", "arguments": map[string]any{}},
+		"running file change":   {"type": "fileChange", "status": "inProgress", "changes": []map[string]any{{"path": "a.go"}}},
+		"running mcp":           {"type": "mcpToolCall", "server": "s", "tool": "t", "status": "inProgress"},
+		"running dynamic":       {"type": "dynamicToolCall", "tool": "t", "status": "inProgress"},
+		"running web search":    {"type": "webSearch", "query": "q", "status": "inProgress"},
+		"queued web search":     {"type": "webSearch", "query": "q", "status": "queued"},
+		"statusless web search": {"type": "webSearch", "query": "q"},
+		"huge file change":      {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
 	}
 	for name, m := range cases {
 		var stats historyStats

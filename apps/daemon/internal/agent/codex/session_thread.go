@@ -92,7 +92,7 @@ func (s *Session) bindThreadResult(raw json.RawMessage, expectedID string) error
 	}
 	s.setThreadID(res.Thread.ID)
 	if res.Model != "" {
-		s.resolvedModel = res.Model
+		s.setModel(res.Model)
 	}
 	return nil
 }

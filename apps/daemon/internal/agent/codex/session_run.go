@@ -50,7 +50,7 @@ func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.P
 
 // collaborationMode derives the per-Turn collaboration settings from the plan.
 func (s *Session) collaborationMode(plan SessionPlan) (*CollaborationMode, error) {
-	model := strings.TrimSpace(s.resolvedModel)
+	model := strings.TrimSpace(s.model())
 	if model == "" {
 		return nil, fmt.Errorf("codex: collaboration mode requires a resolved model")
 	}

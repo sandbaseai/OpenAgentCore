@@ -429,7 +429,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// A search still running may finish after the snapshot; replaying it would repeat the work.
-		if item.Status != "" && nonterminalStatus(item.Status) {
+		if nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}

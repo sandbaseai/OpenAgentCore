@@ -106,6 +106,7 @@ type Session struct {
 	resumeUsageThreadID string
 	resumeUsageTotal    *TurnUsage
 	resolvedModel       string
+	modelMu             sync.RWMutex // guards resolvedModel; leaf lock, never held while taking another
 	// Upstream recovery usage state, guarded by usageMu; see effectiveUsageLocked.
 	usageCarry      *TurnUsage
 	usageSwitched   bool
