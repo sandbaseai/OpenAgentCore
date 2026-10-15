@@ -244,7 +244,8 @@ func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile
 			// tag. proto.VersionCompatible requires an exact version
 			// match against proto.Version. Build-tag reporting goes
 			// in heartbeat's DaemonVersion field.
-			DaemonVersion: proto.Version,
+			DaemonVersion:    proto.Version,
+			UpstreamRecovery: agentCLIs.supportsUpstreamRecovery(),
 		})
 		observeRuntimeStartup(ctx, "transport_dial", dialStarted, err)
 		if remote != "" && err != nil {

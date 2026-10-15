@@ -41,6 +41,9 @@ type DialOptions struct {
 	// HandshakeTimeout caps WS upgrade wait. Zero → 10s.
 	HandshakeTimeout time.Duration
 
+	// UpstreamRecovery offers the upstream recovery extension; set it only when
+	// an installed Harness can apply the controls.
+	UpstreamRecovery bool
 	// HTTPHeader is appended to the upgrade request. Useful in tests.
 	HTTPHeader http.Header
 }
@@ -114,9 +117,11 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 	}
 	headers.Set("Authorization", "Bearer "+opts.Credential)
 	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
-	// The codex adapter can rebuild a thread after a recoverable upstream 400;
-	// the dispatcher rejects the controls for any other adapter.
-	headers.Set(proto.UpstreamRecoveryHeader, proto.UpstreamRecoveryV1)
+	// Offered only when an installed codex harness can rebuild a thread after a
+	// recoverable upstream 400; otherwise Core must not send recovery controls.
+	if opts.UpstreamRecovery {
+		headers.Set(proto.UpstreamRecoveryHeader, proto.UpstreamRecoveryV1)
+	}
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {
 		// 401/403/426 are operator-fixable and MUST NOT be retried —

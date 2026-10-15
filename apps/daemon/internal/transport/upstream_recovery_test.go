@@ -41,7 +41,7 @@ func TestDialNegotiatesUpstreamRecovery(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			conn, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+			conn, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version, UpstreamRecovery: true})
 			if got := <-offered; got != proto.UpstreamRecoveryV1 {
 				t.Fatalf("offer = %q", got)
 			}
@@ -59,5 +59,26 @@ func TestDialNegotiatesUpstreamRecovery(t *testing.T) {
 				t.Fatalf("selected = %t", conn.UpstreamRecovery())
 			}
 		})
+	}
+}
+
+func TestDialOmitsUpstreamRecoveryWithoutCapableHarness(t *testing.T) {
+	offered := make(chan []string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offered <- r.Header.Values(proto.UpstreamRecoveryHeader)
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err == nil {
+			defer c.Close()
+			_, _, _ = c.ReadMessage()
+		}
+	}))
+	defer srv.Close()
+	conn, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := <-offered; len(got) != 0 {
+		t.Fatalf("offer = %v", got)
 	}
 }

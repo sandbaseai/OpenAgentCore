@@ -58,3 +58,13 @@ func discoverAgentCLIs(parent context.Context, rc *runContext, profile string, d
 	}
 	return out, nil
 }
+
+// supportsUpstreamRecovery reports whether an available codex Harness can apply recovery controls.
+func (d agentCLIDiscovery) supportsUpstreamRecovery() bool {
+	for _, h := range d {
+		if h.runtime.Info.Kind == "codex" && h.runtime.Info.Available && h.runtime.Info.Capabilities.NativeSessionRecovery.IsSupported() {
+			return true
+		}
+	}
+	return false
+}

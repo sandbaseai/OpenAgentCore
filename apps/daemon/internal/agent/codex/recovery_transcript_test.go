@@ -91,6 +91,8 @@ func TestTranscriptWebSearchActions(t *testing.T) {
 	}
 	for name, search := range map[string]map[string]any{
 		"no query or action":   {"query": "", "status": "completed"},
+		"blank open page url":  {"query": "", "status": "completed", "action": map[string]any{"type": "openPage", "url": " "}},
+		"blank find in page":   {"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "", "pattern": ""}},
 		"search without query": {"query": "", "status": "completed", "action": map[string]any{"type": "search"}},
 	} {
 		_, reason = planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{

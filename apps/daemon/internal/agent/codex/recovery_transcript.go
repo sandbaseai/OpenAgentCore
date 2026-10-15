@@ -495,13 +495,13 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if a := item.Action; a != nil {
 			switch a.Type {
 			case "openPage", "open_page":
-				if a.URL == nil {
+				if a.URL == nil || strings.TrimSpace(*a.URL) == "" {
 					stats.unsupported++
 					return nil
 				}
 				call = "web search: open page " + escapeTranscript(*a.URL)
 			case "findInPage", "find_in_page":
-				if a.URL == nil && a.Pattern == nil {
+				if (a.URL == nil || strings.TrimSpace(*a.URL) == "") && (a.Pattern == nil || strings.TrimSpace(*a.Pattern) == "") {
 					stats.unsupported++
 					return nil
 				}
