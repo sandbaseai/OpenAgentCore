@@ -82,8 +82,8 @@ func (d *Dispatcher) applyUpstreamRecovery(req *proto.PromptRequestPayload, peer
 
 func withUpstreamRecovery(req *proto.PromptRequestPayload, policy proto.UpstreamRecoveryControls, selected bool) {
 	// Only the codex Harness applies recovery; the daemon rejects the block for
-	// every other Harness, so it must not be offered on a shared Runtime.
-	if !policy.Enabled || !selected || req.ExecutionControls == nil || req.AgentKind != upstreamRecoveryAgentKind {
+	// every other Harness and for multi-agent Turns, so it must not be offered on a shared Runtime.
+	if !policy.Enabled || !selected || req.ExecutionControls == nil || req.AgentKind != upstreamRecoveryAgentKind || req.ObserveSubagentIdentities {
 		return
 	}
 	normalized := policy.Normalized()

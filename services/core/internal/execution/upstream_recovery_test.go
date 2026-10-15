@@ -331,6 +331,13 @@ func TestUpstreamRecoveryControlsReachOnlyASelectingPeer(t *testing.T) {
 	if other.ExecutionControls.UpstreamRecovery != nil {
 		t.Fatal("non-codex harness received the block")
 	}
+	// A multi-agent Turn is rejected by the daemon, so it never receives the block.
+	multi := newRequest()
+	multi.ObserveSubagentIdentities = true
+	withUpstreamRecovery(multi, policy, true)
+	if multi.ExecutionControls.UpstreamRecovery != nil {
+		t.Fatal("multi-agent turn received the block")
+	}
 	// A request without controls is left alone.
 	bare := &proto.PromptRequestPayload{}
 	withUpstreamRecovery(bare, policy, true)
