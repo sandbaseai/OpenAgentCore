@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"slices"
@@ -264,6 +265,22 @@ func TestFailedTurnDiagnosticsShowOnlyUnsuccessfulRecoveries(t *testing.T) {
 		return e
 	}
 	outcome := func(code, fingerprint string, recoveries any) json.RawMessage {
+		// Consecutive records must chain: each old ID is the previous record's new ID.
+		if list, ok := recoveries.([]any); ok {
+			prev := ""
+			for i, item := range list {
+				e := item.(map[string]any)
+				if i > 0 && prev != "" {
+					e["old_native_session_id"] = prev
+					if _, has := e["new_native_session_id"]; has {
+						e["new_native_session_id"] = fmt.Sprintf("019e0000-0000-7000-8000-%012d", i+2)
+					}
+				}
+				if v, has := e["new_native_session_id"].(string); has {
+					prev = v
+				}
+			}
+		}
 		o := map[string]any{"error_code": "engine_failed", "error": "raw-secret-canary", "engine_error_code": code, "engine_http_status": 400, "engine_fingerprint": fingerprint}
 		if recoveries != nil {
 			o["recoveries"] = recoveries
