@@ -638,6 +638,7 @@ func TestDecodeItemRecoveryRejectsUnsafeHistory(t *testing.T) {
 		"running file change": {"type": "fileChange", "status": "inProgress", "changes": []map[string]any{{"path": "a.go"}}},
 		"running mcp":         {"type": "mcpToolCall", "server": "s", "tool": "t", "status": "inProgress"},
 		"running dynamic":     {"type": "dynamicToolCall", "tool": "t", "status": "inProgress"},
+		"running web search":  {"type": "webSearch", "query": "q", "status": "inProgress"},
 		"huge file change":    {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
 	}
 	for name, m := range cases {

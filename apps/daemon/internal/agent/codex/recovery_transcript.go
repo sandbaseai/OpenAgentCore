@@ -415,6 +415,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 	case "webSearch":
 		var item struct {
 			Query  string `json:"query"`
+			Status string `json:"status"`
 			Action *struct {
 				Type    string   `json:"type"`
 				Query   *string  `json:"query"`
@@ -424,6 +425,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			} `json:"action"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
+			return nil
+		}
+		// A search still running may finish after the snapshot; replaying it would repeat the work.
+		if strings.EqualFold(item.Status, "inProgress") {
 			stats.unsupported++
 			return nil
 		}
