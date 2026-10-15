@@ -100,8 +100,8 @@ it.each([
 const recoveryParams = { recovery_count: 1, recovery_fingerprints: ["reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted"], recovery_dropped_reasoning_items: 4, recovery_dropped_images: 0 };
 it("projects recovery facts of a failed upstream 400 Turn", () => {
   const code = "model_input_unsupported_image";
-  for (const params of [{ ...upstreamParams, ...recoveryParams }, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary, ...recoveryParams, recovery_count: 0, recovery_outcomes: ["aborted"] },
-    { ...upstreamParams, ...recoveryParams, recovery_count: 1, recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"], recovery_outcomes: ["exhausted", "aborted"] },
+  for (const params of [{ ...upstreamParams, ...recoveryParams }, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary, ...recoveryParams, recovery_count: 0, recovery_fingerprints: [upstreamParams.fingerprint], recovery_outcomes: ["aborted"] },
+    { ...upstreamParams, ...recoveryParams, recovery_count: 1, recovery_fingerprints: ["trailing_model_turn", "model_no_image_input"], recovery_outcomes: ["exhausted", "aborted"] },
     { ...upstreamParams, ...recoveryParams, recovery_count: 2 }]) {
     const failed = { ...failure, code, params };
     expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
@@ -121,6 +121,7 @@ it.each([
   { recovery_outcomes: ["recovered"] },
   { recovery_outcomes: ["exhausted", "aborted"] },
   { recovery_count: 1, recovery_outcomes: ["aborted"] },
+  { recovery_count: 0, recovery_fingerprints: ["reasoning_encrypted_unverifiable"], recovery_outcomes: ["aborted"] },
   { recovery_count: 2, recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"], recovery_outcomes: ["aborted", "exhausted"] },
   { recovery_count: 0, recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"], recovery_outcomes: ["aborted", "aborted"] },
   { recovery_count: 0, recovery_outcomes: ["exhausted"] },

@@ -580,6 +580,13 @@ func TestDecodeItemShortCommandKeepsOutcome(t *testing.T) {
 		t.Fatalf("outcome lost: %+v", entries)
 	}
 }
+func TestDecodeItemFileChangeKeepsMoveDestination(t *testing.T) {
+	var stats historyStats
+	entries := decodeItem(item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": "a.go", "kind": map[string]any{"type": "update", "move_path": "b.go"}}}}), false, false, &stats)
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "a.go -> b.go") {
+		t.Fatalf("move destination lost: %+v", entries)
+	}
+}
 func TestDecodeItemFileChangeKeepsStatusAndRejectsMissing(t *testing.T) {
 	var stats historyStats
 	entries := decodeItem(item("fileChange", map[string]any{"status": "failed", "changes": []any{map[string]any{"path": "a.go"}}}), false, false, &stats)

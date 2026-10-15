@@ -323,6 +323,9 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Status  string `json:"status"`
 			Changes boundedList[struct {
 				Path string `json:"path"`
+				Kind struct {
+					MovePath string `json:"move_path"`
+				} `json:"kind"`
 			}] `json:"changes"`
 		}
 		if json.Unmarshal(raw, &item) != nil || item.Status == "" {
@@ -336,6 +339,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 				// A change without a path cannot say which file was already edited.
 				stats.unsupported++
 				return nil
+			}
+			if mp := strings.TrimSpace(c.Kind.MovePath); mp != "" {
+				// A rename must name its destination so the model sees the resulting file.
+				paths = append(paths, c.Path+" -> "+mp)
+				continue
 			}
 			paths = append(paths, c.Path)
 		}

@@ -98,6 +98,8 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
     const exhausted = outcomes.filter((item) => item === "exhausted").length, aborted = outcomes.length - exhausted;
     if (aborted > 1 || (aborted === 1 && outcomes[outcomes.length - 1] !== "aborted") ||
         (aborted === 1 ? p.recovery_count !== exhausted : p.recovery_count !== exhausted && p.recovery_count !== exhausted + 1)) return invalidAdminResponse();
+    // An abort settles the failure that triggered it, so its fingerprint is the base upstream fingerprint.
+    if (aborted === 1 && isOneOf(upstreamRejectionCodes, value.code) && (params as { fingerprint?: unknown }).fingerprint !== fingerprints[fingerprints.length - 1]) return invalidAdminResponse();
     params = { ...(params as object), recovery_count: p.recovery_count as number, recovery_fingerprints: fingerprints as RecoverableUpstreamFingerprint[], recovery_outcomes: outcomes as ("exhausted" | "aborted")[],
       recovery_dropped_reasoning_items: p.recovery_dropped_reasoning_items as number, recovery_dropped_images: p.recovery_dropped_images as number } as DiagnosticFailure["params"];
   }
