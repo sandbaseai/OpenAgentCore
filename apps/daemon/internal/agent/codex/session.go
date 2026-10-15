@@ -381,6 +381,7 @@ func (s *Session) emitDoneAt(content string, usage *TurnUsage, completedAt *int6
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.recordInflightRecoveryAbort()
 	s.attachRecoveries(doneMeta, false)
 	payload := proto.DonePayload{Content: content, Metadata: doneMeta, SourceCompletedAtMS: completedAt}
 	if usage != nil {
@@ -446,6 +447,7 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.recordInflightRecoveryAbort()
 	s.attachRecoveries(doneMeta, asError)
 	payload := proto.DonePayload{
 		Content:  message,

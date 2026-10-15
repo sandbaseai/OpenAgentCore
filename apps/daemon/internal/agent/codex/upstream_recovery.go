@@ -84,6 +84,9 @@ type recoverySnapshot struct {
 	usageInRecovery bool
 	usageSwitched   bool
 	resolvedModel   string
+	fingerprint     string
+	// recorded is guarded by recovery.mu: the attempt already left its record.
+	recorded bool
 }
 
 // recoveryRun is the recovery goroutine's view of one attempt.
@@ -223,7 +226,7 @@ func (s *Session) beginRecovery(p TurnCompletedNotification, fingerprint string)
 		finalText: s.finalText, lastErrText: s.lastErrText,
 		latestUsage: s.latestUsage, usageTotal: s.usageTotal, usageBaseline: s.usageBaseline, usageTurnID: s.usageTurnID,
 		usageCarry: s.usageCarry, usageInRecovery: s.usageInRecovery, usageSwitched: s.usageSwitched,
-		resolvedModel: s.model(),
+		resolvedModel: s.model(), fingerprint: fingerprint,
 	}
 	failed := p.Turn.Usage
 	if failed == nil {
@@ -479,6 +482,7 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 		s.recovery.used = map[string]bool{}
 	}
 	s.recovery.used[run.fingerprint] = true
+	run.snap.recorded = true
 	s.appendRecoveryLocked(proto.UpstreamRecovery{
 		Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: s.recovery.attempts,
 		Outcome: proto.RecoveryOutcomeRecovered, Dropped: dropped,
@@ -559,6 +563,7 @@ func (s *Session) abandonRecovery(run *recoveryRun, reason string) {
 		s.recovery.unconfirmed.Store(true)
 	}
 	s.recovery.mu.Lock()
+	snap.recorded = true
 	s.appendRecoveryLocked(proto.UpstreamRecovery{
 		Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: 0,
 		Outcome: proto.RecoveryOutcomeAborted, Reason: reason, OldNativeSessionID: snap.oldThreadID,
@@ -599,6 +604,24 @@ func (s *Session) interruptBestEffort(threadID, turnID string, timeout time.Dura
 	defer cancel()
 	_, _ = s.rpc.request(ctx, "turn/interrupt", TurnInterruptParams{ThreadID: threadID, TurnID: turnID}, func(frame any) error {
 		return s.rpc.writeFrameContext(ctx, frame)
+	})
+}
+
+// recordInflightRecoveryAbort runs once a terminal won the race against an
+// in-flight recovery (process or stream ended mid-recovery). It records the
+// attempt before Done is emitted; the recovery goroutine then sees the terminal
+// and leaves it alone.
+func (s *Session) recordInflightRecoveryAbort() {
+	s.recovery.mu.Lock()
+	defer s.recovery.mu.Unlock()
+	snap := s.recovery.snapshot.Load()
+	if snap == nil || snap.recorded {
+		return
+	}
+	snap.recorded = true
+	s.appendRecoveryLocked(proto.UpstreamRecovery{
+		Fingerprint: snap.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: 0,
+		Outcome: proto.RecoveryOutcomeAborted, Reason: proto.RecoveryAbortCancelled, OldNativeSessionID: snap.oldThreadID,
 	})
 }
 
