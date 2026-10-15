@@ -96,12 +96,13 @@ type rawContent struct {
 // a block type this build does not recognize, so recovery never drops input.
 func decodeUserParts(raw json.RawMessage) (parts []userPart, ok bool) {
 	var message struct {
-		Content []rawContent `json:"content"`
+		Content *[]rawContent `json:"content"`
 	}
-	if json.Unmarshal(raw, &message) != nil {
+	if json.Unmarshal(raw, &message) != nil || message.Content == nil {
+		// Missing or null content is unreadable, not an empty message.
 		return nil, false
 	}
-	for _, c := range message.Content {
+	for _, c := range *message.Content {
 		switch c.Type {
 		case "text", "input_text":
 			parts = append(parts, userPart{text: c.Text})

@@ -120,13 +120,20 @@ func (s *Session) awaitAckGate(raw json.RawMessage) bool {
 		return true
 	}
 	g.saw = true
+	// Once the gate has overflowed the recovery is being torn down: refuse
+	// immediately instead of parking another goroutine and its params.
+	if g.overflow {
+		s.steering.mu.Unlock()
+		return false
+	}
 	g.waiters++
 	// A waiting request retains its raw params, so it counts against the byte limit too.
-	if !g.overflow {
-		g.bytes += len(raw)
-		if len(g.queue)+g.waiters > maxGatedFrames || g.bytes > maxGatedBytes {
-			s.overflowLocked(g)
-		}
+	g.bytes += len(raw)
+	if len(g.queue)+g.waiters > maxGatedFrames || g.bytes > maxGatedBytes {
+		s.overflowLocked(g)
+		g.waiters--
+		s.steering.mu.Unlock()
+		return false
 	}
 	s.steering.mu.Unlock()
 	select {

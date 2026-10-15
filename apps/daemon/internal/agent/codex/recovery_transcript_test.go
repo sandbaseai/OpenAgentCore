@@ -420,3 +420,14 @@ func TestRenderTranscriptKeepsCarriedIntact(t *testing.T) {
 		t.Fatal("carried entry that cannot fit must abort rather than truncate")
 	}
 }
+
+func TestDecodeUserPartsRejectsMissingOrNullContent(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"content":null}`} {
+		if _, ok := decodeUserParts(json.RawMessage(raw)); ok {
+			t.Fatalf("decodeUserParts(%s) ok=true, want false", raw)
+		}
+	}
+	if _, ok := decodeUserParts(json.RawMessage(`{"content":[]}`)); !ok {
+		t.Fatal("empty content array should decode")
+	}
+}
