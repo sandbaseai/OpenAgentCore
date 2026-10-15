@@ -90,11 +90,13 @@ func TestTranscriptWebSearchActions(t *testing.T) {
 		t.Fatal("openPage without url must abandon recovery")
 	}
 	for name, search := range map[string]map[string]any{
-		"no query or action":   {"query": "", "status": "completed"},
-		"blank open page url":  {"query": "", "status": "completed", "action": map[string]any{"type": "openPage", "url": " "}},
-		"blank find in page":   {"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "", "pattern": ""}},
-		"blank query list":     {"query": "", "status": "completed", "action": map[string]any{"type": "search", "queries": []string{"", " "}}},
-		"search without query": {"query": "", "status": "completed", "action": map[string]any{"type": "search"}},
+		"no query or action":      {"query": "", "status": "completed"},
+		"blank open page url":     {"query": "", "status": "completed", "action": map[string]any{"type": "openPage", "url": " "}},
+		"find in page no pattern": {"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "https://example.com/p", "pattern": ""}},
+		"find in page no url":     {"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "", "pattern": "needle"}},
+		"blank find in page":      {"query": "", "status": "completed", "action": map[string]any{"type": "findInPage", "url": "", "pattern": ""}},
+		"blank query list":        {"query": "", "status": "completed", "action": map[string]any{"type": "search", "queries": []string{"", " "}}},
+		"search without query":    {"query": "", "status": "completed", "action": map[string]any{"type": "search"}},
 	} {
 		_, reason = planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
 			{ID: "t1", Status: "completed", Items: []json.RawMessage{userItem(text("q")), item("reasoning", map[string]any{"encryptedContent": canaryReasoning}), item("webSearch", search)}},

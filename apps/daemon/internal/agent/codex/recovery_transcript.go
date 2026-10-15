@@ -504,7 +504,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 				}
 				call = "web search: open page " + escapeTranscript(*a.URL)
 			case "findInPage", "find_in_page":
-				if (a.URL == nil || strings.TrimSpace(*a.URL) == "") && (a.Pattern == nil || strings.TrimSpace(*a.Pattern) == "") {
+				if a.URL == nil || strings.TrimSpace(*a.URL) == "" || a.Pattern == nil || strings.TrimSpace(*a.Pattern) == "" {
 					stats.unsupported++
 					return nil
 				}

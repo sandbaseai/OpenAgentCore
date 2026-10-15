@@ -114,6 +114,7 @@ it.each([
   { recovery_count: "1" },
   { recovery_fingerprints: [] },
   { recovery_fingerprints: ["model_no_image_input", "model_no_image_input", "model_no_image_input"], recovery_outcomes: ["aborted", "aborted", "aborted"] },
+  { recovery_count: 2, recovery_fingerprints: ["model_no_image_input", "model_no_image_input"], recovery_outcomes: ["exhausted", "exhausted"] },
   { recovery_fingerprints: ["secret-canary"] },
   { recovery_fingerprints: ["provider_messages_required"] },
   { recovery_fingerprints: "reasoning_encrypted_unverifiable" },
@@ -193,7 +194,7 @@ it.each([{}, { http_status: 400 }, { http_status: 403 }, { http_status: 500 }, {
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: f }, id, turn)).toThrow();
 });
 it("accepts the two-record aggregate of dropped recovery items", () => {
-  const params = { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["reasoning_encrypted_unverifiable", "reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted", "exhausted"], recovery_dropped_reasoning_items: 2_000_000, recovery_dropped_images: 2_000_000 };
+  const params = { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["reasoning_encrypted_unverifiable", "model_no_image_input"], recovery_outcomes: ["exhausted", "exhausted"], recovery_dropped_reasoning_items: 2_000_000, recovery_dropped_images: 2_000_000 };
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).not.toThrow();
 });
 
