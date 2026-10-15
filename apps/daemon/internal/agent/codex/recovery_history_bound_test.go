@@ -50,3 +50,18 @@ func TestBoundedTurnsRejectExcessTurns(t *testing.T) {
 		t.Fatalf("err = %v, want errHistoryTooLarge", err)
 	}
 }
+
+func TestDecodeUserPartsRejectsExcessBlocks(t *testing.T) {
+	raw := json.RawMessage(`{"content":[` + strings.Repeat(`{"type":"text"},`, maxUserContentBlocks) + `{"type":"text"}]}`)
+	if parts, ok := decodeUserParts(raw); ok || parts != nil {
+		t.Fatalf("want rejection, got ok=%v", ok)
+	}
+}
+
+func TestCommandWithExitCodeButInProgressStatusIsUnsupported(t *testing.T) {
+	raw := json.RawMessage(`{"type":"commandExecution","command":"rm x","exitCode":0,"status":"inProgress"}`)
+	var stats historyStats
+	if got := decodeItem(raw, false, false, &stats); got != nil || stats.unsupported != 1 {
+		t.Fatalf("got %v unsupported=%d, want rejected", got, stats.unsupported)
+	}
+}

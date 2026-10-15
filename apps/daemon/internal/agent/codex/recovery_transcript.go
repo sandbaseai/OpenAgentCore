@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -96,13 +97,26 @@ type rawContent struct {
 // a block type this build does not recognize, so recovery never drops input.
 func decodeUserParts(raw json.RawMessage) (parts []userPart, ok bool) {
 	var message struct {
-		Content *[]rawContent `json:"content"`
+		Content json.RawMessage `json:"content"`
 	}
-	if json.Unmarshal(raw, &message) != nil || message.Content == nil {
+	if json.Unmarshal(raw, &message) != nil || len(message.Content) == 0 {
 		// Missing or null content is unreadable, not an empty message.
 		return nil, false
 	}
-	for _, c := range *message.Content {
+	// Decode blocks incrementally so a huge array of tiny blocks cannot force
+	// a large allocation before the first unknown block is rejected.
+	dec := json.NewDecoder(bytes.NewReader(message.Content))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return nil, false
+	}
+	for n := 0; dec.More(); n++ {
+		if n >= maxUserContentBlocks {
+			return nil, false
+		}
+		var c rawContent
+		if dec.Decode(&c) != nil {
+			return nil, false
+		}
 		switch c.Type {
 		case "text", "input_text":
 			parts = append(parts, userPart{text: c.Text})
@@ -116,6 +130,9 @@ func decodeUserParts(raw json.RawMessage) (parts []userPart, ok bool) {
 	}
 	return parts, true
 }
+
+// maxUserContentBlocks bounds content blocks decoded from one user message.
+const maxUserContentBlocks = 10000
 
 // splitRecoveredInput recognizes the input a previous recovery sent as a Turn's
 // first user message. It returns the transcript that message carried; the
@@ -232,7 +249,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// A command that is still running may finish after the history snapshot.
-		if item.ExitCode == nil && nonterminalStatus(item.Status) {
+		if item.Status != "" && nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}
