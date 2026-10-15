@@ -540,15 +540,13 @@ func TestRenderTranscriptDoesNotPartiallyTruncateToolTail(t *testing.T) {
 	}
 }
 
-func TestDecodeItemLongCommandKeepsOutcome(t *testing.T) {
+func TestDecodeItemShortCommandKeepsOutcome(t *testing.T) {
 	var stats historyStats
-	long := strings.Repeat("x", 5000)
-	entries := decodeItem(item("commandExecution", map[string]any{"command": long, "exitCode": 7}), false, false, &stats)
+	entries := decodeItem(item("commandExecution", map[string]any{"command": "make deploy", "exitCode": 7}), false, false, &stats)
 	if len(entries) != 1 || !strings.Contains(entries[0].call, "(exit 7)") {
 		t.Fatalf("outcome lost: %+v", entries)
 	}
 }
-
 func TestDecodeItemFileChangeKeepsStatusAndRejectsMissing(t *testing.T) {
 	var stats historyStats
 	entries := decodeItem(item("fileChange", map[string]any{"status": "failed", "changes": []any{map[string]any{"path": "a.go"}}}), false, false, &stats)
@@ -567,5 +565,24 @@ func TestCallExceedsBudget(t *testing.T) {
 	}
 	if !callExceedsBudget(strings.Repeat("a", maxToolCallChars+1)) {
 		t.Fatal("call over the limit must exceed budget")
+	}
+}
+
+func TestDecodeRejectsOverBudgetCommandAndAnonymousMCP(t *testing.T) {
+	stats := &historyStats{}
+	long := map[string]any{"command": strings.Repeat("x", maxToolCallChars) + " deploy prod", "exitCode": 0}
+	if got := decodeItem(item("commandExecution", long), false, false, stats); len(got) != 0 || stats.unsupported != 1 {
+		t.Fatalf("over-budget command must be unreadable: %+v unsupported=%d", got, stats.unsupported)
+	}
+	for _, raw := range []string{
+		`{"type":"mcpToolCall","tool":"t","arguments":{},"status":"completed"}`,
+		`{"type":"mcpToolCall","server":"s","arguments":{},"status":"completed"}`,
+	} {
+		if got := decodeItem(json.RawMessage(raw), false, false, stats); len(got) != 0 {
+			t.Fatalf("MCP call without identifiers must be unreadable: %s", raw)
+		}
+	}
+	if stats.unsupported != 3 {
+		t.Fatalf("unsupported = %d, want 3", stats.unsupported)
 	}
 }

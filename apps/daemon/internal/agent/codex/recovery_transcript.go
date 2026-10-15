@@ -235,7 +235,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			// command finished, so it is not repeated or assumed complete.
 			outcome = " (status: " + escapeTranscript(item.Status) + ")"
 		}
-		call := "command" + outcome + ": " + truncateRunes(item.Command, maxToolCallChars/2)
+		call := "command" + outcome + ": " + item.Command
+		if callExceedsBudget(call) {
+			// A truncated command could hide the resource a completed side effect touched.
+			stats.unsupported++
+			return nil
+		}
 		return []transcriptEntry{toolEntry(call, escapeTranscript(truncateRunes(item.Output, maxToolOutputChars)))}
 	case "fileChange":
 		var item struct {
@@ -267,6 +272,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Error json.RawMessage `json:"error"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
+			stats.unsupported++
+			return nil
+		}
+		// Without both identifiers the model cannot tell which operation completed.
+		if item.Server == "" || item.Tool == "" {
 			stats.unsupported++
 			return nil
 		}
