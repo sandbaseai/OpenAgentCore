@@ -93,6 +93,7 @@ type recoveryRun struct {
 
 	mu          sync.Mutex
 	newThreadID string
+	newModel    string
 	newTurnID   string
 	// ambiguous: the new Turn may have started natively without an acknowledgement.
 	ambiguous bool
@@ -287,11 +288,6 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 		return
 	}
 	run.set(func() { run.dropped = input.dropped })
-	mode, err := s.collaborationMode(*s.recovery.plan)
-	if err != nil {
-		s.abandonRecovery(run, proto.RecoveryAbortTurnStartFailed)
-		return
-	}
 
 	startParams := s.buildThreadStartParams(*s.recovery.plan)
 	startCtx, stop := context.WithTimeout(ctx, t.ThreadStart)
@@ -300,7 +296,7 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 		if err := json.Unmarshal(raw, &res); err != nil || res.Thread.ID == "" || res.Thread.ID == snap.oldThreadID {
 			return errors.New("codex: recovery thread response has no new identity")
 		}
-		run.set(func() { run.newThreadID = res.Thread.ID })
+		run.set(func() { run.newThreadID, run.newModel = res.Thread.ID, res.Model })
 		return nil
 	})
 	stop()
@@ -314,6 +310,18 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 		return
 	}
 
+	// The rebuilt thread may resolve a different concrete model; the
+	// collaboration mode must be derived from it, as in bindThreadResult.
+	run.mu.Lock()
+	if run.newModel != "" {
+		s.resolvedModel = run.newModel
+	}
+	run.mu.Unlock()
+	mode, err := s.collaborationMode(*s.recovery.plan)
+	if err != nil {
+		s.abandonRecovery(run, proto.RecoveryAbortTurnStartFailed)
+		return
+	}
 	if err := s.switchRootThread(newThreadID, snap); err != nil {
 		if s.terminal.Load() {
 			s.endRecovery()

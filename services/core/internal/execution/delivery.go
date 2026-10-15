@@ -444,6 +444,18 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 		if ok && r.ErrorCode == "engine_failed" && recoveries[len(recoveries)-1].Outcome == proto.RecoveryOutcomeRecovered {
 			ok = false
 		}
+		// The audit must describe the native Session Core will resume: the new
+		// ID after a switch, the old ID after an abort.
+		if ok {
+			last := recoveries[len(recoveries)-1]
+			want := last.NewNativeSessionID
+			if last.Attempt == 0 {
+				want = last.OldNativeSessionID
+			}
+			if reported, _ := done.Metadata[proto.DoneMetaAgentSessionID].(string); reported != want {
+				ok = false
+			}
+		}
 		if ok {
 			r.Recoveries, r.recoveriesDropped = recoveries, false
 		} else {

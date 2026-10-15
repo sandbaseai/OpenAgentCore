@@ -134,6 +134,46 @@ func TestMalformedRecoveriesAreDroppedWholeAndNeverStored(t *testing.T) {
 	}
 }
 
+func TestRecoveriesMustMatchReportedNativeSession(t *testing.T) {
+	for name, test := range map[string]struct {
+		session any
+		records []any
+	}{
+		"switch reports other id": {"019e0000-0000-7000-8000-000000000003", []any{recoveryRecord("recovered")}},
+		"switch reports old id":   {recoveryOldThread, []any{recoveryRecord("recovered")}},
+		"switch reports none":     {nil, []any{recoveryRecord("recovered")}},
+		"abort reports new id":    {recoveryNewThread, []any{abortedRecord("history_unreadable")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := doneWithRecoveries(t, test.records)
+			var done proto.DonePayload
+			if err := env.DecodePayload(&done); err != nil {
+				t.Fatal(err)
+			}
+			if test.session == nil {
+				delete(done.Metadata, proto.DoneMetaAgentSessionID)
+			} else {
+				done.Metadata[proto.DoneMetaAgentSessionID] = test.session
+			}
+			env, _ = proto.NewEnvelope(proto.TypeDone, "run", done)
+			var result Result
+			if err := result.mergeObservation(env); err != nil {
+				t.Fatal(err)
+			}
+			if result.Recoveries != nil || !result.recoveriesDropped {
+				t.Fatalf("%+v", result)
+			}
+		})
+	}
+	var result Result
+	if err := result.mergeObservation(doneWithRecoveries(t, []any{abortedRecord("history_unreadable")})); err != nil {
+		t.Fatal(err)
+	}
+	if result.Recoveries != nil {
+		// reports the new id, so must be rejected
+		t.Fatalf("%+v", result)
+	}
+}
 func TestRecoveriesSurviveCancellationReceiptAndDrain(t *testing.T) {
 	var result Result
 	j := journal{writer: &recoveringWriter{}, next: 1}
@@ -152,7 +192,7 @@ func TestRecoveriesSurviveCancellationReceiptAndDrain(t *testing.T) {
 		t.Fatal(err, result)
 	}
 	// A cancellation outcome that carries records goes through the same validation.
-	reply.ack.Outcome.Metadata[proto.DoneMetaUpstreamRecoveries] = []any{abortedRecord(proto.RecoveryAbortCancelled)}
+	reply.ack.Outcome.Metadata[proto.DoneMetaUpstreamRecoveries] = []any{abortedAfterSwitch(proto.RecoveryAbortCancelled)}
 	if err := recordCancellation(context.Background(), &j, reply, &result); err != nil || len(result.Recoveries) != 1 || result.Recoveries[0].Outcome != proto.RecoveryOutcomeAborted {
 		t.Fatal(err, result)
 	}
@@ -178,7 +218,7 @@ func TestRecoveryCountCountsSwitchesNotAbandonedEntries(t *testing.T) {
 		want    int
 	}{
 		"recovered":      {[]any{recoveryRecord("recovered")}, 1},
-		"aborted only":   {[]any{abortedRecord("history_unreadable")}, 0},
+		"aborted only":   {[]any{abortedAfterSwitch("history_unreadable")}, 0},
 		"aborted second": {[]any{recoveryRecord("exhausted"), abortedAfterSwitch("not_applicable")}, 1},
 	} {
 		var result Result

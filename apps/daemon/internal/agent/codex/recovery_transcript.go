@@ -581,10 +581,15 @@ func truncateRunes(text string, limit int) string {
 	if limit < 0 {
 		limit = 0
 	}
-	if utf8.RuneCountInString(text) <= limit {
-		return text
+	// Walk to the byte offset of the limit-th rune without allocating a []rune.
+	count := 0
+	for offset := range text {
+		if count == limit {
+			return text[:offset] + "\n…[truncated]"
+		}
+		count++
 	}
-	return string([]rune(text)[:limit]) + "\n…[truncated]"
+	return text
 }
 
 func runeLen(text string) int { return utf8.RuneCountInString(text) }
