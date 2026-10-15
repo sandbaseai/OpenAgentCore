@@ -137,6 +137,16 @@ it("rejects partial or extra recovery keys and recovery facts on other categorie
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...recoveryParams } } }, id, turn)).toThrow();
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: { ...upstreamParams, ...recoveryParams } } }, id, turn)).toThrow();
 });
+it.each(["authentication_error", "server_error", "rate_limit_exceeded"])("projects recovery facts when the final failure is %s", (code) => {
+  const failed = { ...failure, code, params: { ...recoveryParams } };
+  expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failed, params: { ...recoveryParams, recovery_count: 3 } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failed, params: { ...recoveryParams, extra: "x" } } }, id, turn)).toThrow();
+});
+it("projects recovery facts when the final failure is connection_failed", () => {
+  const failed = { ...failure, code: "connection_failed", params: { http_status: 503, ...recoveryParams } };
+  expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
+});
 it("rejects a fingerprint or summary that does not match the failure code", () => {
   for (const params of [{ ...upstreamParams, fingerprint: "trailing_model_turn" }, { ...upstreamParams, summary: "something else" }]) {
     expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).toThrow();
