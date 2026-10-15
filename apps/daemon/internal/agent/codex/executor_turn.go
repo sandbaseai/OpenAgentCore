@@ -158,11 +158,9 @@ var _ agent.Turn = (*Session)(nil)
 
 // Server callbacks retain their originating Turn, whose ID must match exactly.
 func (s *Session) onServerRequest(method string, handler ServerRequestHandler) {
-	s.rpc.OnServerRequest(method, func(raw json.RawMessage, id any) (any, error) {
-		// A rebuilt Turn's request waits for its recovery to be acknowledged.
-		if !s.awaitAckGate(raw, id) {
-			return nil, errors.New("codex: request arrived before its recovery was acknowledged")
-		}
+	// A rebuilt Turn's request is registered with its gate on the read loop and
+	// waits for its recovery to be acknowledged.
+	s.rpc.OnServerRequestAdmitted(method, s.admitAckGate, func(raw json.RawMessage, id any) (any, error) {
 		if s.executor != nil {
 			var scope struct {
 				ThreadID string `json:"threadId"`

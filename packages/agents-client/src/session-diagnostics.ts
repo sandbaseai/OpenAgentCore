@@ -37,7 +37,7 @@ export type UpstreamRecoveryParams = {
   recovery_dropped_reasoning_items: number; recovery_dropped_images: number;
 };
 /** Upstream HTTP 400 categories carry either no params or a fixed fingerprint with its Core-chosen summary, plus recovery facts when a recovery was tried. */
-export type UpstreamRejectionParams = Record<string, never> | ({ fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string } & Partial<UpstreamRecoveryParams>);
+export type UpstreamRejectionParams = Record<string, never> | ({ fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string } & (Record<never, never> | UpstreamRecoveryParams));
 export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: Record<string, never> | ProvisioningFailureParams | ConnectionFailureParams | UpstreamRejectionParams };
 export type SessionDiagnosticFailure = DiagnosticFailure & Pick<SessionDiagnosticFailureResource, "source" | "turn_id">;
 export type SessionDiagnostics = Omit<SessionDiagnosticsResource, "failure"> & { failure: SessionDiagnosticFailure | null };

@@ -98,6 +98,7 @@ type JSONRPCClient struct {
 	handlersMu        sync.RWMutex
 	notifHandlers     map[string][]NotificationHandler
 	serverReqHandlers map[string]ServerRequestHandler
+	serverReqAdmit    map[string]ServerRequestAdmit
 
 	readers   sync.WaitGroup
 	closeOnce sync.Once
@@ -159,6 +160,7 @@ func NewJSONRPCClient(cfg JSONRPCConfig) *JSONRPCClient {
 		pending:           make(map[string]*pendingRequest),
 		notifHandlers:     make(map[string][]NotificationHandler),
 		serverReqHandlers: make(map[string]ServerRequestHandler),
+		serverReqAdmit:    make(map[string]ServerRequestAdmit),
 		doneCh:            make(chan struct{}),
 	}
 }
@@ -265,6 +267,20 @@ func (c *JSONRPCClient) OnNotification(method string, h NotificationHandler) {
 	c.handlersMu.Lock()
 	defer c.handlersMu.Unlock()
 	c.notifHandlers[method] = append(c.notifHandlers[method], h)
+}
+
+// ServerRequestAdmit runs synchronously on the read loop, in frame order,
+// before the request's handler goroutine starts. It returns a wait function
+// the goroutine calls first; false refuses the request.
+type ServerRequestAdmit func(params json.RawMessage, id any) (wait func() bool)
+
+// OnServerRequestAdmitted registers h with an admission step that sees the
+// request in arrival order, ahead of any later frame such as a turn/start reply.
+func (c *JSONRPCClient) OnServerRequestAdmitted(method string, admit ServerRequestAdmit, h ServerRequestHandler) {
+	c.handlersMu.Lock()
+	defer c.handlersMu.Unlock()
+	c.serverReqHandlers[method] = h
+	c.serverReqAdmit[method] = admit
 }
 
 // OnServerRequest registers h for inbound server requests with method.
@@ -427,6 +443,7 @@ func (c *JSONRPCClient) handleServerRequest(rawFrame []byte, rawID json.RawMessa
 
 	c.handlersMu.RLock()
 	h, ok := c.serverReqHandlers[method]
+	admit := c.serverReqAdmit[method]
 	if ok {
 		c.handlerWork.Add(1)
 	}
@@ -436,6 +453,10 @@ func (c *JSONRPCClient) handleServerRequest(rawFrame []byte, rawID json.RawMessa
 		_ = c.SendServerError(id, -32601, fmt.Sprintf("no handler for %s", method), nil)
 		return
 	}
+	var wait func() bool
+	if admit != nil {
+		wait = admit(env.Params, id)
+	}
 	go func() {
 		defer c.handlerWork.Done()
 		defer func() {
@@ -443,6 +464,10 @@ func (c *JSONRPCClient) handleServerRequest(rawFrame []byte, rawID json.RawMessa
 				_ = c.SendServerError(id, -32603, fmt.Sprintf("panic in %s handler: %v", method, r), nil)
 			}
 		}()
+		if wait != nil && !wait() {
+			_ = c.SendServerError(id, -32603, "codex: request arrived before its recovery was acknowledged", nil)
+			return
+		}
 		result, err := h(env.Params, id)
 		if err != nil {
 			_ = c.SendServerError(id, -32603, err.Error(), nil)

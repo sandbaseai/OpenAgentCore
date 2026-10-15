@@ -105,10 +105,12 @@ func (s *Session) gated(h NotificationHandler) NotificationHandler {
 	}
 }
 
-// awaitAckGate blocks a server request of the rebuilt thread until the
-// recovery is acknowledged. It reports false when the request must be refused:
-// the recovery was abandoned or the Session was cancelled.
-func (s *Session) awaitAckGate(raw json.RawMessage, id any) bool {
+// admitAckGate registers a server request of the rebuilt thread with the gate.
+// It runs synchronously on the read loop, so the request is charged before a
+// later turn/start reply can detach the gate. The returned function blocks
+// until the recovery is acknowledged and reports false when the request must
+// be refused: the recovery was abandoned or the Session was cancelled.
+func (s *Session) admitAckGate(raw json.RawMessage, id any) func() bool {
 	var scope struct {
 		ThreadID string `json:"threadId"`
 	}
@@ -117,14 +119,14 @@ func (s *Session) awaitAckGate(raw json.RawMessage, id any) bool {
 	g := s.steering.gate
 	if g == nil || scope.ThreadID == "" || scope.ThreadID != g.threadID {
 		s.steering.mu.Unlock()
-		return true
+		return nil
 	}
 	g.saw = true
 	// Once the gate has overflowed the recovery is being torn down: refuse
 	// immediately instead of parking another goroutine and its params.
 	if g.overflow {
 		s.steering.mu.Unlock()
-		return false
+		return func() bool { return false }
 	}
 	g.waiters++
 	// A waiting request retains its raw params, so it counts against the byte limit too.
@@ -135,17 +137,19 @@ func (s *Session) awaitAckGate(raw json.RawMessage, id any) bool {
 		s.overflowLocked(g)
 		g.waiters--
 		s.steering.mu.Unlock()
-		return false
+		return func() bool { return false }
 	}
 	s.steering.mu.Unlock()
-	select {
-	case <-g.released:
-	case <-s.cancelCtx.Done():
-		return false
+	return func() bool {
+		select {
+		case <-g.released:
+		case <-s.cancelCtx.Done():
+			return false
+		}
+		s.steering.mu.Lock()
+		defer s.steering.mu.Unlock()
+		return !g.aborted
 	}
-	s.steering.mu.Lock()
-	defer s.steering.mu.Unlock()
-	return !g.aborted
 }
 
 // dropGateLocked discards the gate of an abandoned recovery.
