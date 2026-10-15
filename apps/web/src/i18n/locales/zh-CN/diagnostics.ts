@@ -11,6 +11,10 @@ export const diagnostics = {
   providerStaleHelp: "最新读取失败，当前显示上次确认的记录。",
   failure: {
     provider_billing_unavailable: "模型服务因账单或使用额度问题拒绝了请求。请联系支持人员检查模型服务账户后再尝试。",
+    model_input_unsupported_image: "所选模型不支持图片输入。请更换支持图片的模型，或不带图片重新发送。",
+    model_provider_format_rejected: "模型提供商拒绝了请求格式。请更换模型或联系支持人员。",
+    model_reasoning_state_invalid: "模型提供商无法校验此对话已保存的推理状态。继续此 Session 可能再次以同样方式失败，请新建 Session。",
+    model_input_ends_with_assistant: "模型提供商不接受以模型回复结尾的请求。请更换模型或新建 Session。",
     authentication_error: "模型服务认证失败，请检查 API key。",
     rate_limit_exceeded: "已达到模型服务的请求频率上限。",
     usage_limit_exceeded: "已达到模型服务的用量上限，请检查额度。",

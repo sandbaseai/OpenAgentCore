@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
@@ -51,8 +52,10 @@ func TestDiagnosticFailureWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, observation := range observations {
-		if code, _ := proto.NormalizeEngineFailure(observation.EngineErrorCode, nil); code != "" {
-			outcome, _ := json.Marshal(map[string]string{"error_code": "engine_failed", "engine_error_code": code})
+		// Upstream 400 codes are only meaningful with their status and fingerprint.
+		status := 400
+		if code, _ := proto.NormalizeEngineFailure(observation.EngineErrorCode, &status); code != "" {
+			outcome, _ := json.Marshal(map[string]any{"error_code": "engine_failed", "engine_error_code": code, "engine_http_status": status, "engine_fingerprint": fingerprintFor(code)})
 			produced[turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: outcome}).Code] = true
 		}
 	}
@@ -144,5 +147,105 @@ func TestDiagnosticNativeClassification(t *testing.T) {
 		if got := turnDiagnosticFailure(sessions.Turn{Status: status, Outcome: json.RawMessage(`{"error_code":"engine_failed","engine_error_code":"authentication_error"}`)}); got != nil {
 			t.Fatal(status, got)
 		}
+	}
+}
+
+// fingerprintFor returns the fingerprint paired with an upstream 400 code, or
+// an empty string for every other code.
+func fingerprintFor(code string) string {
+	for _, fingerprint := range []string{proto.FingerprintProviderMessagesRequired, proto.FingerprintReasoningEncryptedUnverifiable, proto.FingerprintModelNoImageInput, proto.FingerprintToolResultInputImageRejected, proto.FingerprintTrailingModelTurn} {
+		if paired, _ := proto.FingerprintCode(fingerprint); paired == code {
+			return fingerprint
+		}
+	}
+	return ""
+}
+
+// These four literals are the cross-repository contract with the Agents service.
+var upstream400DiagnosticCodes = []string{"model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"}
+
+func TestUpstream400CodesAreInEveryEnumAndMatchTheProtoMapping(t *testing.T) {
+	field, _ := reflect.TypeFor[DiagnosticFailure]().FieldByName("Code")
+	publicField, _ := reflect.TypeFor[v1.ExecutionDiagnostic]().FieldByName("Code")
+	core, public := strings.Split(field.Tag.Get("enums"), ","), strings.Split(publicField.Tag.Get("enums"), ",")
+	catalog, err := os.ReadFile("../../../../contracts/agents-api/core-errors.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range upstream400DiagnosticCodes {
+		if !slices.Contains(core, code) || !slices.Contains(public, code) || !strings.Contains(string(catalog), "`"+code+"`") {
+			t.Fatalf("%s missing from an enum or the catalog", code)
+		}
+	}
+	// The mapping must produce exactly the contract literals, no more.
+	produced := map[string]bool{}
+	for _, fingerprint := range []string{proto.FingerprintProviderMessagesRequired, proto.FingerprintReasoningEncryptedUnverifiable, proto.FingerprintModelNoImageInput, proto.FingerprintToolResultInputImageRejected, proto.FingerprintTrailingModelTurn} {
+		code, ok := proto.FingerprintCode(fingerprint)
+		if !ok {
+			t.Fatal(fingerprint)
+		}
+		produced[code] = true
+	}
+	if len(produced) != len(upstream400DiagnosticCodes) {
+		t.Fatal("mapping produces a different code set", produced)
+	}
+	for _, code := range upstream400DiagnosticCodes {
+		if !produced[code] {
+			t.Fatal("contract code has no fingerprint", code)
+		}
+	}
+}
+
+func TestUpstream400DiagnosticParamsAreFlatBoundedAndFreeOfNativeText(t *testing.T) {
+	const id = "88a8d808-59c1-4bf3-8950-b34ce57e028b"
+	for _, fingerprint := range []string{proto.FingerprintProviderMessagesRequired, proto.FingerprintReasoningEncryptedUnverifiable, proto.FingerprintModelNoImageInput, proto.FingerprintToolResultInputImageRejected, proto.FingerprintTrailingModelTurn} {
+		code, _ := proto.FingerprintCode(fingerprint)
+		raw, _ := json.Marshal(map[string]any{"error_code": "engine_failed", "error": "raw-secret-canary", "engine_error_code": code, "engine_http_status": 400, "engine_fingerprint": fingerprint, "engine_request_id": id})
+		got := turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: raw})
+		if got.Code != code {
+			t.Fatalf("%s: %+v", fingerprint, got)
+		}
+		if validated := validCoreDetails(got.Params); len(validated) != len(got.Params) {
+			t.Fatal("params rejected by the shared detail validator", got.Params)
+		}
+		encoded, _ := json.Marshal(got.Params)
+		var params map[string]any
+		if json.Unmarshal(encoded, &params) != nil {
+			t.Fatal(string(encoded))
+		}
+		if len(params) != 3 || params["fingerprint"] != fingerprint || params["upstream_request_id"] != id {
+			t.Fatalf("unexpected keys: %s", encoded)
+		}
+		summary, _ := params["summary"].(string)
+		if summary == "" || len(summary) > 240 || strings.Contains(string(encoded), "canary") {
+			t.Fatalf("summary: %s", encoded)
+		}
+		// The request ID key is omitted when no trusted ID exists.
+		raw, _ = json.Marshal(map[string]any{"error_code": "engine_failed", "engine_error_code": code, "engine_http_status": 400, "engine_fingerprint": fingerprint, "engine_request_id": "Bearer secret"})
+		if got := turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: raw}); len(got.Params) != 2 {
+			t.Fatalf("%s: %v", fingerprint, got.Params)
+		}
+	}
+	// Anything that does not hold the full pairing falls back without params.
+	for _, outcome := range []string{
+		`{"error_code":"engine_failed","engine_error_code":"model_input_unsupported_image","engine_fingerprint":"model_no_image_input"}`,
+		`{"error_code":"engine_failed","engine_error_code":"model_input_unsupported_image","engine_http_status":400,"engine_fingerprint":"trailing_model_turn"}`,
+		`{"error_code":"engine_failed","engine_error_code":"authentication_error","engine_http_status":400,"engine_fingerprint":"model_no_image_input"}`,
+		`{"error_code":"event_persistence_failed","engine_error_code":"model_input_unsupported_image","engine_http_status":400,"engine_fingerprint":"model_no_image_input"}`,
+	} {
+		got := turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: json.RawMessage(outcome)})
+		if len(got.Params) != 0 {
+			t.Fatalf("%s: %+v", outcome, got)
+		}
+	}
+	// A paired code without a stored fingerprint is still reported, with no params.
+	if got := turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: json.RawMessage(`{"error_code":"engine_failed","engine_error_code":"model_input_unsupported_image","engine_http_status":400}`)}); got.Code != "model_input_unsupported_image" || len(got.Params) != 0 {
+		t.Fatal(got)
+	}
+	// Existing categories keep exactly their previous params.
+	status := 400
+	raw, _ := json.Marshal(map[string]any{"error_code": "engine_failed", "engine_error_code": "connection_failed", "engine_http_status": status, "engine_fingerprint": "model_no_image_input"})
+	if got := turnDiagnosticFailure(sessions.Turn{Status: sessions.TurnFailed, Outcome: raw}); got.Code != "connection_failed" || len(got.Params) != 1 {
+		t.Fatal("connection_failed params changed", got)
 	}
 }

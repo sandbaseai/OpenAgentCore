@@ -65,14 +65,15 @@ type Credentials interface {
 }
 
 type Result struct {
-	EventStreamError string            `json:"event_stream_error,omitempty"`
-	EngineErrorCode  string            `json:"engine_error_code,omitempty"`
-	EngineHTTPStatus *int              `json:"engine_http_status,omitempty"`
-	EngineRequestID  string            `json:"engine_request_id,omitempty"`
-	Done             proto.DonePayload `json:"done"`
-	ErrorCode        string            `json:"error_code,omitempty"`
-	Error            string            `json:"error,omitempty"`
-	AppliedThrough   int64             `json:"applied_through"`
+	EventStreamError  string            `json:"event_stream_error,omitempty"`
+	EngineErrorCode   string            `json:"engine_error_code,omitempty"`
+	EngineHTTPStatus  *int              `json:"engine_http_status,omitempty"`
+	EngineRequestID   string            `json:"engine_request_id,omitempty"`
+	EngineFingerprint string            `json:"engine_fingerprint,omitempty"`
+	Done              proto.DonePayload `json:"done"`
+	ErrorCode         string            `json:"error_code,omitempty"`
+	Error             string            `json:"error,omitempty"`
+	AppliedThrough    int64             `json:"applied_through"`
 }
 
 // Run claims once before subscribing or sending. Uncertain deliveries are not replayed.
@@ -152,7 +153,7 @@ func (d *Dispatcher) finishRun(tenantID, sessionID, turnID, model string, result
 		if err == nil {
 			returnedStatus = turn.Status
 		}
-		observeTerminalCommit(finishCtx, sessionID, turnID, status, returnedStatus, attempt, started, mapping.EventID(), err)
+		observeTerminalCommit(finishCtx, sessionID, turnID, status, returnedStatus, attempt, started, mapping.EventID(), err, result)
 		return turn, err
 	}
 	turn, err := complete(status)

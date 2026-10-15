@@ -251,6 +251,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 					return
 				}
 				result.ErrorCode, result.Error = "engine_failed", failure.Error
+				obslog.Ctx(ctx).Warn("executor reported failure", append([]any{"session_id", sessionID, "turn_id", runID}, engineFailureAttrs(result)...)...)
 			case proto.TypeDone:
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
@@ -385,7 +386,12 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 		}
 		// Unclassified settlement errors must not erase native failure evidence.
 		if code, status := proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus); code != "" {
-			r.EngineErrorCode, r.EngineHTTPStatus = code, status
+			// A fingerprint belongs to exactly one classification and never
+			// outlives it; a failed pairing leaves the previous evidence intact.
+			paired, fingerprint := proto.NormalizeEngineFingerprint(code, failure.Fingerprint)
+			if paired != "" {
+				r.EngineErrorCode, r.EngineHTTPStatus, r.EngineFingerprint = code, status, fingerprint
+			}
 		}
 		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:

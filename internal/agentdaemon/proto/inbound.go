@@ -130,6 +130,9 @@ type ErrorPayload struct {
 	Code              string `json:"code,omitempty"`
 	HTTPStatus        *int   `json:"http_status,omitempty"`
 	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
+	// Fingerprint names one fixed upstream HTTP 400 pattern. It is valid only
+	// together with its paired Code and HTTPStatus 400 (see NormalizeEngineFingerprint).
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // DonePayload mirrors connector.PromptOutput shape. Redeclared (not

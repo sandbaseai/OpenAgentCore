@@ -11,6 +11,10 @@ export const diagnostics = {
   providerStaleHelp: "The latest read failed. These are the last confirmed observations.",
   failure: {
     provider_billing_unavailable: "The model service rejected this request because of a billing or usage-limit issue. Contact support to check the model service account before trying again.",
+    model_input_unsupported_image: "The selected model does not accept image input. Choose a model that supports images, or send the message without images.",
+    model_provider_format_rejected: "The model provider rejected the request format. Choose another model or contact support.",
+    model_reasoning_state_invalid: "The model provider could not verify the saved reasoning state of this conversation. Continuing this Session may fail the same way, so start a new Session.",
+    model_input_ends_with_assistant: "The model provider does not accept a request that ends with a model reply. Choose another model or start a new Session.",
     authentication_error: "The model provider rejected authentication. Check its API key.",
     rate_limit_exceeded: "The model provider's rate limit was reached.",
     usage_limit_exceeded: "The model provider's usage limit was reached. Check its quota.",

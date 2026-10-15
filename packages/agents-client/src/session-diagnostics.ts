@@ -11,16 +11,23 @@ import {
 
 // ItemDiagnosticTiming holds Core receipt intervals, distinct from the public tool-reported duration_ms.
 export type { DiagnosticFailureCode, ItemDiagnosticTiming };
+export type UpstreamFingerprint = "provider_messages_required" | "reasoning_encrypted_unverifiable" | "model_no_image_input" | "tool_result_input_image_rejected" | "trailing_model_turn";
+const upstreamFingerprints: readonly UpstreamFingerprint[] = ["provider_messages_required", "reasoning_encrypted_unverifiable", "model_no_image_input", "tool_result_input_image_rejected", "trailing_model_turn"];
+// Mirrors Core's NormalizeProviderRequestID, which accepts any UUID-shaped correlation value.
+const providerRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const upstreamRejectionCodes: readonly DiagnosticFailureCode[] = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
 // The schema types params as a free-form object; each code that carries params has one of these shapes.
 export type ProvisioningFailureParams = { step: "setup" | "python" | "npm" | "system" | "file" | "skill" | null; index: number | null; exit_code: number | null };
 export type ConnectionFailureParams = { http_status: number | null };
-export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: Record<string, never> | ProvisioningFailureParams | ConnectionFailureParams };
+/** Upstream HTTP 400 categories carry either no params or a fixed fingerprint with its Core-chosen summary. */
+export type UpstreamRejectionParams = Record<string, never> | { fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string };
+export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: Record<string, never> | ProvisioningFailureParams | ConnectionFailureParams | UpstreamRejectionParams };
 export type SessionDiagnosticFailure = DiagnosticFailure & Pick<SessionDiagnosticFailureResource, "source" | "turn_id">;
 export type SessionDiagnostics = Omit<SessionDiagnosticsResource, "failure"> & { failure: SessionDiagnosticFailure | null };
 export type TurnDiagnostics = Omit<TurnDiagnosticsResource, "failure"> & { failure: DiagnosticFailure | null };
 
 // The schema's one code enum covers every failure source; each source produces only its subset.
-const turnCodes: readonly DiagnosticFailureCode[] = ["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed", "provider_billing_unavailable", "harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error"];
+const turnCodes: readonly DiagnosticFailureCode[] = ["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy", "connection_failed", "provider_billing_unavailable", ...upstreamRejectionCodes, "harness_error", "model_provider_required", "runtime_unavailable", "runtime_disconnected", "runtime_preparation_failed", "execution_interrupted", "delivery_unconfirmed", "input_rejected", "executor_protocol_error", "core_storage_failed", "internal_error"];
 const inputCodes: readonly DiagnosticFailureCode[] = ["environment_connection_timeout", "environment_unavailable", "model_provider_required", "internal_error"];
 const environmentCodes: readonly DiagnosticFailureCode[] = ["environment_provisioning_failed"];
 const fields = (...values: string[]) => new Set(values);
@@ -42,6 +49,14 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
     if (!exactFields(p, fields("http_status")) || (p.http_status !== null && (!Number.isSafeInteger(p.http_status) || (p.http_status as number) < 100 || (p.http_status as number) > 599))) return invalidAdminResponse();
     if (value.code === "provider_billing_unavailable" && p.http_status !== null && p.http_status !== 402) return invalidAdminResponse();
     params = { http_status: p.http_status as number | null };
+  } else if (isOneOf(upstreamRejectionCodes, value.code)) {
+    // Core returns no params, or the fingerprint and its fixed summary with an optional UUID request ID.
+    const p = value.params;
+    if (Object.keys(p).length !== 0) {
+      if (!isOneOf(upstreamFingerprints, p.fingerprint) || typeof p.summary !== "string" || p.summary.length === 0 || p.summary.length > 240 ||
+          !(exactFields(p, fields("fingerprint", "summary")) || (exactFields(p, fields("fingerprint", "summary", "upstream_request_id")) && typeof p.upstream_request_id === "string" && providerRequestId.test(p.upstream_request_id)))) return invalidAdminResponse();
+      params = { fingerprint: p.fingerprint as UpstreamFingerprint, summary: p.summary, ...(p.upstream_request_id === undefined ? {} : { upstream_request_id: p.upstream_request_id as string }) };
+    }
   } else if (Object.keys(value.params).length !== 0) return invalidAdminResponse();
   return { code: value.code, params, failed_at: value.failed_at as string | null };
 }

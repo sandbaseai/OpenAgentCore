@@ -66,6 +66,32 @@ it.each(["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", 
   expect(projectSessionDiagnostics({ ...session, failure: { ...failed, source: "turn", turn_id: turn } }, id).failure?.code).toBe(code);
   expect(() => projectSessionDiagnostics({ ...session, failure: { ...failed, source: "environment_input" } }, id)).toThrow();
 });
+const upstreamCodes = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
+const upstreamParams = { fingerprint: "model_no_image_input", summary: "selected model does not accept image input", upstream_request_id: "88a8d808-59c1-4bf3-8950-b34ce57e028b" };
+it.each(upstreamCodes)("projects upstream 400 category %s with and without params", (code) => {
+  for (const params of [{}, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary }, upstreamParams]) {
+    const failed = { ...failure, code, params };
+    expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
+    expect(projectSessionDiagnostics({ ...session, failure: { ...failed, source: "turn", turn_id: turn } }, id).failure?.code).toBe(code);
+  }
+  expect(() => projectSessionDiagnostics({ ...session, failure: { ...failure, code, params: {}, source: "environment_input" } }, id)).toThrow();
+});
+it.each([
+  { fingerprint: "other_print", summary: "x" },
+  { fingerprint: "model_no_image_input" },
+  { summary: "x" },
+  { fingerprint: "model_no_image_input", summary: "" },
+  { fingerprint: "model_no_image_input", summary: "x".repeat(241) },
+  { fingerprint: "model_no_image_input", summary: "x", upstream_request_id: "Bearer secret-canary" },
+  { fingerprint: "model_no_image_input", summary: "x", message: "secret-canary" },
+  { fingerprint: ["model_no_image_input"], summary: "x" },
+  { http_status: 400 },
+])("rejects unsafe upstream 400 parameters", (params) => {
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).toThrow();
+});
+it("rejects upstream 400 parameters on other categories", () => {
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: upstreamParams } }, id, turn)).toThrow();
+});
 it.each([null, 100, 429, 599])("preserves safe connection status %s", (http_status) => {
   const failed = { ...failure, code: "connection_failed", params: { http_status } };
   expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);

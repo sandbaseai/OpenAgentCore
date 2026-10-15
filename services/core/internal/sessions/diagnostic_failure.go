@@ -48,3 +48,60 @@ func DiagnosticFailureCode(outcomeJSON json.RawMessage) (string, *int) {
 	}
 	return code, httpStatus
 }
+
+// EngineFailureSummary returns the fixed English summary for an upstream HTTP
+// 400 fingerprint, or for a typed HTTP 400 without one. It is selected from a
+// closed table, so no provider text, identifier or user content can enter it.
+// Every template is at most 240 bytes.
+func EngineFailureSummary(fingerprint string, httpStatus *int) string {
+	switch fingerprint {
+	case proto.FingerprintProviderMessagesRequired:
+		return "upstream provider rejected the Responses request body (messages field required)"
+	case proto.FingerprintReasoningEncryptedUnverifiable:
+		return "upstream could not verify encrypted reasoning content carried in thread history"
+	case proto.FingerprintModelNoImageInput:
+		return "selected model does not accept image input"
+	case proto.FingerprintToolResultInputImageRejected:
+		return "upstream provider rejected an input_image block inside a tool result"
+	case proto.FingerprintTrailingModelTurn:
+		return "upstream rejected a request that ends with a model turn"
+	}
+	if httpStatus != nil && *httpStatus == 400 {
+		return "upstream returned HTTP 400 (unclassified)"
+	}
+	return ""
+}
+
+// UpstreamFailureDetail is the validated upstream HTTP 400 evidence of a failed
+// Turn. Fields are empty unless the outcome carries a paired code, fingerprint
+// and status 400 for an engine failure.
+type UpstreamFailureDetail struct {
+	Fingerprint, Summary, RequestID string
+}
+
+// DiagnosticUpstreamFailure reads the typed fingerprint metadata of a failed
+// Turn outcome. Like DiagnosticFailureCode it never inspects native text, and
+// every value is re-validated because the outcome is only trusted as far as the
+// shared pairing rules.
+func DiagnosticUpstreamFailure(outcomeJSON json.RawMessage) UpstreamFailureDetail {
+	var outcome map[string]json.RawMessage
+	if json.Unmarshal(outcomeJSON, &outcome) != nil {
+		return UpstreamFailureDetail{}
+	}
+	var coreCode, nativeCode, fingerprint, requestID string
+	var nativeStatus *int
+	_ = json.Unmarshal(outcome["error_code"], &coreCode)
+	_ = json.Unmarshal(outcome["engine_error_code"], &nativeCode)
+	_ = json.Unmarshal(outcome["engine_http_status"], &nativeStatus)
+	_ = json.Unmarshal(outcome["engine_fingerprint"], &fingerprint)
+	_ = json.Unmarshal(outcome["engine_request_id"], &requestID)
+	if coreCode != "engine_failed" {
+		return UpstreamFailureDetail{}
+	}
+	code, status := proto.NormalizeEngineFailure(nativeCode, nativeStatus)
+	code, fingerprint = proto.NormalizeEngineFingerprint(code, fingerprint)
+	if code == "" || fingerprint == "" || status == nil || *status != 400 {
+		return UpstreamFailureDetail{}
+	}
+	return UpstreamFailureDetail{Fingerprint: fingerprint, Summary: EngineFailureSummary(fingerprint, status), RequestID: proto.NormalizeProviderRequestID(requestID)}
+}

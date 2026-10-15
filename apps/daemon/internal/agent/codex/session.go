@@ -385,6 +385,7 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 			"error_code", failure.Code,
 			"http_status", failure.HTTPStatus,
 			"upstream_request_id", proto.NormalizeProviderRequestID(failure.UpstreamRequestID),
+			"fingerprint", failure.Fingerprint,
 			"message_len", len(message))
 	} else {
 		s.cfg.logger.Info("codex: emitting terminal done",
