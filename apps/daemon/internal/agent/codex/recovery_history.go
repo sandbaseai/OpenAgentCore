@@ -8,7 +8,7 @@ import (
 )
 
 // maxHistoryPages bounds how many pages of Turns one recovery reads.
-const maxHistoryPages = 100
+const maxHistoryPages = 2000
 
 // rpcHistoryReader reads a thread's Turns over the app-server protocol.
 //
@@ -148,8 +148,10 @@ func (r rpcHistoryReader) call(ctx context.Context, method string, args, result 
 // across all pages.
 const maxHistoryBytes = 64 * 1024 * 1024
 
-// historyPageLimit keeps each response well below rpcStdoutBufferMax.
-const historyPageLimit = 20
+// historyPageLimit is one Turn per page: limit caps Turns, not bytes, so any
+// larger page could exceed rpcStdoutBufferMax and retire the RPC client even
+// when every Turn is individually valid.
+const historyPageLimit = 1
 
 // historyTurnOverhead approximates the nativeTurn structure and its copy in historyTurn.
 const historyTurnOverhead = 256
