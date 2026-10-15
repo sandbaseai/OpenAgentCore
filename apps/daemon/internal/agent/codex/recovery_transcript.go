@@ -547,6 +547,11 @@ func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bo
 		}
 	}
 	remaining := budget - runeLen(blocks[first]) - 2 - omissionReserve
+	if remaining < 0 {
+		// The mandatory head block (possibly a carried record, never truncated) plus
+		// the omission reserve does not fit the active budget.
+		return "", false
+	}
 	var tail []string
 	for i := len(blocks) - 1; i > first; i-- {
 		cost := runeLen(blocks[i]) + 2

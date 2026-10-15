@@ -455,6 +455,13 @@ func TestRenderTranscriptKeepsCarriedIntact(t *testing.T) {
 	}
 }
 
+func TestRenderTranscriptRejectsCarriedHeadOverBudget(t *testing.T) {
+	carried := strings.Repeat("c", 700)
+	entries := []transcriptEntry{{kind: entryCarried, text: carried}, {kind: entryAssistant, text: strings.Repeat("a", 400)}}
+	if out, ok := renderTranscript(entries, 500); ok {
+		t.Fatalf("carried head larger than the budget must abort, got len=%d", len(out))
+	}
+}
 func TestDecodeUserPartsRejectsMissingOrNullContent(t *testing.T) {
 	for _, raw := range []string{`{}`, `{"content":null}`} {
 		if _, ok := decodeUserParts(json.RawMessage(raw)); ok {

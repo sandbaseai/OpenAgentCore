@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { AdminClient } from "./admin-client";
-import { projectSessionDiagnostics, projectTurnDiagnostics, upstreamFingerprintTuples } from "./session-diagnostics";
+import { projectSessionDiagnostics, projectTurnDiagnostics, upstreamFingerprintTuples, type UpstreamRejectionParams } from "./session-diagnostics";
 
 const id = "a113b7db-c689-4dfc-af9a-04bd0e466f11";
 const turn = "729dab72-a9ea-4d0a-a38c-1b45e46233a9";
@@ -180,4 +180,10 @@ it.each([{}, { http_status: 400 }, { http_status: 403 }, { http_status: 500 }, {
 it("accepts the two-record aggregate of dropped recovery items", () => {
   const params = { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["reasoning_encrypted_unverifiable", "reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted", "exhausted"], recovery_dropped_reasoning_items: 2_000_000, recovery_dropped_images: 2_000_000 };
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).not.toThrow();
+});
+
+it("UpstreamRejectionParams rejects a partial recovery group at compile time", () => {
+  // @ts-expect-error recovery fields are all-or-nothing
+  const partial: UpstreamRejectionParams = { fingerprint: "model_no_image_input", summary: "selected model does not accept image input", recovery_count: 1 };
+  expect(partial).toBeDefined();
 });
