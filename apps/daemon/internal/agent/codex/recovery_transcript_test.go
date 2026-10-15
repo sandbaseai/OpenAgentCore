@@ -376,3 +376,15 @@ func TestPlanRecoveryRejectsMalformedUserContent(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeMCPKeepsStructuredContentAndError(t *testing.T) {
+	stats := &historyStats{}
+	structured := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":{"content":[],"structuredContent":{"id":42}}}`), false, stats)
+	if len(structured) != 1 || !strings.Contains(structured[0].output, `"id":42`) {
+		t.Fatalf("structuredContent lost: %+v", structured)
+	}
+	failed := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":null,"error":{"message":"lookup failed"}}`), false, stats)
+	if len(failed) != 1 || !strings.Contains(failed[0].output, "lookup failed") {
+		t.Fatalf("error lost: %+v", failed)
+	}
+}

@@ -238,17 +238,29 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			Tool      string          `json:"tool"`
 			Arguments json.RawMessage `json:"arguments"`
 			Result    *struct {
-				Content []rawContent `json:"content"`
+				Content           []rawContent    `json:"content"`
+				StructuredContent json.RawMessage `json:"structuredContent"`
 			} `json:"result"`
+			Error json.RawMessage `json:"error"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
 			stats.unsupported++
 			return nil
 		}
 		entry := toolEntry("tool: "+item.Server+"/"+item.Tool+" "+string(item.Arguments), "")
+		var parts []string
 		if item.Result != nil {
-			entry.output = toolContent(item.Result.Content, stats)
+			if out := toolContent(item.Result.Content, stats); out != "" {
+				parts = append(parts, out)
+			}
+			if sc := strings.TrimSpace(string(item.Result.StructuredContent)); sc != "" && sc != "null" {
+				parts = append(parts, "structured: "+escapeTranscript(sc))
+			}
 		}
+		if er := strings.TrimSpace(string(item.Error)); er != "" && er != "null" {
+			parts = append(parts, "error: "+escapeTranscript(er))
+		}
+		entry.output = truncateRunes(strings.Join(parts, "\n"), maxToolOutputChars)
 		return []transcriptEntry{entry}
 	case "dynamicToolCall":
 		var item struct {
