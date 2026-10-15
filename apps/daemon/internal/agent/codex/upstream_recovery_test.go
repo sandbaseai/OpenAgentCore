@@ -107,7 +107,7 @@ func TestRecoveryRebuildsThreadAndCompletesTheSameTurn(t *testing.T) {
 			}
 			f.finishNewTurn("all done")
 			result := summarize(t, f.frames())
-			if result.dones != 1 || len(result.errors) != 0 || result.done.Content != "all done" {
+			if result.dones != 1 || len(result.errors) != 0 || result.done.Content != "streamed before the failure\n\nall done" {
 				t.Fatalf("terminal = %+v", result)
 			}
 			if result.done.Metadata[proto.DoneMetaAgentSessionID] != newThread {

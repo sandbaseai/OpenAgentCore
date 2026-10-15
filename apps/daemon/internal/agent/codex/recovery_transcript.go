@@ -451,6 +451,14 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 		// A stale or partial history may omit the failed Turn's completed effects.
 		return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
 	}
+	// A user message after the Turn's own input is an acknowledged steer. It is a
+	// live instruction, but the transcript marks everything inside it as history,
+	// so a rebuilt Turn could ignore it. Recovery does not apply then.
+	for _, e := range tail {
+		if e.kind == entryUser {
+			return recoveryInput{}, proto.RecoveryAbortNotApplicable
+		}
+	}
 	switch fingerprint {
 	case proto.FingerprintReasoningEncryptedUnverifiable:
 		if stats.reasoning == 0 {

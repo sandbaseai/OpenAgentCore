@@ -275,3 +275,13 @@ func TestSplitRecoveredInputNeutralizesForgedDelimiters(t *testing.T) {
 		t.Fatalf("raw delimiter survived: %q", carried)
 	}
 }
+
+func TestPlanRecoveryAbortsWhenFailedTurnHasAcknowledgedSteer(t *testing.T) {
+	const oldTurn = "t-old"
+	_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, []historyTurn{
+		{ID: oldTurn, Items: []json.RawMessage{userItem(text("start")), item("reasoning", nil), userItem(text("also do X"))}},
+	}, oldTurn, proto.TextInput("start"), 100000)
+	if reason != proto.RecoveryAbortNotApplicable {
+		t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortNotApplicable)
+	}
+}

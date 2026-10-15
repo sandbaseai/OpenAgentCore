@@ -381,7 +381,8 @@ func (s *Session) switchRootThread(newThreadID string, snap *recoverySnapshot) e
 	s.usageTotal, s.usageBaseline, s.usageTurnID, s.latestUsage = TurnUsage{}, TurnUsage{}, "", nil
 	s.usageSwitched = true
 	s.usageThreadID = newThreadID
-	s.finalText, s.lastErrText = "", ""
+	// Text the failed Turn already streamed stays: Done carries the full content.
+	s.lastErrText = ""
 	return nil
 }
 
