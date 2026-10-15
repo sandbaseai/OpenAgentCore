@@ -25,6 +25,8 @@ type nativeTurn struct {
 	Status    string            `json:"status"`
 	Items     []json.RawMessage `json:"items"`
 	ItemsView string            `json:"itemsView"`
+	// itemsPresent reports a non-null "items" array in the payload.
+	itemsPresent bool
 }
 
 // maxHistoryItemsPerTurn bounds items per Turn while decoding, before the
@@ -57,6 +59,7 @@ func (t *nativeTurn) UnmarshalJSON(data []byte) error {
 			err = dec.Decode(&out.ItemsView)
 		case "items":
 			err = decodeBoundedItems(dec, &out.Items)
+			out.itemsPresent = err == nil && out.Items != nil
 		default:
 			var skip json.RawMessage
 			err = dec.Decode(&skip)
@@ -115,7 +118,7 @@ func decodeBoundedItems(dec *json.Decoder, items *[]json.RawMessage) error {
 	if tok != json.Delim('[') {
 		return errors.New("codex: history items is not an array")
 	}
-	var out []json.RawMessage
+	out := []json.RawMessage{}
 	for dec.More() {
 		if len(out) >= maxHistoryItemsPerTurn {
 			return errHistoryTooLarge
@@ -201,7 +204,7 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 			return nil, errHistoryTooLarge
 		}
 		for _, turn := range page.Data {
-			if turn.ID == "" || turn.ItemsView != "full" {
+			if turn.ID == "" || turn.ItemsView != "full" || !turn.itemsPresent {
 				return nil, errors.New("codex: thread history incomplete")
 			}
 			total += nativeTurnBytes(turn)
@@ -248,7 +251,7 @@ func inlineHistoryComplete(turns []nativeTurn) bool {
 		return false
 	}
 	for _, t := range turns {
-		if t.ID == "" || t.ItemsView != "full" {
+		if t.ID == "" || t.ItemsView != "full" || !t.itemsPresent {
 			return false
 		}
 	}

@@ -59,6 +59,9 @@ type sessionRecovery struct {
 	// Guarded by Session.threadIDMu.
 	gateThread string
 	snapshot   atomic.Pointer[recoverySnapshot]
+	// initMu is held by beginRecovery from before the recovering transition until
+	// the snapshot is published, so a terminal never sees one without the other.
+	initMu sync.Mutex
 
 	mu       sync.Mutex
 	attempts int
@@ -184,6 +187,8 @@ func (s *Session) beginRecovery(p TurnCompletedNotification, fingerprint string)
 	if !s.beginOperation() {
 		return false
 	}
+	s.recovery.initMu.Lock()
+	defer s.recovery.initMu.Unlock()
 	if !s.recovery.state.CompareAndSwap(recoveryIdle, recoveryRecovering) {
 		s.endOperation()
 		return false
@@ -623,6 +628,9 @@ func (s *Session) interruptBestEffort(threadID, turnID string, timeout time.Dura
 // attempt before Done is emitted; the recovery goroutine then sees the terminal
 // and leaves it alone.
 func (s *Session) recordInflightRecoveryAbort() {
+	// Wait out a beginRecovery that is still publishing its snapshot.
+	s.recovery.initMu.Lock()
+	s.recovery.initMu.Unlock() //nolint:staticcheck // barrier only
 	s.recovery.mu.Lock()
 	defer s.recovery.mu.Unlock()
 	snap := s.recovery.snapshot.Load()
