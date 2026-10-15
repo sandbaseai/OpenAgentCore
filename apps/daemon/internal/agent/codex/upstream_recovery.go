@@ -568,11 +568,14 @@ func (s *Session) abandonRecovery(run *recoveryRun, reason string) {
 		s.recovery.unconfirmed.Store(true)
 	}
 	s.recovery.mu.Lock()
-	snap.recorded = true
-	s.appendRecoveryLocked(proto.UpstreamRecovery{
-		Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: 0,
-		Outcome: proto.RecoveryOutcomeAborted, Reason: reason, OldNativeSessionID: snap.oldThreadID,
-	})
+	// The executor-close path may have recorded this attempt while we restored.
+	if !snap.recorded {
+		snap.recorded = true
+		s.appendRecoveryLocked(proto.UpstreamRecovery{
+			Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: 0,
+			Outcome: proto.RecoveryOutcomeAborted, Reason: reason, OldNativeSessionID: snap.oldThreadID,
+		})
+	}
 	s.recovery.mu.Unlock()
 	s.cfg.logger.Warn("codex: upstream recovery abandoned",
 		"run_id", s.runID, "fingerprint", run.fingerprint, "reason", reason)
