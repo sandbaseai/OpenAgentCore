@@ -1,7 +1,7 @@
 ---
 title: "Core 管理错误"
 source: contracts/agents-api/core-errors.md
-source_hash: a7bc539df221676d4afa9109103b5244be6b63afdcd946b2bfdc8f0a45385d7b
+source_hash: ab70d84bab964e481a5aeb54b7436c42b326510b95b023bdb1aabb040152e0a7
 ---
 
 `/core/v1` 上的错误使用此封装结构。`message` 是安全的英文文本；`code` 和 `param` 可以为 null。客户端依据稳定的 `code` 和可选的 `param` 进行处理，对未知代码显示 `message`，绝不解析消息，也绝不自动重试被拒绝的写操作。
