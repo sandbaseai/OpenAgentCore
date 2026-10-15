@@ -408,3 +408,15 @@ func TestPlanRecoveryRejectsUnknownToolResultBlock(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortHistoryUnreadable)
 	}
 }
+
+func TestRenderTranscriptKeepsCarriedIntact(t *testing.T) {
+	carried := strings.Repeat("c", 700)
+	entries := []transcriptEntry{{kind: entryCarried, text: carried}}
+	out, ok := renderTranscript(entries, 1000)
+	if !ok || out != carried {
+		t.Fatalf("carried entry must be kept intact within budget, ok=%v len=%d", ok, len(out))
+	}
+	if _, ok := renderTranscript(append([]transcriptEntry{{kind: entryUser, text: "hi"}}, entries...), 500); ok {
+		t.Fatal("carried entry that cannot fit must abort rather than truncate")
+	}
+}

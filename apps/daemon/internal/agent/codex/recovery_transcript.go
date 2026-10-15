@@ -424,7 +424,8 @@ func renderEntry(e transcriptEntry, limit int) string {
 		}
 	case entryCarried:
 		// Already rendered, escaped and bounded by the recovery that produced it.
-		block = e.text
+		// Never truncated: a cut would silently drop completed tool calls.
+		return e.text
 	}
 	return truncateRunes(block, limit)
 }
@@ -465,7 +466,7 @@ func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bo
 		remaining -= cost
 		tail = append([]string{blocks[i]}, tail...)
 	}
-	if len(tail) == 0 && first < len(blocks)-1 && remaining > 200 {
+	if len(tail) == 0 && first < len(blocks)-1 && remaining > 200 && entries[len(entries)-1].kind != entryCarried {
 		tail = []string{truncateRunes(blocks[len(blocks)-1], remaining)}
 	}
 	omitted := len(blocks) - 1 - len(tail)
