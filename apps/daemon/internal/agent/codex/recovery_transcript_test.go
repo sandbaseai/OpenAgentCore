@@ -811,3 +811,10 @@ func TestDecodeItemWebSearchOverBudgetIsUnsupported(t *testing.T) {
 		t.Fatalf("truncated web search accepted: %+v unsupported=%d", entries, stats.unsupported)
 	}
 }
+
+func TestToolEntryPreservesCommandLineBreaks(t *testing.T) {
+	entry := toolEntry("echo safe\nrm target", "")
+	if strings.Contains(entry.call, "\n") || !strings.Contains(entry.call, `echo safe\nrm target`) {
+		t.Fatalf("call = %q", entry.call)
+	}
+}

@@ -604,7 +604,7 @@ func toolContent(blocks boundedList[rawContent], stats *historyStats) string {
 func callExceedsBudget(call string) bool {
 	// Measured after escaping: delimiter escapes expand the text, and a later
 	// cut would drop the trailing resource identity.
-	escaped := escapeTranscript(strings.ReplaceAll(call, "\n", " "))
+	escaped := escapeTranscript(callLineEscaper.Replace(call))
 	// Scan only to the budget boundary; no []rune copy of a large call.
 	n := 0
 	for range escaped {
@@ -637,8 +637,13 @@ func terminalTurnStatus(status string) bool {
 	}
 	return false
 }
+
+// callLineEscaper keeps a tool call on one line without merging commands: line
+// breaks become visible escapes so separate completed operations stay distinct.
+var callLineEscaper = strings.NewReplacer("\r\n", `\n`, "\n", `\n`, "\r", `\r`)
+
 func toolEntry(call, output string) transcriptEntry {
-	return transcriptEntry{kind: entryTool, call: escapeTranscript(truncateRunes(strings.ReplaceAll(call, "\n", " "), maxToolCallChars)), output: output}
+	return transcriptEntry{kind: entryTool, call: escapeTranscript(truncateRunes(callLineEscaper.Replace(call), maxToolCallChars)), output: output}
 }
 
 // partitionHistory splits a thread's history for a recovery: H is every Turn
