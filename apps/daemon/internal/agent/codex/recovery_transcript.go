@@ -279,6 +279,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			}
 			paths = append(paths, c.Path)
 		}
+		if len(paths) == 0 && item.Status == "completed" {
+			// A completed edit with no paths hides which files were already changed.
+			stats.unsupported++
+			return nil
+		}
 		// A file change still in progress may land after the history snapshot.
 		if nonterminalStatus(item.Status) {
 			stats.unsupported++

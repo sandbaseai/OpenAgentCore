@@ -707,3 +707,16 @@ func TestRenderTranscriptKeepsCarriedPrefixBeforeUser(t *testing.T) {
 		t.Fatalf("carried prefix and user must be kept, ok=%v out=%q", ok, out)
 	}
 }
+
+func TestDecodeItemFileChangeRejectsCompletedWithoutPaths(t *testing.T) {
+	for name, changes := range map[string]any{"missing": nil, "empty": []any{}} {
+		stats := &historyStats{}
+		fields := map[string]any{"status": "completed"}
+		if changes != nil {
+			fields["changes"] = changes
+		}
+		if got := decodeItem(item("fileChange", fields), false, false, stats); len(got) != 0 || stats.unsupported != 1 {
+			t.Fatalf("%s: got %v unsupported=%d", name, got, stats.unsupported)
+		}
+	}
+}
