@@ -701,3 +701,20 @@ func TestRecoveryDefersRebuiltTerminalUntilAcknowledged(t *testing.T) {
 		t.Fatalf("native session id = %v, want %s", got, newThread)
 	}
 }
+func TestRecoveryDefersRebuiltFailureUntilAcknowledged(t *testing.T) {
+	f := newRecoveryFixture(t, fixtureOptions{controls: enabledControls(proto.RecoveryClassReasoningState), history: fixtureHistory("reasoning"), settle: true})
+	f.native.before["turn/start"] = func(JsonRpcRequest) {
+		// The rebuilt Turn starts and fails before the RPC reply.
+		f.native.notify("turn/started", json.RawMessage(`{"threadId":"`+newThread+`","turn":{"id":"`+newTurn+`"}}`))
+		f.native.notify("turn/failed", json.RawMessage(`{"threadId":"`+newThread+`","turn":{"id":"`+newTurn+`","status":"failed"}}`))
+	}
+	f.fail(msgReasoning, usageFailed)
+	f.eventually("the new Turn to be acknowledged", f.acked)
+	result := summarize(t, f.frames())
+	if len(result.errors) != 1 {
+		t.Fatalf("terminal = %+v", result)
+	}
+	if len(result.recovery) != 1 || result.recovery[0].Outcome != proto.RecoveryOutcomeExhausted || result.recovery[0].NewNativeSessionID != newThread {
+		t.Fatalf("recovery records = %+v: the failure must not be reported before the recovery commits", result.recovery)
+	}
+}

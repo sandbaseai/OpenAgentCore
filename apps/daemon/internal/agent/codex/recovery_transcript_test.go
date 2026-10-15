@@ -388,3 +388,23 @@ func TestDecodeMCPKeepsStructuredContentAndError(t *testing.T) {
 		t.Fatalf("error lost: %+v", failed)
 	}
 }
+func TestPlanRecoveryAbortsWhenTruncationWouldDropToolCall(t *testing.T) {
+	items := []json.RawMessage{userItem(text("FIRST")), item("reasoning", nil),
+		item("commandExecution", map[string]any{"command": "deploy", "aggregatedOutput": "ok"})}
+	for i := range 100 {
+		items = append(items, item("agentMessage", map[string]any{"text": fmt.Sprintf("answer %03d %s", i, strings.Repeat("x", 200))}))
+	}
+	turns := []historyTurn{{ID: "t1", Items: items}, {ID: oldTurn}}
+	_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, turns, oldTurn, proto.TextInput("go"), 5000)
+	if reason != proto.RecoveryAbortHistoryUnreadable {
+		t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortHistoryUnreadable)
+	}
+}
+func TestPlanRecoveryRejectsUnknownToolResultBlock(t *testing.T) {
+	bad := item("dynamicToolCall", map[string]any{"tool": "lookup", "contentItems": []map[string]any{{"type": "inputAudio"}}})
+	turns := []historyTurn{{ID: "t1", Items: []json.RawMessage{userItem(text("q")), item("reasoning", nil), bad}}, {ID: oldTurn}}
+	_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, turns, oldTurn, proto.TextInput("go"), 100000)
+	if reason != proto.RecoveryAbortHistoryUnreadable {
+		t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortHistoryUnreadable)
+	}
+}

@@ -32,6 +32,8 @@ type steeringTurn struct {
 	// before its turn/start reply; acknowledgement replays it once the recovery
 	// record and thread identity are committed.
 	deferredCompleted json.RawMessage
+	// deferredFailed is the same for a rebuilt Turn's turn/failed notification.
+	deferredFailed json.RawMessage
 	// recoveryCancel ends the recovery's own context; it is not the Turn context,
 	// whose cancellation would also stop terminal delivery.
 	recoveryCancel context.CancelFunc

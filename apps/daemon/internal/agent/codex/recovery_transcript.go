@@ -311,6 +311,9 @@ func toolContent(blocks []rawContent, stats *historyStats) string {
 			stats.images++
 			stats.toolImages++
 			lines = append(lines, "[image omitted: tool_image]")
+		default:
+			// An unrepresentable block may hold the outcome of a side effect.
+			stats.unsupported++
 		}
 	}
 	return truncateRunes(strings.Join(lines, "\n"), maxToolOutputChars)
@@ -428,10 +431,12 @@ func renderEntry(e transcriptEntry, limit int) string {
 
 // renderTranscript renders entries deterministically within a character budget.
 // When they do not fit, the first user message and the most recent entries are
-// kept and the middle is replaced by an omission line.
-func renderTranscript(entries []transcriptEntry, budget int) string {
+// kept and the middle is replaced by an omission line. ok is false when that
+// omission would drop a tool call or carried recovery record: the rebuilt model
+// would then have no evidence the action happened and could repeat it.
+func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bool) {
 	if len(entries) == 0 {
-		return ""
+		return "", true
 	}
 	limit := max(budget/2, 1)
 	blocks := make([]string, len(entries))
@@ -441,7 +446,7 @@ func renderTranscript(entries []transcriptEntry, budget int) string {
 		total += runeLen(blocks[i]) + 2
 	}
 	if total-2 <= budget {
-		return strings.Join(blocks, "\n\n")
+		return strings.Join(blocks, "\n\n"), true
 	}
 	first := 0
 	for i, e := range entries {
@@ -464,11 +469,17 @@ func renderTranscript(entries []transcriptEntry, budget int) string {
 		tail = []string{truncateRunes(blocks[len(blocks)-1], remaining)}
 	}
 	omitted := len(blocks) - 1 - len(tail)
+	for i, e := range entries {
+		kept := i == first || i >= len(blocks)-len(tail)
+		if !kept && (e.kind == entryTool || e.kind == entryCarried) {
+			return "", false
+		}
+	}
 	parts := []string{blocks[first]}
 	if omitted > 0 {
 		parts = append(parts, fmt.Sprintf("[%d earlier items omitted]", omitted))
 	}
-	return strings.Join(append(parts, tail...), "\n\n")
+	return strings.Join(append(parts, tail...), "\n\n"), true
 }
 
 // recoveryInput is what a recovery sends to the rebuilt thread.
@@ -526,7 +537,10 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 	default:
 		return recoveryInput{}, proto.RecoveryAbortNotApplicable
 	}
-	body := renderTranscript(append(history, tail...), budget)
+	body, complete := renderTranscript(append(history, tail...), budget)
+	if !complete {
+		return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
+	}
 	if body == "" {
 		return recoveryInput{}, proto.RecoveryAbortNotApplicable
 	}

@@ -305,6 +305,15 @@ func (s *Session) onTurnFailed(raw json.RawMessage) {
 	if json.Unmarshal(raw, &p) != nil || !s.isRootTurn(p.ThreadID, p.Turn.ID) {
 		return
 	}
+	// A rebuilt Turn can fail before its turn/start reply is acknowledged; hold
+	// that terminal until the recovery has committed its record.
+	s.steering.mu.Lock()
+	if s.steering.recovering && p.Turn.ID != s.steering.recoveringTurnID {
+		s.steering.deferredFailed = append(json.RawMessage(nil), raw...)
+		s.steering.mu.Unlock()
+		return
+	}
+	s.steering.mu.Unlock()
 	// turn/failed carries no payload detail today; the actual cause
 	// usually arrived earlier on the "error" notification stream and is
 	// already buffered in lastErrText. Log both so post-mortems can

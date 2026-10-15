@@ -412,7 +412,8 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	s.steering.recovering, s.steering.recoveringTurnID = false, ""
 	s.steering.recoveryCancel = nil
 	deferred := s.steering.deferredCompleted
-	s.steering.deferredCompleted = nil
+	deferredFailed := s.steering.deferredFailed
+	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
 	s.steering.mu.Unlock()
 
 	s.threadIDMu.Lock()
@@ -451,6 +452,9 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	if deferred != nil {
 		s.onTurnCompleted(deferred)
 	}
+	if deferredFailed != nil {
+		s.onTurnFailed(deferredFailed)
+	}
 	return nil
 }
 
@@ -486,7 +490,7 @@ func (s *Session) restoreFromSnapshot(snap *recoverySnapshot) {
 	// Routing is old again, so the usage state belongs to the old thread.
 	s.usageThreadID = snap.oldThreadID
 	s.finalText, s.lastErrText = snap.finalText, snap.lastErrText
-	s.steering.deferredCompleted = nil
+	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
 }
 
 // abandonRecovery ends a recovery that did not produce an acknowledged new Turn.
@@ -526,7 +530,7 @@ func (s *Session) endRecovery() {
 	s.steering.mu.Lock()
 	s.steering.recovering, s.steering.recoveringTurnID = false, ""
 	s.steering.recoveryCancel = nil
-	s.steering.deferredCompleted = nil
+	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
 	s.steering.mu.Unlock()
 	s.threadIDMu.Lock()
 	s.recovery.gateThread = ""
