@@ -61,10 +61,7 @@ func TestQAOutOfRangeAnchorsDoNotProducePairedDuration(t *testing.T) {
 	scope.times[6] = scope.started.Add(schedulingDurationLimit + time.Second)
 	scope.times[7] = scope.times[6].Add(time.Millisecond)
 	scopes.finish(t.Context(), scope, "unknown")
-	var row map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &row); err != nil {
-		t.Fatal(err)
-	}
+	row := singleSchedulingRow(t, logs.String())
 	if row["eligible_seen_observed"] != false || row["selected_observed"] != false {
 		t.Fatal("out of range anchors accepted")
 	}
@@ -305,4 +302,15 @@ func TestQASchedulerActualReadinessHintsAndPollFallback(t *testing.T) {
 		t.Fatal("late hint duplicated active selection")
 	}
 	worker.schedulingObservations.finish(t.Context(), scope, "completed")
+}
+
+// Other tests may leave background goroutines logging through the process-wide
+// default logger, so only the scheduling summary line is considered.
+func singleSchedulingRow(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	rows := qaObservationRows(t, raw)
+	if len(rows) != 1 {
+		t.Fatalf("scheduling summaries = %d: %s", len(rows), raw)
+	}
+	return rows[0]
 }
