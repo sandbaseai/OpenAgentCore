@@ -141,6 +141,7 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 	scanner := bufio.NewScanner(os.Stdin)
 	turnNumber := 0
 	currentTurn := ""
+	threadStarts := 0
 	executorMode := os.Getenv("OAC_TEST_EXECUTOR_MODE")
 	for scanner.Scan() {
 		var frame preparationFrame
@@ -184,6 +185,12 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 				}
 			}
 			result = map[string]any{"thread": map[string]string{"id": "fixture-native-thread"}, "model": "fixture-model"}
+			if executorMode == "recover-400" && frame.Method == "thread/start" {
+				// The first thread is the poisoned one; every rebuild gets a new id.
+				if threadStarts++; threadStarts > 1 {
+					result = map[string]any{"thread": map[string]string{"id": "fixture-recovered-thread"}, "model": "fixture-model"}
+				}
+			}
 		case "thread/backgroundTerminals/list":
 			result = map[string]any{"data": []any{}}
 			if executorMode == "terminal-cleanup" {
@@ -204,12 +211,36 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 			if allowed == nil {
 				_ = os.WriteFile(os.Getenv("OAC_TEST_PREPARATION_FRAMES")+".terminated", nil, 0600)
 			}
+		case "thread/read":
+			// A scrubbed history of the poisoned thread (see the V2 assumption).
+			result = map[string]any{"thread": map[string]any{"id": "fixture-native-thread", "turns": []any{map[string]any{"id": "fixture-turn-1", "status": "failed", "items": []any{
+				map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "hold on and continue"}}},
+				map[string]any{"type": "reasoning", "summary": []string{"scrubbed"}},
+				map[string]any{"type": "agentMessage", "text": "scrubbed answer"},
+			}}}}}
 		case "turn/interrupt":
 			if executorMode == "interrupt-error" {
 				_ = output.Encode(map[string]any{"id": frame.ID, "error": map[string]any{"code": -32603, "message": "interrupt rejected"}})
 				continue
 			}
 		case "turn/start":
+			if executorMode == "recover-400" {
+				var target struct {
+					ThreadID string `json:"threadId"`
+				}
+				_ = json.Unmarshal(frame.Params, &target)
+				turnNumber++
+				currentTurn = fmt.Sprintf("fixture-turn-%d", turnNumber)
+				_ = output.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "result": map[string]any{"turn": map[string]string{"id": currentTurn}}})
+				_ = output.Encode(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": target.ThreadID, "turn": map[string]string{"id": currentTurn}}})
+				turn := map[string]any{"id": currentTurn, "status": "completed"}
+				if turnNumber == 1 {
+					turn["status"] = "failed"
+					turn["error"] = map[string]any{"message": "unexpected status 400 Bad Request: {\"error\":{\"message\":\"The encrypted content for item rs_SCRUBBED could not be verified.\"}}", "codexErrorInfo": "other"}
+				}
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": target.ThreadID, "turn": turn}})
+				continue
+			}
 			if executorMode != "" {
 				turnNumber++
 				currentTurn = fmt.Sprintf("fixture-turn-%d", turnNumber)

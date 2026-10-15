@@ -30,7 +30,12 @@ func (s *Session) onUsageUpdated(raw json.RawMessage) {
 		s.usageMu.Unlock()
 		return
 	}
-	if s.terminal.Load() || s.retiredTurns[p.TurnID] {
+	if s.terminal.Load() || s.isRetired(p.TurnID) {
+		return
+	}
+	// Taken before usageMu: the gate reads the thread id, which is ordered ahead
+	// of the usage lock.
+	if s.recoveryGateClosed(p.ThreadID) {
 		return
 	}
 	var observed *TurnUsage
@@ -43,6 +48,11 @@ func (s *Session) onUsageUpdated(raw json.RawMessage) {
 			s.emitUsage(*observed)
 		}
 	}()
+	// A notification admitted just before a recovery switched or rolled back the
+	// root thread must not write into usage state that now belongs to another.
+	if s.usageThreadID != "" && p.ThreadID != s.usageThreadID {
+		return
+	}
 	if p.TokenUsage != nil && p.TokenUsage.Total != nil && p.TurnID != "" {
 		// app-server replays the previous thread total after resume and
 		// before turn/started. It establishes a baseline, not new usage.
@@ -69,6 +79,45 @@ func (s *Session) onUsageUpdated(raw json.RawMessage) {
 	}
 	if observed != nil {
 		s.latestUsage = observed
+		// Core keeps the last Usage it receives, so every publication is cumulative
+		// over the Turn including what earlier recovered threads consumed.
+		observed = s.effectiveUsageLocked()
+	}
+}
+
+// effectiveUsageLocked is the one place the Turn's cumulative usage is derived;
+// publication, settlement and cancellation all call it. The caller holds usageMu.
+//
+//   - Not recovering: usageCarry (what earlier recovered threads used) plus the
+//     current thread's usage. Without a carry this is latestUsage itself.
+//   - Recovering, not yet switched: latestUsage still holds the failed Turn that
+//     usageCarry already includes, so the carry alone is the answer.
+//   - Recovering, switched: latestUsage was reset and holds only the new Turn.
+func (s *Session) effectiveUsageLocked() *TurnUsage {
+	if s.usageInRecovery && !s.usageSwitched {
+		return s.usageCarry
+	}
+	return addUsage(s.usageCarry, s.latestUsage)
+}
+
+// addUsage sums two usage values. A nil side contributes nothing, and the sum is
+// complete only when both observed parts are.
+func addUsage(a, b *TurnUsage) *TurnUsage {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	return &TurnUsage{
+		observed:              true,
+		complete:              a.complete && b.complete,
+		ReasoningOutputTokens: a.ReasoningOutputTokens + b.ReasoningOutputTokens,
+		InputTokens:           a.InputTokens + b.InputTokens,
+		OutputTokens:          a.OutputTokens + b.OutputTokens,
+		CachedInputTokens:     a.CachedInputTokens + b.CachedInputTokens,
+		CacheReadInputTokens:  a.CacheReadInputTokens + b.CacheReadInputTokens,
+		TotalTokens:           a.TotalTokens + b.TotalTokens,
 	}
 }
 

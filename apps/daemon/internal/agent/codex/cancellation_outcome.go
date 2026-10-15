@@ -14,8 +14,8 @@ type cancellationOutcomeState struct {
 
 func (s *Session) rememberOutcome(outcome proto.DonePayload) proto.DonePayload {
 	s.usageMu.Lock()
-	if outcome.Usage.Provider == "" && s.latestUsage != nil {
-		outcome.Usage = s.usagePayload(*s.latestUsage)
+	if usage := s.effectiveUsageLocked(); outcome.Usage.Provider == "" && usage != nil {
+		outcome.Usage = s.usagePayload(*usage)
 	}
 	s.usageMu.Unlock()
 	s.outcome.mu.Lock()
@@ -35,15 +35,21 @@ func (s *Session) CancellationOutcome() proto.DonePayload {
 		return *terminal
 	}
 	outcome := proto.DonePayload{Metadata: map[string]any{}}
-	if id := s.currentThreadID(); id != "" {
+	if id := s.reportedThread(); id != "" {
 		outcome.Metadata[proto.DoneMetaAgentSessionID] = id
 		outcome.Metadata[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.attachRecoveries(outcome.Metadata, false)
 	s.finalTextMu.Lock()
 	outcome.Content = s.finalText
 	s.finalTextMu.Unlock()
+	if outcome.Content == "" {
+		// While a recovery works, the failed Turn's streamed text waits in its
+		// snapshot; a newer Turn's own buffer, once non-empty, wins above.
+		outcome.Content = s.recoverySnapshotFinalText()
+	}
 	s.usageMu.Lock()
-	if usage := s.latestUsage; usage != nil {
+	if usage := s.effectiveUsageLocked(); usage != nil {
 		outcome.Usage = s.usagePayload(*usage)
 	}
 	s.usageMu.Unlock()

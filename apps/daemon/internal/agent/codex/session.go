@@ -86,6 +86,11 @@ type Session struct {
 
 	threadIDMu sync.Mutex
 	threadID   string
+	// reportedID is the thread id reported outward (Done metadata, cancellation
+	// outcome, the next Turn's resume target). It trails threadID only while an
+	// upstream recovery has switched routing to a new thread that its Turn start
+	// has not yet acknowledged. Empty means threadID. Guarded by threadIDMu.
+	reportedID string
 	steering   steeringTurn
 
 	deltaSeq    atomic.Uint64
@@ -101,12 +106,19 @@ type Session struct {
 	resumeUsageThreadID string
 	resumeUsageTotal    *TurnUsage
 	resolvedModel       string
+	// Upstream recovery usage state, guarded by usageMu; see effectiveUsageLocked.
+	usageCarry      *TurnUsage
+	usageSwitched   bool
+	usageInRecovery bool
+	usageThreadID   string
 
 	finalTextMu sync.Mutex
 	finalText   string
 	lastErrText string
 
 	outcome cancellationOutcomeState
+
+	recovery sessionRecovery
 }
 
 var _ agent.Session = (*Session)(nil)
@@ -169,19 +181,27 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 	if json.Unmarshal(raw, &p) != nil || !s.isRootTurn(p.ThreadID, p.Turn.ID) {
 		return
 	}
+	// A rebuild of the thread takes over a failed Turn; nothing is settled or
+	// emitted until it ends. Every other Turn settles exactly as before.
+	if fingerprint, ok := s.shouldRecover(p); ok && s.beginRecovery(p, fingerprint) {
+		return
+	}
+	s.completeTurnLocked(p)
+}
+
+// completeTurnLocked settles the root Turn. The caller holds notificationMu and
+// has established that p is the root Turn's terminal notification.
+func (s *Session) completeTurnLocked(p TurnCompletedNotification) {
 	s.nativeSettled.Store(true)
 	s.stopSteering()
 
-	usage := p.Turn.Usage
-	if usage == nil {
-		s.usageMu.Lock()
-		usage = s.latestUsage
-		s.usageMu.Unlock()
+	s.usageMu.Lock()
+	if p.Turn.Usage != nil {
+		s.latestUsage = p.Turn.Usage
 	}
+	usage := s.effectiveUsageLocked()
+	s.usageMu.Unlock()
 	if usage != nil {
-		s.usageMu.Lock()
-		s.latestUsage = usage
-		s.usageMu.Unlock()
 		s.emitUsage(*usage)
 	}
 
@@ -338,10 +358,11 @@ func (s *Session) emitDoneAt(content string, usage *TurnUsage, completedAt *int6
 	s.stopSteering()
 	s.stopFunctionCalls()
 	doneMeta := map[string]any{}
-	if tid := s.currentThreadID(); tid != "" {
+	if tid := s.reportedThread(); tid != "" {
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.attachRecoveries(doneMeta, false)
 	payload := proto.DonePayload{Content: content, Metadata: doneMeta, SourceCompletedAtMS: completedAt}
 	if usage != nil {
 		payload.Usage = s.usagePayload(*usage)
@@ -402,10 +423,11 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 		}
 	}
 	doneMeta := map[string]any{}
-	if tid := s.currentThreadID(); tid != "" {
+	if tid := s.reportedThread(); tid != "" {
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.attachRecoveries(doneMeta, asError)
 	payload := proto.DonePayload{
 		Content:  message,
 		Metadata: doneMeta,
@@ -444,6 +466,16 @@ func (s *Session) finishAfterTerminal() {
 func (s *Session) currentThreadID() string {
 	s.threadIDMu.Lock()
 	defer s.threadIDMu.Unlock()
+	return s.threadID
+}
+
+// reportedThread is the thread id reported outward; see Session.reportedID.
+func (s *Session) reportedThread() string {
+	s.threadIDMu.Lock()
+	defer s.threadIDMu.Unlock()
+	if s.reportedID != "" {
+		return s.reportedID
+	}
 	return s.threadID
 }
 

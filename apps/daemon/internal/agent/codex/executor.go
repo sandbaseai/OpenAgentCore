@@ -75,19 +75,18 @@ func (e *Executor) StartTurn(ctx context.Context, runID string, input proto.Mess
 		waitDone: make(chan struct{}), outputDone: make(chan struct{}), cleanup: func() {},
 		bufs: NewItemBuffers(), resolvedModel: base.resolvedModel, runID: runID, out: out}
 	if previous != nil {
-		s.threadID = previous.currentThreadID()
-		s.retiredTurns = make(map[string]bool, len(previous.retiredTurns)+1)
-		for id := range previous.retiredTurns {
-			s.retiredTurns[id] = true
-		}
-		previous.steering.mu.Lock()
-		s.retiredTurns[previous.steering.id] = true
-		previous.steering.mu.Unlock()
+		s.threadID = previous.reportedThread()
+		s.retiredTurns = previous.retiredSnapshotPlus()
 		s.resolvedModel = previous.resolvedModel
 		previous.usageMu.Lock()
 		s.usageTotal = previous.usageTotal
 		previous.usageMu.Unlock()
 	}
+	s.recovery.controls = base.recovery.controls
+	s.recovery.plan = &e.prepared.plan
+	s.recovery.input = input
+	s.recovery.reader = base.recovery.reader
+	s.recovery.timeouts = base.recovery.timeouts
 	e.active = s
 	if s.observeSubagentIdentities {
 		s.startSubagentObservations()
