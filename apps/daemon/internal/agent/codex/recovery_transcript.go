@@ -528,6 +528,13 @@ type recoveryInput struct {
 // renders the continuation input. A non-empty reason means the recovery does not
 // apply and is abandoned with that reason (one of proto.RecoveryAbort*).
 func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, current proto.MessageInput, budget int) (recoveryInput, string) {
+	// A stale snapshot may still show the failed Turn as running, with effects
+	// that complete after it was taken. Only a terminal failed Turn is rebuilt.
+	for _, turn := range turns {
+		if failedTurnID != "" && turn.ID == failedTurnID && turn.Status != "failed" {
+			return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
+		}
+	}
 	var stats historyStats
 	history, tail, found := partitionHistory(turns, failedTurnID, &stats)
 	if !found {

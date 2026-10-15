@@ -135,9 +135,9 @@ func (r *fixtureReader) ReadHistory(ctx context.Context, threadID string) ([]his
 	// A rebuilt thread's history also lists the Turn that later failed on it.
 	switch threadID {
 	case newThread:
-		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: newTurn})
+		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: newTurn, Status: "failed"})
 	case secondThread:
-		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: secondTurn})
+		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: secondTurn, Status: "failed"})
 	}
 	return turns, r.err
 }
