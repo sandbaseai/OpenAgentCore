@@ -608,6 +608,8 @@ func TestDecodeRejectsOverBudgetCommandAndAnonymousMCP(t *testing.T) {
 	for _, raw := range []string{
 		`{"type":"mcpToolCall","tool":"t","arguments":{},"status":"completed"}`,
 		`{"type":"mcpToolCall","server":"s","arguments":{},"status":"completed"}`,
+		`{"type":"mcpToolCall","server":"  ","tool":"t","arguments":{},"status":"completed"}`,
+		`{"type":"mcpToolCall","server":"s","tool":" \t","arguments":{},"status":"completed"}`,
 	} {
 		if got := decodeItem(json.RawMessage(raw), false, false, stats); len(got) != 0 {
 			t.Fatalf("MCP call without identifiers must be unreadable: %s", raw)

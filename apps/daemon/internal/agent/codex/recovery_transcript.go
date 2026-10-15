@@ -373,7 +373,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// Without both identifiers the model cannot tell which operation completed.
-		if item.Server == "" || item.Tool == "" {
+		if strings.TrimSpace(item.Server) == "" || strings.TrimSpace(item.Tool) == "" {
 			stats.unsupported++
 			return nil
 		}
