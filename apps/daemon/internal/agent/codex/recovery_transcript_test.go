@@ -706,6 +706,11 @@ func TestDecodeItemFileChangeRejectsEmptyPath(t *testing.T) {
 	if len(got) != 0 || stats.unsupported != 1 {
 		t.Fatalf("empty path must be unreadable: %+v unsupported=%d", got, stats.unsupported)
 	}
+	stats = &historyStats{}
+	got = decodeItem(item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": " \t "}}}), false, false, stats)
+	if len(got) != 0 || stats.unsupported != 1 {
+		t.Fatalf("whitespace path must be unreadable: %+v unsupported=%d", got, stats.unsupported)
+	}
 }
 
 func TestEscapeTranscriptKeepsNewlinesAndEscapesLabels(t *testing.T) {

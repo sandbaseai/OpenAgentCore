@@ -332,7 +332,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		}
 		var paths []string
 		for _, c := range item.Changes {
-			if c.Path == "" {
+			if strings.TrimSpace(c.Path) == "" {
 				// A change without a path cannot say which file was already edited.
 				stats.unsupported++
 				return nil

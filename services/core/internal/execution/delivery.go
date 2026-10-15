@@ -456,6 +456,14 @@ func (r *Result) mergeDone(raw json.RawMessage, terminal bool) error {
 		if ok && terminal && r.ErrorCode == "" && recoveries[len(recoveries)-1].Outcome != proto.RecoveryOutcomeRecovered {
 			ok = false
 		}
+		// An abort happens before any thread switch and settles the failure the
+		// recovery was admitted for, so it must carry the terminal fingerprint.
+		if ok && r.EngineFingerprint != "" {
+			last := recoveries[len(recoveries)-1]
+			if last.Outcome == proto.RecoveryOutcomeAborted && last.Fingerprint != r.EngineFingerprint {
+				ok = false
+			}
+		}
 		// Records must stay inside the policy Core sent: attempt budget and
 		// enabled classes.
 		if ok && r.recoveryPolicy != nil && !recoveriesWithinPolicy(recoveries, *r.recoveryPolicy) {

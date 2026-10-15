@@ -435,3 +435,17 @@ func TestAbortAfterExhaustedBudgetIsDropped(t *testing.T) {
 		t.Fatalf("abort beyond budget kept: %+v", result)
 	}
 }
+func TestAbortedRecoveryMustMatchTerminalFingerprint(t *testing.T) {
+	mismatch := Result{ErrorCode: "engine_failed", EngineFingerprint: proto.FingerprintReasoningEncryptedUnverifiable}
+	if err := mismatch.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeExhausted), abortedAfterSwitch(proto.RecoveryAbortCancelled)})); err != nil {
+		t.Fatal(err)
+	}
+	if mismatch.Recoveries != nil || !mismatch.recoveriesDropped {
+		t.Fatalf("aborted record with a foreign fingerprint kept: %+v", mismatch)
+	}
+	match := Result{ErrorCode: "engine_failed", EngineFingerprint: proto.FingerprintModelNoImageInput}
+	aborted := abortedAfterSwitch(proto.RecoveryAbortCancelled)
+	if err := match.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeExhausted), aborted})); err != nil || len(match.Recoveries) != 2 {
+		t.Fatal(err, match)
+	}
+}
