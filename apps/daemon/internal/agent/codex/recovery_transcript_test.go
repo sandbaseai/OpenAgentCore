@@ -679,3 +679,19 @@ func TestCallExceedsBudgetStopsAtBoundary(t *testing.T) {
 		t.Fatal("call over the budget must exceed")
 	}
 }
+
+func TestDecodeItemFileChangeRejectsEmptyPath(t *testing.T) {
+	stats := &historyStats{}
+	got := decodeItem(item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": ""}}}), false, false, stats)
+	if len(got) != 0 || stats.unsupported != 1 {
+		t.Fatalf("empty path must be unreadable: %+v unsupported=%d", got, stats.unsupported)
+	}
+}
+
+func TestEscapeTranscriptKeepsNewlinesAndEscapesLabels(t *testing.T) {
+	in := "a\n  [user] x\n\n[assistant]\nend\n"
+	want := "a\n\\  [user] x\n\n\\[assistant]\nend\n"
+	if got := escapeTranscript(in); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

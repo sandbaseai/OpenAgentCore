@@ -272,6 +272,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		}
 		var paths []string
 		for _, c := range item.Changes {
+			if c.Path == "" {
+				// A change without a path cannot say which file was already edited.
+				stats.unsupported++
+				return nil
+			}
 			paths = append(paths, c.Path)
 		}
 		// A file change still in progress may land after the history snapshot.
@@ -567,14 +572,23 @@ func neutralizeDelimiters(text string) string {
 // structure: the closing delimiter and the speaker or section labels.
 func escapeTranscript(text string) string {
 	text = neutralizeDelimiters(text)
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimLeft(line, " \t")
-		if forgesLabel(trimmed) {
-			lines[i] = `\` + line
+	// Stream line by line so a newline-dense field never materializes one
+	// string header per line.
+	var b strings.Builder
+	b.Grow(len(text))
+	for rest := text; ; {
+		line, tail, more := strings.Cut(rest, "\n")
+		if forgesLabel(strings.TrimLeft(line, " \t")) {
+			b.WriteByte('\\')
 		}
+		b.WriteString(line)
+		if !more {
+			break
+		}
+		b.WriteByte('\n')
+		rest = tail
 	}
-	return strings.Join(lines, "\n")
+	return b.String()
 }
 
 var omissionLine = regexp.MustCompile(`^\[[0-9]+ earlier items omitted\]`)

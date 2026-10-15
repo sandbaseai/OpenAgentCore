@@ -41,6 +41,9 @@ const maxHistoryBytes = 64 * 1024 * 1024
 // historyPageLimit keeps each response well below rpcStdoutBufferMax.
 const historyPageLimit = 20
 
+// historyItemOverhead approximates the per-item json.RawMessage header and allocation.
+const historyItemOverhead = 64
+
 // ReadHistory reads paginated history first so no single RPC frame carries the
 // whole thread; the inline thread/read form is only a fallback when listing
 // fails.
@@ -86,7 +89,9 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 			}
 			total += len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
 			for _, item := range turn.Items {
-				total += len(item)
+				// Charge the slice header and allocation each retained item costs,
+				// so millions of tiny items cannot stay under the byte bound.
+				total += len(item) + historyItemOverhead
 			}
 			if total > maxHistoryBytes {
 				return nil, errHistoryTooLarge
