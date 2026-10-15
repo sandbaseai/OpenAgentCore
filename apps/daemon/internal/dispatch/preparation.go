@@ -40,6 +40,7 @@ type preparationState struct {
 
 // upstreamRecoveryAgentKind is the only Harness that applies upstream recovery
 // controls; others would silently ignore them, so the daemon rejects the pairing.
+// Turns that observe subagents are rejected too: recovery supports root Turns only.
 const upstreamRecoveryAgentKind = "codex"
 
 func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope) error {
@@ -49,7 +50,7 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 		return r.rejectPreparation(env, "invalid_request")
 	}
 	req := input.Configuration
-	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && (!r.upstreamRecovery || req.AgentKind != upstreamRecoveryAgentKind) {
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && (!r.upstreamRecovery || req.AgentKind != upstreamRecoveryAgentKind || req.ObserveSubagentIdentities && !req.DisableSubagents) {
 		return r.rejectPreparation(env, "unsupported_configuration")
 	}
 	if !req.WorkspaceReadOnly {

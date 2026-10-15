@@ -391,14 +391,6 @@ func (s *Session) switchRootThread(newThreadID string, snap *recoverySnapshot) e
 // any later notification: the new Turn is bound and the recovery's bookkeeping
 // moves from "attempt in progress" to "attempt completed".
 func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) error {
-	// Held traffic that outgrew its buffer was already dropped; the recovery is
-	// being abandoned, so the reply must not commit it.
-	s.steering.mu.Lock()
-	overflowed := s.steering.gate != nil && s.steering.gate.overflow
-	s.steering.mu.Unlock()
-	if overflowed {
-		return errRecoveryGateOverflow
-	}
 	if err := s.bindTurnResult(raw); err != nil {
 		return err
 	}
@@ -414,10 +406,16 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	if !bound {
 		return errors.New("codex: recovery turn was not bound to the session")
 	}
+	s.steering.mu.Lock()
+	// Held traffic that outgrew its buffer was already dropped; the recovery is
+	// being abandoned, so the reply must not commit it. Checked under the lock
+	// that detaches the gate, so no later overflow can slip past.
+	if s.steering.gate != nil && s.steering.gate.overflow {
+		s.steering.mu.Unlock()
+		return errRecoveryGateOverflow
+	}
 	run.set(func() { run.newTurnID, run.acked = res.Turn.ID, true })
 	newThreadID, _, _, _ := run.get()
-
-	s.steering.mu.Lock()
 	s.steering.recovering, s.steering.recoveringTurnID = false, ""
 	s.steering.recoveryCancel = nil
 	// Input stays refused until held traffic and deferred terminals are settled.
