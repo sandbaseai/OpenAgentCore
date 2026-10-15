@@ -615,8 +615,8 @@ func TestDecodeRejectsOverBudgetCommandAndAnonymousMCP(t *testing.T) {
 			t.Fatalf("MCP call without identifiers must be unreadable: %s", raw)
 		}
 	}
-	if stats.unsupported != 3 {
-		t.Fatalf("unsupported = %d, want 3", stats.unsupported)
+	if stats.unsupported != 5 {
+		t.Fatalf("unsupported = %d, want 5", stats.unsupported)
 	}
 }
 
