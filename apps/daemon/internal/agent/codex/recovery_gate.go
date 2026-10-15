@@ -121,8 +121,12 @@ func (s *Session) awaitAckGate(raw json.RawMessage) bool {
 	}
 	g.saw = true
 	g.waiters++
-	if len(g.queue)+g.waiters > maxGatedFrames {
-		s.overflowLocked(g)
+	// A waiting request retains its raw params, so it counts against the byte limit too.
+	if !g.overflow {
+		g.bytes += len(raw)
+		if len(g.queue)+g.waiters > maxGatedFrames || g.bytes > maxGatedBytes {
+			s.overflowLocked(g)
+		}
 	}
 	s.steering.mu.Unlock()
 	select {

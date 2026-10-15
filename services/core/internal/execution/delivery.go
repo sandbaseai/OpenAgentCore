@@ -74,6 +74,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 		}
 	}()
 	var doneReceived time.Time
+	recoveriesObserved := false
 	journal := &journal{ctx: ctx, writer: d.sessionExecution, tenant: tenantID, session: sessionID, turn: runID, next: 1,
 		observeSubagents: request.ObserveSubagentIdentities}
 	defer func() {
@@ -82,7 +83,9 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 		cleanupStarted := time.Now()
 		recoveriesBefore, droppedBefore := len(result.Recoveries), result.recoveriesDropped
 		drainErr := journal.drain(upstream, &result)
-		if len(result.Recoveries) != recoveriesBefore || result.recoveriesDropped != droppedBefore {
+		// Records merged outside the Done path (cancellation receipt, final drain) are logged once here.
+		changed := len(result.Recoveries) != recoveriesBefore || result.recoveriesDropped != droppedBefore
+		if changed || (!recoveriesObserved && (len(result.Recoveries) != 0 || result.recoveriesDropped)) {
 			observeUpstreamRecoveries(ctx, sessionID, runID, result)
 		}
 		observeExecutionStage(ctx, "delivery_final_drain", cleanupStarted, drainErr, "session_id", sessionID, "turn_id", runID)
@@ -258,6 +261,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				obslog.Ctx(ctx).Warn("executor reported failure", append([]any{"session_id", sessionID, "turn_id", runID}, engineFailureAttrs(result)...)...)
 			case proto.TypeDone:
 				observeUpstreamRecoveries(ctx, sessionID, runID, result)
+				recoveriesObserved = true
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
 			case proto.TypeFunctionCall:
