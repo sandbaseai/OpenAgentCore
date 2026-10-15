@@ -466,6 +466,9 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 				return nil
 			}
 		}
+		if item.Status != "" {
+			call += " (status: " + escapeTranscript(item.Status) + ")"
+		}
 		return []transcriptEntry{toolEntry(call, "")}
 	case "imageView", "imageGeneration":
 		var item struct {

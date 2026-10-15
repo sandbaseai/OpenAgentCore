@@ -100,7 +100,7 @@ func TestTranscriptRendering(t *testing.T) {
 			userItem(text("see"), map[string]any{"type": "localImage", "path": "/work/a.png"}, map[string]any{"type": "image", "url": canaryImageData}),
 			item("mcpToolCall", map[string]any{"server": "s", "tool": "t", "arguments": map[string]any{"q": 1}, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}, map[string]any{"type": "image", "data": "CANARY_BASE64"}}}}),
 			item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": "a.go", "diff": "SECRET_DIFF"}}}),
-			item("webSearch", map[string]any{"query": "weather", "status": "completed"}),
+			item("webSearch", map[string]any{"query": "weather", "status": "failed"}),
 		}},
 		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
 	}, oldTurn, proto.TextInput("current request"), 100000)
@@ -112,7 +112,7 @@ func TestTranscriptRendering(t *testing.T) {
 		"[user]\nquestion", "[assistant]\nanswer", "[image omitted: tool_image] (path: /work/shot.png)",
 		"[user]\nsee\n[image omitted: user_image] (path: /work/a.png)\n[image omitted: user_image]",
 		"[tool call] tool: s/t {\"q\":1}\n[tool output, untrusted]\nok\n[image omitted: tool_image]",
-		"[tool call] file change (status: completed): a.go", "[tool call] web search: weather",
+		"[tool call] file change (status: completed): a.go", "[tool call] web search: weather (status: failed)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
