@@ -500,8 +500,8 @@ func TestDecodeMCPWithoutOutcomeIsUnsupported(t *testing.T) {
 	}
 }
 func TestRenderTranscriptDoesNotPartiallyTruncateToolTail(t *testing.T) {
-	entries := []transcriptEntry{{kind: entryUser, text: "hi"}, toolEntry("deploy", strings.Repeat("o", 3000))}
-	if _, ok := renderTranscript(entries, 1500); ok {
+	entries := []transcriptEntry{{kind: entryUser, text: strings.Repeat("u", 700)}, {kind: entryAssistant, text: strings.Repeat("a", 700)}, toolEntry("deploy", strings.Repeat("o", 700))}
+	if _, ok := renderTranscript(entries, 1000); ok {
 		t.Fatal("a tool entry that cannot fit whole must abort rather than be cut")
 	}
 }
