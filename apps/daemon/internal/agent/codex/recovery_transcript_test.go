@@ -662,3 +662,20 @@ func TestCallExceedsBudgetMeasuresEscapedText(t *testing.T) {
 		t.Fatal("a call that only exceeds the budget once escaped must be rejected")
 	}
 }
+func TestDecodeItemCommandWithoutTextIsUnsupported(t *testing.T) {
+	for _, cmd := range []string{"", "  "} {
+		var stats historyStats
+		entries := decodeItem(item("commandExecution", map[string]any{"command": cmd, "exitCode": 0}), false, false, &stats)
+		if len(entries) != 0 || stats.unsupported != 1 {
+			t.Fatalf("command %q accepted: %+v unsupported=%d", cmd, entries, stats.unsupported)
+		}
+	}
+}
+func TestCallExceedsBudgetStopsAtBoundary(t *testing.T) {
+	if callExceedsBudget(strings.Repeat("a", maxToolCallChars)) {
+		t.Fatal("call at the budget must fit")
+	}
+	if !callExceedsBudget(strings.Repeat("世", maxToolCallChars+1)) {
+		t.Fatal("call over the budget must exceed")
+	}
+}

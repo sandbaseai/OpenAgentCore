@@ -83,6 +83,7 @@ type recoverySnapshot struct {
 	usageCarry      *TurnUsage
 	usageInRecovery bool
 	usageSwitched   bool
+	resolvedModel   string
 }
 
 // recoveryRun is the recovery goroutine's view of one attempt.
@@ -222,6 +223,7 @@ func (s *Session) beginRecovery(p TurnCompletedNotification, fingerprint string)
 		finalText: s.finalText, lastErrText: s.lastErrText,
 		latestUsage: s.latestUsage, usageTotal: s.usageTotal, usageBaseline: s.usageBaseline, usageTurnID: s.usageTurnID,
 		usageCarry: s.usageCarry, usageInRecovery: s.usageInRecovery, usageSwitched: s.usageSwitched,
+		resolvedModel: s.resolvedModel,
 	}
 	failed := p.Turn.Usage
 	if failed == nil {
@@ -514,6 +516,8 @@ func (s *Session) restoreFromSnapshot(snap *recoverySnapshot) {
 	s.finalTextMu.Lock()
 	defer s.finalTextMu.Unlock()
 	s.threadID = snap.oldThreadID
+	// A model resolved by an abandoned recovery thread must not outlive it.
+	s.resolvedModel = snap.resolvedModel
 	s.steering.id = snap.oldTurnID
 	s.latestUsage, s.usageTotal, s.usageBaseline, s.usageTurnID = snap.latestUsage, snap.usageTotal, snap.usageBaseline, snap.usageTurnID
 	s.usageCarry, s.usageInRecovery, s.usageSwitched = snap.usageCarry, snap.usageInRecovery, snap.usageSwitched

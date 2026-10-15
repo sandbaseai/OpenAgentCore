@@ -220,6 +220,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
+		// Without command text the model cannot tell which operation completed.
+		if strings.TrimSpace(item.Command) == "" {
+			stats.unsupported++
+			return nil
+		}
 		// A command with neither an exit code nor a status has an unknown
 		// outcome; rebuilding from it could repeat side effects.
 		if item.ExitCode == nil && item.Status == "" {
@@ -477,7 +482,16 @@ func toolContent(blocks []rawContent, stats *historyStats) string {
 func callExceedsBudget(call string) bool {
 	// Measured after escaping: delimiter escapes expand the text, and a later
 	// cut would drop the trailing resource identity.
-	return len([]rune(escapeTranscript(strings.ReplaceAll(call, "\n", " ")))) > maxToolCallChars
+	escaped := escapeTranscript(strings.ReplaceAll(call, "\n", " "))
+	// Scan only to the budget boundary; no []rune copy of a large call.
+	n := 0
+	for range escaped {
+		n++
+		if n > maxToolCallChars {
+			return true
+		}
+	}
+	return false
 }
 
 // toolEntry builds a tool entry. The call is one escaped, bounded line; output
