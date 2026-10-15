@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -540,5 +541,61 @@ func TestRetainedOwnerReceivesCurrentRecoveryPolicy(t *testing.T) {
 	}
 	if owner.closes.Load() != 0 {
 		t.Fatal("policy change retired the owner")
+	}
+}
+
+// plainExecutor hides reusableExecutor's SetUpstreamRecovery.
+type plainExecutor struct{ agent.Executor }
+
+func TestRetainedOwnerWithoutPolicyApplierNeverGetsRecoveryPolicy(t *testing.T) {
+	inner := &reusableExecutor{starts: make(chan *reusableTurn, 4)}
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, NativeSessionRecovery: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return plainExecutor{inner}, nil
+	})
+	sender := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: sender, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	policy := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}
+	prepare := func(key string, p *proto.UpstreamRecoveryControls) error {
+		req := executorRequest()
+		req.Configuration.AgentKind = "codex"
+		req.Configuration.AgentSessionID = "native-session"
+		if p != nil {
+			req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: p}
+		}
+		return r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, key, req))
+	}
+	req := executorRequest()
+	req.Configuration.AgentKind = "codex"
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: policy}
+	first := executorAdmission(t, r, sender, "first", req)
+	startExecutorTurn(t, r, sender, "first", "turn-0", first)
+	(<-inner.starts).finish()
+	waitFor(t, func() bool { return r.ActiveRuns() == 0 }, "Turn settled")
+	// A non-off policy the executor cannot apply is rejected explicitly, not as a conflict.
+	if err := prepare("second", policy); err == nil || !strings.Contains(err.Error(), "unsupported_configuration") {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if status := waitPreparationStatus(t, sender, "second", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("error code = %q", status.ErrorCode)
+	}
+	// Recovery off needs no action: the retained owner is reused.
+	if err := prepare("third", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status := waitPreparationStatus(t, sender, "third", "ready", ""); !status.Reused {
+		t.Fatal("owner was not reused")
+	}
+	if inner.closes.Load() != 0 {
+		t.Fatal("rejection retired the owner")
+	}
+	inner.mu.Lock()
+	defer inner.mu.Unlock()
+	if len(inner.policies) != 0 {
+		t.Fatalf("policy delivered to executor without applier: %+v", inner.policies)
 	}
 }

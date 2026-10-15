@@ -22,6 +22,14 @@ type recoveryPolicyApplier interface {
 	SetUpstreamRecovery(*proto.UpstreamRecoveryControls)
 }
 
+func wantsRecovery(req proto.PromptRequestPayload) bool {
+	return req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil
+}
+func implementsRecoveryPolicy(e agent.Executor) bool {
+	_, ok := e.(recoveryPolicyApplier)
+	return ok
+}
+
 type executorState struct {
 	capabilities                           proto.AgentKindCapabilities
 	id, sessionID, environmentID, stateKey string
@@ -146,6 +154,10 @@ func (r *Router) handleExecutorPrepare(ctx context.Context, env proto.Envelope, 
 			code = "native_session_conflict"
 		case req.RequireExistingNativeSession && owner.nativeID == "":
 			code = "history_unavailable"
+		case wantsRecovery(req) && !implementsRecoveryPolicy(owner.native):
+			// Fail safe: never keep running a retained executor under a recovery
+			// policy it cannot apply.
+			code = "unsupported_configuration"
 		}
 		if code != "" {
 			r.mu.Unlock()

@@ -40,6 +40,11 @@ func newExecutor(ctx context.Context, req proto.PromptRequestPayload, cfg sessio
 	return &Executor{prepared: p}, nil
 }
 
+// The router relies on this to apply recovery policy to retained executors.
+var _ interface {
+	SetUpstreamRecovery(*proto.UpstreamRecoveryControls)
+} = (*Executor)(nil)
+
 // SetUpstreamRecovery replaces the recovery policy used by Turns started after
 // the call; nil disables recovery. A Turn already running keeps the policy it began with.
 func (e *Executor) SetUpstreamRecovery(controls *proto.UpstreamRecoveryControls) {
