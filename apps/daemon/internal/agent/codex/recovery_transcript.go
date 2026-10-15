@@ -339,8 +339,9 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			}
 			paths = append(paths, c.Path)
 		}
-		if len(paths) == 0 && item.Status == "completed" {
-			// A completed edit with no paths hides which files were already changed.
+		if len(paths) == 0 && item.Status != "" {
+			// A terminal edit (completed or failed) with no paths hides which files
+			// may already have been changed, including partial multi-file edits.
 			stats.unsupported++
 			return nil
 		}
