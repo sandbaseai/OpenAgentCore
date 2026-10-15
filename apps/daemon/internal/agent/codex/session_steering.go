@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -101,17 +102,21 @@ func (s *Session) steer(ctx context.Context, input proto.PromptSteerPayload, wri
 	if written != nil {
 		timeout = 0
 	}
+	var wireWritten atomic.Bool
 	raw, err := s.rpc.requestWithTimeout(ctx, "turn/steer", params, func(frame any) error {
 		if err := s.rpc.writeFrameContext(ctx, frame); err != nil {
 			return err
 		}
+		wireWritten.Store(true)
 		if written != nil {
 			written()
 		}
 		return nil
 	}, timeout, nil)
 	if err != nil {
-		if s.steerAgainstRecoveringTurn(turnID) {
+		// Once the frame is on the wire native may have accepted it, so only a
+		// steer that was never written is safe to offer again.
+		if !wireWritten.Load() && s.steerAgainstRecoveringTurn(turnID) {
 			return agent.ErrSteeringNotReady
 		}
 		var rejected *JsonRpcError

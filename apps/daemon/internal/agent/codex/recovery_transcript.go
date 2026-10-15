@@ -141,7 +141,7 @@ func renderUserParts(parts []userPart, stats *historyStats) string {
 		stats.images++
 		line := "[image omitted: user_image]"
 		if p.path != "" {
-			line += " (path: " + p.path + ")"
+			line += " (path: " + escapeTranscript(p.path) + ")"
 		}
 		lines = append(lines, line)
 	}
@@ -255,7 +255,7 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 		stats.toolImages++
 		output := "[image omitted: tool_image]"
 		if item.Path != "" {
-			output += " (path: " + item.Path + ")"
+			output += " (path: " + escapeTranscript(item.Path) + ")"
 		}
 		return []transcriptEntry{toolEntry("image: "+head.Type, output)}
 	}

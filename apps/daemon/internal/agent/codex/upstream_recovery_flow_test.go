@@ -300,8 +300,10 @@ func TestSteerDuringRecovery(t *testing.T) {
 				f.fail(msgReasoning, usageFailed)
 				select {
 				case err := <-result:
-					if !errors.Is(err, agent.ErrSteeringNotReady) {
-						t.Fatalf("steer = %v, want ErrSteeringNotReady", err)
+					// The frame is on the wire, so native may have accepted it:
+					// the outcome stays unknown and Core must not send it again.
+					if err == nil || errors.Is(err, agent.ErrSteeringNotReady) || errors.Is(err, agent.ErrSteeringInactive) || errors.Is(err, agent.ErrSteeringRejected) {
+						t.Fatalf("steer = %v, want an outcome-unknown error", err)
 					}
 				case <-time.After(3 * time.Second):
 					t.Fatal("the in-flight steer was not closed at takeover")
