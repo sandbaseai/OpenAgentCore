@@ -464,18 +464,22 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
 	s.steering.mu.Unlock()
 
+	run.mu.Lock()
+	dropped := run.dropped
+	run.mu.Unlock()
+	// recovery.mu is taken before the new identity is published, so a terminal
+	// recording the abort cannot interleave with the recovered record.
+	s.recovery.mu.Lock()
 	s.threadIDMu.Lock()
-	s.reportedID = newThreadID
+	aborted := run.snap.recorded
+	if !aborted {
+		s.reportedID = newThreadID
+	}
 	s.recovery.gateThread = ""
 	s.usageMu.Lock()
 	s.usageInRecovery, s.usageSwitched = false, false
 	s.usageMu.Unlock()
 	s.threadIDMu.Unlock()
-
-	run.mu.Lock()
-	dropped := run.dropped
-	run.mu.Unlock()
-	s.recovery.mu.Lock()
 	for i := range s.recovery.records {
 		// A recovery followed by another one was itself exhausted.
 		if s.recovery.records[i].Attempt >= 1 {
@@ -487,12 +491,14 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 		s.recovery.used = map[string]bool{}
 	}
 	s.recovery.used[run.fingerprint] = true
-	run.snap.recorded = true
-	s.appendRecoveryLocked(proto.UpstreamRecovery{
-		Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: s.recovery.attempts,
-		Outcome: proto.RecoveryOutcomeRecovered, Dropped: dropped,
-		OldNativeSessionID: run.snap.oldThreadID, NewNativeSessionID: newThreadID,
-	})
+	if !aborted {
+		run.snap.recorded = true
+		s.appendRecoveryLocked(proto.UpstreamRecovery{
+			Fingerprint: run.fingerprint, Action: proto.RecoveryActionRebuildThread, Attempt: s.recovery.attempts,
+			Outcome: proto.RecoveryOutcomeRecovered, Dropped: dropped,
+			OldNativeSessionID: run.snap.oldThreadID, NewNativeSessionID: newThreadID,
+		})
+	}
 	s.recovery.mu.Unlock()
 	s.recovery.snapshot.Store(nil)
 	s.recovery.state.Store(recoveryIdle)
