@@ -560,3 +560,12 @@ func TestDecodeItemFileChangeKeepsStatusAndRejectsMissing(t *testing.T) {
 		t.Fatalf("unsupported = %d", stats.unsupported)
 	}
 }
+
+func TestCallExceedsBudget(t *testing.T) {
+	if callExceedsBudget(strings.Repeat("a", maxToolCallChars)) {
+		t.Fatal("call at the limit must not exceed budget")
+	}
+	if !callExceedsBudget(strings.Repeat("a", maxToolCallChars+1)) {
+		t.Fatal("call over the limit must exceed budget")
+	}
+}

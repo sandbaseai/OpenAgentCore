@@ -275,7 +275,13 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
-		entry := toolEntry("tool: "+item.Server+"/"+item.Tool+" "+string(item.Arguments), "")
+		mcpCall := "tool: " + item.Server + "/" + item.Tool + " " + string(item.Arguments)
+		if callExceedsBudget(mcpCall) {
+			// A truncated side-effecting call could hide the affected resource.
+			stats.unsupported++
+			return nil
+		}
+		entry := toolEntry(mcpCall, "")
 		var parts []string
 		// The typed status tells the model whether the call's side effect completed.
 		if item.Status != "" {
@@ -322,7 +328,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if len(outcome) > 0 {
 			out = strings.TrimSpace(strings.Join(outcome, ", ") + "\n" + out)
 		}
-		return []transcriptEntry{toolEntry("tool: "+item.Tool+" "+string(item.Arguments), out)}
+		dynCall := "tool: " + item.Tool + " " + string(item.Arguments)
+		if callExceedsBudget(dynCall) {
+			stats.unsupported++
+			return nil
+		}
+		return []transcriptEntry{toolEntry(dynCall, out)}
 	case "webSearch":
 		var item struct {
 			Query  string `json:"query"`
@@ -407,6 +418,11 @@ func toolContent(blocks []rawContent, stats *historyStats) string {
 		}
 	}
 	return truncateRunes(strings.Join(lines, "\n"), maxToolOutputChars)
+}
+
+// callExceedsBudget reports whether a rendered tool call would be truncated.
+func callExceedsBudget(call string) bool {
+	return len([]rune(strings.ReplaceAll(call, "\n", " "))) > maxToolCallChars
 }
 
 // toolEntry builds a tool entry. The call is one escaped, bounded line; output
