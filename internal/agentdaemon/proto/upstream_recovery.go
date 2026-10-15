@@ -200,13 +200,14 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 		if i < len(entries)-1 && entry.Outcome != RecoveryOutcomeExhausted {
 			return nil, false
 		}
+		// Any record after a switch, including an abort, starts from the thread
+		// that switch produced.
+		if previousNew != "" && entry.OldNativeSessionID != previousNew {
+			return nil, false
+		}
 		if entry.Attempt != 0 {
 			attempts++
 			if entry.Attempt != attempts {
-				return nil, false
-			}
-			// A later rebuild starts from the thread the earlier switch produced.
-			if previousNew != "" && entry.OldNativeSessionID != previousNew {
 				return nil, false
 			}
 			previousNew = entry.NewNativeSessionID

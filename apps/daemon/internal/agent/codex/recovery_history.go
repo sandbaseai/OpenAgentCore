@@ -34,35 +34,60 @@ func (r rpcHistoryReader) call(ctx context.Context, method string, args, result 
 	return json.Unmarshal(raw, result)
 }
 
+// maxHistoryBytes bounds the raw item bytes retained across all pages.
+const maxHistoryBytes = 64 * 1024 * 1024
+
+// historyPageLimit keeps each response well below rpcStdoutBufferMax.
+const historyPageLimit = 20
+
+// ReadHistory reads paginated history first so no single RPC frame carries the
+// whole thread; the inline thread/read form is only a fallback when listing
+// fails.
 func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]historyTurn, error) {
-	var read struct {
-		Thread struct {
-			ID          string       `json:"id"`
-			HistoryMode string       `json:"historyMode"`
-			Turns       []nativeTurn `json:"turns"`
-		} `json:"thread"`
+	turns, err := r.readPaginated(ctx, threadID)
+	if err == nil {
+		return turns, nil
 	}
-	err := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read)
-	if err == nil && read.Thread.ID == threadID && inlineHistoryComplete(read.Thread.Turns) {
-		return historyTurns(read.Thread.Turns), nil
-	}
-	if err != nil && ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, errHistoryTooLarge) {
 		return nil, err
 	}
+	var read struct {
+		Thread struct {
+			ID    string       `json:"id"`
+			Turns []nativeTurn `json:"turns"`
+		} `json:"thread"`
+	}
+	if rerr := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read); rerr == nil &&
+		read.Thread.ID == threadID && inlineHistoryComplete(read.Thread.Turns) {
+		return historyTurns(read.Thread.Turns), nil
+	}
+	return nil, err
+}
+
+var errHistoryTooLarge = errors.New("codex: thread history exceeds byte bound")
+
+func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([]historyTurn, error) {
 	var cursor *string
 	var turns []nativeTurn
+	total := 0
 	for range maxHistoryPages {
 		var page struct {
 			Data       []nativeTurn `json:"data"`
 			NextCursor *string      `json:"nextCursor"`
 		}
-		args := map[string]any{"threadId": threadID, "itemsView": "full", "sortDirection": "asc", "limit": 100, "cursor": cursor}
+		args := map[string]any{"threadId": threadID, "itemsView": "full", "sortDirection": "asc", "limit": historyPageLimit, "cursor": cursor}
 		if err := r.call(ctx, "thread/turns/list", args, &page); err != nil {
 			return nil, err
 		}
 		for _, turn := range page.Data {
 			if turn.ID == "" || turn.ItemsView != "full" {
 				return nil, errors.New("codex: thread history incomplete")
+			}
+			for _, item := range turn.Items {
+				total += len(item)
+			}
+			if total > maxHistoryBytes {
+				return nil, errHistoryTooLarge
 			}
 			turns = append(turns, turn)
 		}

@@ -119,6 +119,9 @@ func TestParseUpstreamRecoveriesAcceptsValidRecords(t *testing.T) {
 	if entries, ok := ParseUpstreamRecoveries(decoded); !ok || len(entries) != 1 {
 		t.Fatalf("%+v %v", entries, ok)
 	}
+	if entries, ok := ParseUpstreamRecoveries([]any{with(recovered(), "outcome", "exhausted"), with(aborted(), "old_native_session_id", "019e0000-0000-7000-8000-000000000002")}); !ok || len(entries) != 2 {
+		t.Fatalf("chained abort rejected: %+v", entries)
+	}
 	second := with(with(with(with(recovered(), "attempt", 2), "fingerprint", FingerprintModelNoImageInput),
 		"old_native_session_id", "019e0000-0000-7000-8000-000000000002"), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")
 	if entries, ok := ParseUpstreamRecoveries([]any{with(recovered(), "outcome", "exhausted"), second}); !ok || RecoveryAttemptCount(entries) != 2 {
@@ -157,6 +160,7 @@ func TestParseUpstreamRecoveriesRejectsMalformedValuesAsAWhole(t *testing.T) {
 		"count negative":           []any{with(recovered(), "dropped", map[string]any{"reasoning_items": 0, "images": -1})},
 		"count fractional":         []any{with(recovered(), "dropped", map[string]any{"reasoning_items": 0.5, "images": 0})},
 		"disconnected chain":       []any{recovered(), with(with(recovered(), "attempt", 2), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")},
+		"abort not chained":        []any{with(recovered(), "outcome", "exhausted"), with(aborted(), "old_native_session_id", "019e0000-0000-7000-8000-000000000009")},
 		"one bad entry":            []any{recovered(), with(aborted(), "reason", "because")},
 		"oversized":                []any{with(recovered(), "old_native_session_id", strings.Repeat("a", 9000))},
 	} {
