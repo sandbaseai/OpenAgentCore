@@ -63,6 +63,9 @@ func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]h
 	}
 	if rerr := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read); rerr == nil &&
 		read.Thread.ID == threadID && inlineHistoryComplete(read.Thread.Turns) {
+		if nativeTurnsBytes(read.Thread.Turns) > maxHistoryBytes {
+			return nil, errHistoryTooLarge
+		}
 		return historyTurns(read.Thread.Turns), nil
 	}
 	return nil, err
@@ -87,12 +90,7 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 			if turn.ID == "" || turn.ItemsView != "full" {
 				return nil, errors.New("codex: thread history incomplete")
 			}
-			total += len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
-			for _, item := range turn.Items {
-				// Charge the slice header and allocation each retained item costs,
-				// so millions of tiny items cannot stay under the byte bound.
-				total += len(item) + historyItemOverhead
-			}
+			total += nativeTurnBytes(turn)
 			if total > maxHistoryBytes {
 				return nil, errHistoryTooLarge
 			}
@@ -107,6 +105,25 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 		cursor = page.NextCursor
 	}
 	return nil, errors.New("codex: thread history exceeds read bound")
+}
+
+// nativeTurnBytes charges the metadata strings plus the slice header and
+// allocation each retained item costs, so millions of tiny items cannot stay
+// under the byte bound.
+func nativeTurnBytes(turn nativeTurn) int {
+	total := len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
+	for _, item := range turn.Items {
+		total += len(item) + historyItemOverhead
+	}
+	return total
+}
+
+func nativeTurnsBytes(turns []nativeTurn) int {
+	total := 0
+	for _, t := range turns {
+		total += nativeTurnBytes(t)
+	}
+	return total
 }
 
 // inlineHistoryComplete accepts thread/read Turns only when each one is

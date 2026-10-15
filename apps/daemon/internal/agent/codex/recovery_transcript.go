@@ -670,7 +670,13 @@ func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bo
 			break
 		}
 	}
-	remaining := budget - runeLen(blocks[first]) - 2 - omissionReserve
+	// The mandatory head is the first user message plus any carried recovery
+	// records before it; carried records are never droppable.
+	headCost := 0
+	for i := 0; i <= first; i++ {
+		headCost += runeLen(blocks[i]) + 2
+	}
+	remaining := budget - headCost - omissionReserve
 	if remaining < 0 {
 		// The mandatory head block (possibly a carried record, never truncated) plus
 		// the omission reserve does not fit the active budget.
@@ -688,14 +694,14 @@ func renderTranscript(entries []transcriptEntry, budget int) (text string, ok bo
 	if len(tail) == 0 && first < len(blocks)-1 && remaining > 200 && entries[len(entries)-1].kind != entryCarried && entries[len(entries)-1].kind != entryTool {
 		tail = []string{truncateRunes(blocks[len(blocks)-1], remaining)}
 	}
-	omitted := len(blocks) - 1 - len(tail)
+	omitted := len(blocks) - (first + 1) - len(tail)
 	for i, e := range entries {
-		kept := i == first || i >= len(blocks)-len(tail)
+		kept := i <= first || i >= len(blocks)-len(tail)
 		if !kept && (e.kind == entryTool || e.kind == entryCarried) {
 			return "", false
 		}
 	}
-	parts := []string{blocks[first]}
+	parts := append([]string{}, blocks[:first+1]...)
 	if omitted > 0 {
 		parts = append(parts, fmt.Sprintf("[%d earlier items omitted]", omitted))
 	}

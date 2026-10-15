@@ -695,3 +695,15 @@ func TestEscapeTranscriptKeepsNewlinesAndEscapesLabels(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
+
+func TestRenderTranscriptKeepsCarriedPrefixBeforeUser(t *testing.T) {
+	entries := []transcriptEntry{
+		{kind: entryCarried, text: "carried-record"},
+		{kind: entryUser, text: "request"},
+		{kind: entryAssistant, text: strings.Repeat("a", 3000)},
+	}
+	out, ok := renderTranscript(entries, 2000)
+	if !ok || !strings.Contains(out, "carried-record") || !strings.Contains(out, "request") {
+		t.Fatalf("carried prefix and user must be kept, ok=%v out=%q", ok, out)
+	}
+}
