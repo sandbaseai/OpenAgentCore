@@ -547,10 +547,15 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Path   string `json:"path"`
 			Status string `json:"status"`
 		}
-		_ = json.Unmarshal(raw, &item)
-		// A generation still running may finish after the snapshot; replaying
-		// it would repeat the work.
-		if head.Type == "imageGeneration" && item.Status != "" && nonterminalStatus(item.Status) {
+		// An undecodable record leaves its outcome unknown; replaying it could
+		// repeat a paid generation.
+		if err := json.Unmarshal(raw, &item); err != nil {
+			stats.unsupported++
+			return nil
+		}
+		// A generation still running, or one with no known terminal status, may
+		// finish after the snapshot; replaying it would repeat the work.
+		if head.Type == "imageGeneration" && (item.Status == "" || nonterminalStatus(item.Status)) {
 			stats.unsupported++
 			return nil
 		}
@@ -560,7 +565,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if item.Path != "" {
 			output += " (path: " + escapeTranscript(item.Path) + ")"
 		}
-		return []transcriptEntry{toolEntry("image: "+head.Type, output)}
+		call := "image: " + head.Type
+		if head.Type == "imageGeneration" {
+			call += " (status: " + escapeTranscript(item.Status) + ")"
+		}
+		return []transcriptEntry{toolEntry(call, output)}
 	}
 	stats.unsupported++
 	return nil

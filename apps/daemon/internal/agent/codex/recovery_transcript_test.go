@@ -787,7 +787,17 @@ func TestDecodeItemRejectsActiveImageGeneration(t *testing.T) {
 	}
 	stats = historyStats{}
 	entries = decodeItem(item("imageGeneration", map[string]any{"status": "completed"}), false, false, &stats)
-	if len(entries) != 1 || stats.unsupported != 0 {
+	if len(entries) != 1 || stats.unsupported != 0 || !strings.Contains(entries[0].call, "status: completed") {
 		t.Fatalf("completed: entries=%v unsupported=%d", entries, stats.unsupported)
+	}
+	for name, fields := range map[string]map[string]any{
+		"missing status":   {},
+		"malformed status": {"status": map[string]any{"x": 1}},
+		"malformed path":   {"status": "completed", "path": map[string]any{"x": 1}},
+	} {
+		stats = historyStats{}
+		if entries = decodeItem(item("imageGeneration", fields), false, false, &stats); len(entries) != 0 || stats.unsupported != 1 {
+			t.Fatalf("%s: entries=%v unsupported=%d", name, entries, stats.unsupported)
+		}
 	}
 }

@@ -62,6 +62,21 @@ func TestDialNegotiatesUpstreamRecovery(t *testing.T) {
 	}
 }
 
+func TestDialRejectsUnofferedUpstreamRecoverySelection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, http.Header{proto.UpstreamRecoveryHeader: {proto.UpstreamRecoveryV1}})
+		if err == nil {
+			defer c.Close()
+			_, _, _ = c.ReadMessage()
+		}
+	}))
+	defer srv.Close()
+	_, err := transport.Dial(t.Context(), transport.DialOptions{WSURL: httpToWS(srv.URL), DeviceID: "d", Credential: "fixture", DaemonVersion: proto.Version})
+	if !errors.Is(err, transport.ErrPermanent) {
+		t.Fatalf("unoffered selection accepted: %v", err)
+	}
+}
+
 func TestDialOmitsUpstreamRecoveryWithoutCapableHarness(t *testing.T) {
 	offered := make(chan []string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

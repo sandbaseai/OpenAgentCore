@@ -153,6 +153,10 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		_ = wsConn.Close()
 		return nil, fmt.Errorf("transport.Dial: invalid upstream recovery selection: %w", ErrPermanent)
 	}
+	if upstreamRecovery && !opts.UpstreamRecovery {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: upstream recovery selected but not offered: %w", ErrPermanent)
+	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
 	wsConn.SetReadLimit(proto.MaxFrameBytes)
