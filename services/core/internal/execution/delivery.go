@@ -400,9 +400,10 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 			paired, fingerprint := proto.NormalizeEngineFingerprint(code, failure.Fingerprint)
 			if paired != "" {
 				r.EngineErrorCode, r.EngineHTTPStatus, r.EngineFingerprint = code, status, fingerprint
+				// The request ID travels with the accepted classification only.
+				r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 			}
 		}
-		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
 	case proto.TypeDone:

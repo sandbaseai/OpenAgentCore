@@ -617,9 +617,12 @@ func TestCommandCwdAndToolNamespaceAreRendered(t *testing.T) {
 
 func TestDecodeItemRecoveryRejectsUnsafeHistory(t *testing.T) {
 	cases := map[string]map[string]any{
-		"running command":  {"type": "commandExecution", "command": "make", "status": "inProgress"},
-		"nameless dynamic": {"type": "dynamicToolCall", "status": "completed", "arguments": map[string]any{}},
-		"huge file change": {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
+		"running command":     {"type": "commandExecution", "command": "make", "status": "inProgress"},
+		"nameless dynamic":    {"type": "dynamicToolCall", "status": "completed", "arguments": map[string]any{}},
+		"running file change": {"type": "fileChange", "status": "inProgress", "changes": []map[string]any{{"path": "a.go"}}},
+		"running mcp":         {"type": "mcpToolCall", "server": "s", "tool": "t", "status": "inProgress"},
+		"running dynamic":     {"type": "dynamicToolCall", "tool": "t", "status": "inProgress"},
+		"huge file change":    {"type": "fileChange", "status": "completed", "changes": []map[string]any{{"path": strings.Repeat("a", 1100)}}},
 	}
 	for name, m := range cases {
 		var stats historyStats

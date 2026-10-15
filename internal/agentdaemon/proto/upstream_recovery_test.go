@@ -98,8 +98,16 @@ func with(entry map[string]any, key string, value any) map[string]any {
 }
 
 func TestParseUpstreamRecoveriesAcceptsValidRecords(t *testing.T) {
-	entries, ok := ParseUpstreamRecoveries([]any{aborted(), recovered()})
-	if !ok || len(entries) != 2 || RecoveryAttemptCount(entries) != 1 || entries[1].Dropped.ReasoningItems != 3 || entries[0].Reason != RecoveryAbortCurrentInputHasImages {
+	entries, ok := ParseUpstreamRecoveries([]any{recovered(), aborted()})
+	if ok {
+		t.Fatalf("a recovered record must not precede another: %+v", entries)
+	}
+	if _, ok := ParseUpstreamRecoveries([]any{aborted(), recovered()}); ok {
+		t.Fatal("aborted must be final")
+	}
+	exhausted := with(recovered(), "outcome", "exhausted")
+	entries, ok = ParseUpstreamRecoveries([]any{exhausted, with(with(with(recovered(), "attempt", 2), "old_native_session_id", "019e0000-0000-7000-8000-000000000002"), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")})
+	if !ok || len(entries) != 2 || RecoveryAttemptCount(entries) != 2 || entries[0].Dropped.ReasoningItems != 3 {
 		t.Fatalf("%+v %v", entries, ok)
 	}
 	// A value decoded from JSON, as Core receives it.
@@ -113,7 +121,7 @@ func TestParseUpstreamRecoveriesAcceptsValidRecords(t *testing.T) {
 	}
 	second := with(with(with(with(recovered(), "attempt", 2), "fingerprint", FingerprintModelNoImageInput),
 		"old_native_session_id", "019e0000-0000-7000-8000-000000000002"), "new_native_session_id", "019e0000-0000-7000-8000-000000000003")
-	if entries, ok := ParseUpstreamRecoveries([]any{recovered(), second}); !ok || RecoveryAttemptCount(entries) != 2 {
+	if entries, ok := ParseUpstreamRecoveries([]any{with(recovered(), "outcome", "exhausted"), second}); !ok || RecoveryAttemptCount(entries) != 2 {
 		t.Fatalf("%+v %v", entries, ok)
 	}
 }

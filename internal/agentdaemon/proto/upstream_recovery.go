@@ -191,8 +191,13 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 	}
 	attempts := 0
 	previousNew := ""
-	for _, entry := range entries {
+	for i, entry := range entries {
 		if !entry.valid() {
+			return nil, false
+		}
+		// Only the last record may be aborted or recovered; starting another
+		// attempt leaves every earlier one exhausted.
+		if i < len(entries)-1 && entry.Outcome != RecoveryOutcomeExhausted {
 			return nil, false
 		}
 		if entry.Attempt != 0 {

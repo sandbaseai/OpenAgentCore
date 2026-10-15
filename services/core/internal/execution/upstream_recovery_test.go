@@ -45,10 +45,10 @@ func doneWithRecoveries(t *testing.T, recoveries any) proto.Envelope {
 
 func TestDoneRecoveriesAreValidatedStoredAndStrippedFromMetadata(t *testing.T) {
 	var result Result
-	if err := result.mergeObservation(doneWithRecoveries(t, []any{abortedRecord(proto.RecoveryAbortCurrentInputHasImages), recoveryRecord(proto.RecoveryOutcomeRecovered)})); err != nil {
+	if err := result.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeRecovered)})); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Recoveries) != 2 || result.recoveriesDropped || proto.RecoveryAttemptCount(result.Recoveries) != 1 || result.Recoveries[1].NewNativeSessionID != recoveryNewThread {
+	if len(result.Recoveries) != 1 || result.recoveriesDropped || proto.RecoveryAttemptCount(result.Recoveries) != 1 || result.Recoveries[0].NewNativeSessionID != recoveryNewThread {
 		t.Fatalf("%+v", result)
 	}
 	if _, present := result.Done.Metadata[proto.DoneMetaUpstreamRecoveries]; present || result.Done.Metadata[proto.DoneMetaAgentSessionID] != recoveryNewThread || result.Done.Content != "final" || result.Done.Usage.InputTokens != 7 {
@@ -64,10 +64,10 @@ func TestDoneRecoveriesAreValidatedStoredAndStrippedFromMetadata(t *testing.T) {
 			Metadata map[string]any `json:"metadata"`
 		} `json:"done"`
 	}
-	if err := json.Unmarshal(raw, &persisted); err != nil || len(persisted.Recoveries) != 2 || persisted.Done.Metadata[proto.DoneMetaUpstreamRecoveries] != nil {
+	if err := json.Unmarshal(raw, &persisted); err != nil || len(persisted.Recoveries) != 1 || persisted.Done.Metadata[proto.DoneMetaUpstreamRecoveries] != nil {
 		t.Fatal(string(raw), err)
 	}
-	if persisted.Recoveries[0].Reason != proto.RecoveryAbortCurrentInputHasImages || persisted.Recoveries[1].Dropped.ReasoningItems != 4 {
+	if persisted.Recoveries[0].Dropped.ReasoningItems != 4 {
 		t.Fatal(string(raw))
 	}
 }

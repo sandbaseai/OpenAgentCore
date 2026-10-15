@@ -269,6 +269,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		for _, c := range item.Changes {
 			paths = append(paths, c.Path)
 		}
+		// A file change still in progress may land after the history snapshot.
+		if nonterminalStatus(item.Status) {
+			stats.unsupported++
+			return nil
+		}
 		fileCall := "file change (status: " + escapeTranscript(item.Status) + "): " + strings.Join(paths, ", ")
 		if callExceedsBudget(fileCall) {
 			// A truncated path list would hide files that were already changed.
@@ -299,6 +304,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		}
 		// Without a typed outcome the model cannot tell whether the side effect completed.
 		if item.Status == "" && item.Result == nil && (strings.TrimSpace(string(item.Error)) == "" || strings.TrimSpace(string(item.Error)) == "null") {
+			stats.unsupported++
+			return nil
+		}
+		// An unfinished call may complete after the snapshot and repeat its effect.
+		if item.Result == nil && (strings.TrimSpace(string(item.Error)) == "" || strings.TrimSpace(string(item.Error)) == "null") && nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}
@@ -342,6 +352,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		}
 		// Without a tool name the model cannot tell which operation completed.
 		if item.Tool == "" {
+			stats.unsupported++
+			return nil
+		}
+		// An unfinished call may complete after the snapshot and repeat its effect.
+		if item.Success == nil && nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}

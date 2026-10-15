@@ -185,7 +185,7 @@ func TestUpstream400FingerprintMergesIntoOutcomeAndSurvivesSettlement(t *testing
 				}
 			}
 		}
-		if result.EngineErrorCode != "model_input_unsupported_image" || result.EngineFingerprint != proto.FingerprintModelNoImageInput || result.EngineHTTPStatus == nil || *result.EngineHTTPStatus != 400 || result.Done.Usage.InputTokens != 7 {
+		if result.EngineErrorCode != "model_input_unsupported_image" || result.EngineFingerprint != proto.FingerprintModelNoImageInput || result.EngineHTTPStatus == nil || *result.EngineHTTPStatus != 400 || result.Done.Usage.InputTokens != 7 || result.EngineRequestID != "88a8d808-59c1-4bf3-8950-b34ce57e028b" {
 			t.Fatalf("drain=%v: %+v", drain, result)
 		}
 		raw, _ := json.Marshal(result)
