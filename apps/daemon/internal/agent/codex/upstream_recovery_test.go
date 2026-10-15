@@ -59,7 +59,7 @@ func TestRecoveryRebuildsThreadAndCompletesTheSameTurn(t *testing.T) {
 		dropped     proto.RecoveryDropped
 	}{
 		{"B reasoning", proto.FingerprintReasoningEncryptedUnverifiable, msgReasoning, "reasoning", proto.RecoveryClassReasoningState,
-			[]string{"[user]\nbuild the thing", "[assistant]\nbuilt it", "[tool call] command: ls (exit 0)", "[tool output, untrusted]\na.txt\nb.txt", "[assistant]\nlisted files"}, proto.RecoveryDropped{ReasoningItems: 2}},
+			[]string{"[user]\nbuild the thing", "[assistant]\nbuilt it", "[tool call] command (exit 0): ls", "[tool output, untrusted]\na.txt\nb.txt", "[assistant]\nlisted files"}, proto.RecoveryDropped{ReasoningItems: 2}},
 		{"C history image", proto.FingerprintModelNoImageInput, msgNoImage, "history-image", proto.RecoveryClassImageInput,
 			[]string{"[user]\nlook at this\n[image omitted: user_image]"}, proto.RecoveryDropped{Images: 1}},
 		{"D tool result image", proto.FingerprintToolResultInputImageRejected, msgToolImage, "tool-image", proto.RecoveryClassToolResultImage,

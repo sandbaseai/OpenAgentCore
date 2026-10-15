@@ -225,23 +225,27 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
-		call := "command: " + item.Command
+		// The outcome is rendered before the command so call truncation can
+		// never drop it.
+		outcome := ""
 		if item.ExitCode != nil {
-			call += fmt.Sprintf(" (exit %d)", *item.ExitCode)
+			outcome = fmt.Sprintf(" (exit %d)", *item.ExitCode)
+		} else {
+			// Without an exit code, the native status tells the model whether the
+			// command finished, so it is not repeated or assumed complete.
+			outcome = " (status: " + escapeTranscript(item.Status) + ")"
 		}
-		// Without an exit code, the native status tells the model whether the
-		// command finished, so it is not repeated or assumed complete.
-		if item.ExitCode == nil && item.Status != "" {
-			call += " (status: " + escapeTranscript(item.Status) + ")"
-		}
+		call := "command" + outcome + ": " + truncateRunes(item.Command, maxToolCallChars/2)
 		return []transcriptEntry{toolEntry(call, escapeTranscript(truncateRunes(item.Output, maxToolOutputChars)))}
 	case "fileChange":
 		var item struct {
+			Status  string `json:"status"`
 			Changes []struct {
 				Path string `json:"path"`
 			} `json:"changes"`
 		}
-		if json.Unmarshal(raw, &item) != nil {
+		if json.Unmarshal(raw, &item) != nil || item.Status == "" {
+			// A file change without a typed status has an unknown outcome.
 			stats.unsupported++
 			return nil
 		}
@@ -249,7 +253,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		for _, c := range item.Changes {
 			paths = append(paths, c.Path)
 		}
-		return []transcriptEntry{toolEntry("file change: "+strings.Join(paths, ", "), "")}
+		return []transcriptEntry{toolEntry("file change ("+"status: "+escapeTranscript(item.Status)+"): "+strings.Join(paths, ", "), "")}
 	case "mcpToolCall":
 		var item struct {
 			Server    string          `json:"server"`

@@ -72,7 +72,7 @@ func TestTranscriptRendering(t *testing.T) {
 			item("imageView", map[string]any{"path": "/work/shot.png"}),
 			userItem(text("see"), map[string]any{"type": "localImage", "path": "/work/a.png"}, map[string]any{"type": "image", "url": canaryImageData}),
 			item("mcpToolCall", map[string]any{"server": "s", "tool": "t", "arguments": map[string]any{"q": 1}, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}, map[string]any{"type": "image", "data": "CANARY_BASE64"}}}}),
-			item("fileChange", map[string]any{"changes": []any{map[string]any{"path": "a.go", "diff": "SECRET_DIFF"}}}),
+			item("fileChange", map[string]any{"status": "completed", "changes": []any{map[string]any{"path": "a.go", "diff": "SECRET_DIFF"}}}),
 			item("webSearch", map[string]any{"query": "weather"}),
 		}},
 		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("current request"))}},
@@ -85,7 +85,7 @@ func TestTranscriptRendering(t *testing.T) {
 		"[user]\nquestion", "[assistant]\nanswer", "[image omitted: tool_image] (path: /work/shot.png)",
 		"[user]\nsee\n[image omitted: user_image] (path: /work/a.png)\n[image omitted: user_image]",
 		"[tool call] tool: s/t {\"q\":1}\n[tool output, untrusted]\nok\n[image omitted: tool_image]",
-		"[tool call] file change: a.go", "[tool call] web search: weather",
+		"[tool call] file change (status: completed): a.go", "[tool call] web search: weather",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -210,7 +210,7 @@ func TestRecoveryPreambleIsReplacedNotAccumulated(t *testing.T) {
 			if strings.Count(got, recoveryPreambleMarker) != 1 || strings.Count(got, recoveryContinueMarker) != 1 || strings.Count(got, recoveryRequestMarker) != 1 {
 				t.Fatalf("markers accumulated:\n%s", got)
 			}
-			for _, want := range []string{"the oldest question", "the oldest answer", "[tool call] command: make"} {
+			for _, want := range []string{"the oldest question", "the oldest answer", "[tool call] command (exit 0): make"} {
 				if strings.Count(got, want) != 1 {
 					t.Fatalf("%q appears %d times:\n%s", want, strings.Count(got, want), got)
 				}
@@ -466,7 +466,7 @@ func TestDecodeItemDynamicToolCallKeepsOutcome(t *testing.T) {
 func TestDecodeItemCommandWithoutExitCodeKeepsStatus(t *testing.T) {
 	var stats historyStats
 	entries := decodeItem(item("commandExecution", map[string]any{"command": "make", "status": "interrupted"}), false, false, &stats)
-	if len(entries) != 1 || !strings.Contains(entries[0].call, "command: make (status: interrupted)") {
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "command (status: interrupted): make") {
 		t.Fatalf("status lost: %+v", entries)
 	}
 }
@@ -503,5 +503,26 @@ func TestRenderTranscriptDoesNotPartiallyTruncateToolTail(t *testing.T) {
 	entries := []transcriptEntry{{kind: entryUser, text: strings.Repeat("u", 700)}, {kind: entryAssistant, text: strings.Repeat("a", 700)}, toolEntry("deploy", strings.Repeat("o", 700))}
 	if _, ok := renderTranscript(entries, 1000); ok {
 		t.Fatal("a tool entry that cannot fit whole must abort rather than be cut")
+	}
+}
+
+func TestDecodeItemLongCommandKeepsOutcome(t *testing.T) {
+	var stats historyStats
+	long := strings.Repeat("x", 5000)
+	entries := decodeItem(item("commandExecution", map[string]any{"command": long, "exitCode": 7}), false, false, &stats)
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "(exit 7)") {
+		t.Fatalf("outcome lost: %+v", entries)
+	}
+}
+
+func TestDecodeItemFileChangeKeepsStatusAndRejectsMissing(t *testing.T) {
+	var stats historyStats
+	entries := decodeItem(item("fileChange", map[string]any{"status": "failed", "changes": []any{map[string]any{"path": "a.go"}}}), false, false, &stats)
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "status: failed") {
+		t.Fatalf("status lost: %+v", entries)
+	}
+	decodeItem(item("fileChange", map[string]any{"changes": []any{map[string]any{"path": "a.go"}}}), false, false, &stats)
+	if stats.unsupported != 1 {
+		t.Fatalf("unsupported = %d", stats.unsupported)
 	}
 }
