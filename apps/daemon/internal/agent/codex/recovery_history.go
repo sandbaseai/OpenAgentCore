@@ -43,7 +43,7 @@ func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]h
 		} `json:"thread"`
 	}
 	err := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read)
-	if err == nil && read.Thread.ID == threadID && len(read.Thread.Turns) > 0 {
+	if err == nil && read.Thread.ID == threadID && inlineHistoryComplete(read.Thread.Turns) {
 		return historyTurns(read.Thread.Turns), nil
 	}
 	if err != nil && ctx.Err() != nil {
@@ -75,6 +75,21 @@ func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]h
 		cursor = page.NextCursor
 	}
 	return nil, errors.New("codex: thread history exceeds read bound")
+}
+
+// inlineHistoryComplete accepts thread/read Turns only when each one is
+// explicitly marked as carrying its full items; shells or partial items fall
+// back to the paginated thread/turns/list read.
+func inlineHistoryComplete(turns []nativeTurn) bool {
+	if len(turns) == 0 {
+		return false
+	}
+	for _, t := range turns {
+		if t.ID == "" || t.ItemsView != "full" {
+			return false
+		}
+	}
+	return true
 }
 
 func historyTurns(native []nativeTurn) []historyTurn {

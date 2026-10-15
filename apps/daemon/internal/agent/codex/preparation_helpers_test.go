@@ -213,7 +213,7 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 			}
 		case "thread/read":
 			// A scrubbed history of the poisoned thread (see the V2 assumption).
-			result = map[string]any{"thread": map[string]any{"id": "fixture-native-thread", "turns": []any{map[string]any{"id": "fixture-turn-1", "status": "failed", "items": []any{
+			result = map[string]any{"thread": map[string]any{"id": "fixture-native-thread", "turns": []any{map[string]any{"id": "fixture-turn-1", "status": "failed", "itemsView": "full", "items": []any{
 				map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "hold on and continue"}}},
 				map[string]any{"type": "reasoning", "summary": []string{"scrubbed"}},
 				map[string]any{"type": "agentMessage", "text": "scrubbed answer"},

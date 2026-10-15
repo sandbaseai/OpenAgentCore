@@ -108,7 +108,8 @@ it.each([
   { recovery_fingerprints: "reasoning_encrypted_unverifiable" },
   { recovery_outcomes: ["recovered"] },
   { recovery_outcomes: ["exhausted", "aborted"] },
-  { recovery_dropped_reasoning_items: 1_000_001 },
+  { recovery_dropped_reasoning_items: 2_000_001 },
+  { recovery_dropped_images: 2_000_001 },
   { recovery_dropped_images: -1 },
   { recovery_dropped_images: null },
 ])("rejects unsafe recovery facts %j", (override) => {
@@ -158,4 +159,8 @@ it.each([{}, { http_status: 400 }, { http_status: 403 }, { http_status: 500 }, {
   const f = { ...failure, code: "provider_billing_unavailable", params };
   expect(() => projectSessionDiagnostics({ ...session, failure: { ...f, source: "turn", turn_id: turn } }, id)).toThrow();
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: f }, id, turn)).toThrow();
+});
+it("accepts the two-record aggregate of dropped recovery items", () => {
+  const params = { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["reasoning_encrypted_unverifiable", "reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted", "exhausted"], recovery_dropped_reasoning_items: 2_000_000, recovery_dropped_images: 2_000_000 };
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params } }, id, turn)).not.toThrow();
 });

@@ -68,7 +68,7 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
       params = { fingerprint: p.fingerprint as UpstreamFingerprint, summary: p.summary, ...(withId ? { upstream_request_id: p.upstream_request_id as string } : {}) };
       if (withRecovery) {
         const fingerprints = p.recovery_fingerprints, outcomes = p.recovery_outcomes;
-        if (!safeCount(p.recovery_count, 2) || !safeCount(p.recovery_dropped_reasoning_items, 1_000_000) || !safeCount(p.recovery_dropped_images, 1_000_000) ||
+        if (!safeCount(p.recovery_count, 2) || !safeCount(p.recovery_dropped_reasoning_items, 2_000_000) || !safeCount(p.recovery_dropped_images, 2_000_000) ||
             !Array.isArray(fingerprints) || !Array.isArray(outcomes) || fingerprints.length < 1 || fingerprints.length > 2 || outcomes.length !== fingerprints.length ||
             !fingerprints.every((item) => isOneOf(upstreamFingerprints, item)) || !outcomes.every((item) => item === "exhausted" || item === "aborted")) return invalidAdminResponse();
         params = { ...params, recovery_count: p.recovery_count as number, recovery_fingerprints: fingerprints as UpstreamFingerprint[], recovery_outcomes: outcomes as ("exhausted" | "aborted")[],
