@@ -336,8 +336,12 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 			return
 		}
 		var rejected *JsonRpcError
-		// Only an explicit refusal proves the new Turn never started.
-		if !errors.As(err, &rejected) {
+		// Only an explicit refusal proves the new Turn never started, and only if
+		// no turn/started for the rebuilt thread was observed before that reply.
+		s.steering.mu.Lock()
+		startObserved := s.steering.id != ""
+		s.steering.mu.Unlock()
+		if !errors.As(err, &rejected) || startObserved {
 			run.set(func() { run.ambiguous = true })
 		}
 		s.abandonRecovery(run, s.stepReason(proto.RecoveryAbortTurnStartFailed))

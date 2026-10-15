@@ -416,8 +416,10 @@ func TestRecoveryUsageAndOutcomeAcrossWindows(t *testing.T) {
 		if strings.Contains(result.errors[0].Error, canarySecret) || !strings.Contains(result.errors[0].Error, "text before the failure") {
 			t.Fatalf("error text was not restored: %q", result.errors[0].Error)
 		}
-		if f.settled(); !f.s.rpc.Alive() {
-			t.Fatal("an explicit refusal must leave the process reusable")
+		// A turn/started was observed before the refusal, so native may still be
+		// running the rebuilt Turn and the process must not be reused.
+		if f.settled(); !f.s.recovery.unconfirmed.Load() {
+			t.Fatal("an observed start must leave the native outcome unconfirmed")
 		}
 	})
 }
