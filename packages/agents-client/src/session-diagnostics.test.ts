@@ -113,6 +113,7 @@ it.each([
   { recovery_fingerprints: [] },
   { recovery_fingerprints: ["model_no_image_input", "model_no_image_input", "model_no_image_input"], recovery_outcomes: ["aborted", "aborted", "aborted"] },
   { recovery_fingerprints: ["secret-canary"] },
+  { recovery_fingerprints: ["provider_messages_required"] },
   { recovery_fingerprints: "reasoning_encrypted_unverifiable" },
   { recovery_outcomes: ["recovered"] },
   { recovery_outcomes: ["exhausted", "aborted"] },

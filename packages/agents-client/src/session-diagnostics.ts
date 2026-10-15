@@ -23,6 +23,7 @@ export const upstreamFingerprintTuples: Record<UpstreamFingerprint, { code: Diag
 };
 // Mirrors Core's NormalizeProviderRequestID, which accepts any UUID-shaped correlation value.
 const providerRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const recoverableFingerprints: readonly UpstreamFingerprint[] = upstreamFingerprints.filter((item) => item !== "provider_messages_required");
 const recoveryParamKeys = ["recovery_count", "recovery_fingerprints", "recovery_outcomes", "recovery_dropped_reasoning_items", "recovery_dropped_images"];
 const safeCount = (value: unknown, max: number) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 const upstreamRejectionCodes: readonly DiagnosticFailureCode[] = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
@@ -78,7 +79,7 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
         const fingerprints = p.recovery_fingerprints, outcomes = p.recovery_outcomes;
         if (!safeCount(p.recovery_count, 2) || !safeCount(p.recovery_dropped_reasoning_items, 2_000_000) || !safeCount(p.recovery_dropped_images, 2_000_000) ||
             !Array.isArray(fingerprints) || !Array.isArray(outcomes) || fingerprints.length < 1 || fingerprints.length > 2 || outcomes.length !== fingerprints.length ||
-            !fingerprints.every((item) => isOneOf(upstreamFingerprints, item)) || !outcomes.every((item) => item === "exhausted" || item === "aborted")) return invalidAdminResponse();
+            !fingerprints.every((item) => isOneOf(recoverableFingerprints, item)) || !outcomes.every((item) => item === "exhausted" || item === "aborted")) return invalidAdminResponse();
         params = { ...params, recovery_count: p.recovery_count as number, recovery_fingerprints: fingerprints as UpstreamFingerprint[], recovery_outcomes: outcomes as ("exhausted" | "aborted")[],
           recovery_dropped_reasoning_items: p.recovery_dropped_reasoning_items as number, recovery_dropped_images: p.recovery_dropped_images as number };
       }
