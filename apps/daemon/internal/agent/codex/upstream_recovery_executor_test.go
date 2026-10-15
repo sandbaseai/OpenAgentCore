@@ -53,7 +53,7 @@ func TestExecutorRecoversTheTurnAndNextTurnUsesTheRebuiltThread(t *testing.T) {
 	threads := map[string]bool{}
 	for _, f := range preparationFrames(t, root) {
 		switch f.Method {
-		case "thread/start", "thread/read", "turn/start":
+		case "thread/start", "thread/turns/list", "thread/read", "turn/start":
 			methods = append(methods, f.Method)
 			var params struct {
 				ThreadID string `json:"threadId"`
@@ -64,7 +64,7 @@ func TestExecutorRecoversTheTurnAndNextTurnUsesTheRebuiltThread(t *testing.T) {
 		}
 	}
 	// start, turn, then the recovery (read, start, turn), then the next Turn's turn.
-	want := []string{"thread/start", "turn/start", "thread/read", "thread/start", "turn/start", "turn/start"}
+	want := []string{"thread/start", "turn/start", "thread/turns/list", "thread/start", "turn/start", "turn/start"}
 	if !reflect.DeepEqual(methods, want) || len(threads) != 2 {
 		t.Fatalf("native requests = %v threads = %v", methods, threads)
 	}
@@ -93,5 +93,51 @@ func TestExecutorWithoutRecoveryControlsFailsTheTurn(t *testing.T) {
 		if f.Method == "thread/read" {
 			t.Fatal("history was read without recovery")
 		}
+	}
+}
+
+// Without thread/turns/list there is no safe way to read the history, so the
+// Turn keeps its original failure, no whole-thread thread/read is attempted,
+// and the executor stays usable for the next Turn.
+func TestExecutorAbandonsRecoveryWhenHistoryListIsUnavailable(t *testing.T) {
+	req, cfg, root := preparationFixture(t)
+	req.ExecutionControls.UpstreamRecovery = &proto.UpstreamRecoveryControls{Enabled: true, Classes: []string{proto.RecoveryClassReasoningState}}
+	e, err := testExecutor(t, "recover-400-nolist", req, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan proto.Envelope, 64)
+	turn, err := e.StartTurn(t.Context(), "first", proto.TextInput("hold on and continue"), out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := summarize(t, settledFrames(t, turn, out))
+	if result.dones != 1 || len(result.errors) != 1 || result.errors[0].Fingerprint != proto.FingerprintReasoningEncryptedUnverifiable {
+		t.Fatalf("terminal = %+v", result)
+	}
+	if result.done.Metadata[proto.DoneMetaAgentSessionID] != "fixture-native-thread" {
+		t.Fatal("the session id changed")
+	}
+	out = make(chan proto.Envelope, 64)
+	turn, err = e.StartTurn(t.Context(), "second", proto.TextInput("hold on and continue"), out)
+	if err != nil {
+		t.Fatalf("executor not reusable after abandoned recovery: %v", err)
+	}
+	next := summarize(t, settledFrames(t, turn, out))
+	if next.dones != 1 || len(next.errors) != 0 {
+		t.Fatalf("next terminal = %+v", next)
+	}
+	var sawList bool
+	for _, f := range preparationFrames(t, root) {
+		switch f.Method {
+		case "thread/read":
+			t.Fatal("whole-thread thread/read fallback was attempted")
+		case "thread/turns/list":
+			sawList = true
+		case "thread/start":
+		}
+	}
+	if !sawList {
+		t.Fatal("history list was never requested")
 	}
 }

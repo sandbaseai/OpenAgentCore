@@ -185,7 +185,7 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 				}
 			}
 			result = map[string]any{"thread": map[string]string{"id": "fixture-native-thread"}, "model": "fixture-model"}
-			if executorMode == "recover-400" && frame.Method == "thread/start" {
+			if strings.HasPrefix(executorMode, "recover-400") && frame.Method == "thread/start" {
 				// The first thread is the poisoned one; every rebuild gets a new id.
 				if threadStarts++; threadStarts > 1 {
 					result = map[string]any{"thread": map[string]string{"id": "fixture-recovered-thread"}, "model": "fixture-model"}
@@ -211,20 +211,24 @@ func TestPreparationFakeCodexProcess(t *testing.T) {
 			if allowed == nil {
 				_ = os.WriteFile(os.Getenv("OAC_TEST_PREPARATION_FRAMES")+".terminated", nil, 0600)
 			}
-		case "thread/read":
+		case "thread/turns/list":
+			if executorMode == "recover-400-nolist" {
+				_ = output.Encode(map[string]any{"jsonrpc": "2.0", "id": frame.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
+				continue
+			}
 			// A scrubbed history of the poisoned thread (see the V2 assumption).
-			result = map[string]any{"thread": map[string]any{"id": "fixture-native-thread", "turns": []any{map[string]any{"id": "fixture-turn-1", "status": "failed", "itemsView": "full", "items": []any{
+			result = map[string]any{"data": []any{map[string]any{"id": "fixture-turn-1", "status": "failed", "itemsView": "full", "items": []any{
 				map[string]any{"type": "userMessage", "content": []any{map[string]any{"type": "text", "text": "hold on and continue"}}},
 				map[string]any{"type": "reasoning", "summary": []string{"scrubbed"}},
 				map[string]any{"type": "agentMessage", "text": "scrubbed answer"},
-			}}}}}
+			}}}, "nextCursor": nil}
 		case "turn/interrupt":
 			if executorMode == "interrupt-error" {
 				_ = output.Encode(map[string]any{"id": frame.ID, "error": map[string]any{"code": -32603, "message": "interrupt rejected"}})
 				continue
 			}
 		case "turn/start":
-			if executorMode == "recover-400" {
+			if strings.HasPrefix(executorMode, "recover-400") {
 				var target struct {
 					ThreadID string `json:"threadId"`
 				}

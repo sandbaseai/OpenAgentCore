@@ -157,31 +157,13 @@ const historyTurnOverhead = 256
 // historyItemOverhead approximates the per-item json.RawMessage header and allocation.
 const historyItemOverhead = 64
 
-// ReadHistory reads paginated history first so no single RPC frame carries the
-// whole thread; the inline thread/read form is only a fallback when listing
-// fails.
+// ReadHistory reads history only through paginated thread/turns/list so no
+// single RPC frame carries the whole thread. There is deliberately no inline
+// thread/read fallback: an unbounded response above rpcStdoutBufferMax would
+// retire the RPC client. When listing is unavailable the caller abandons
+// recovery and reports the original provider failure.
 func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]historyTurn, error) {
-	turns, err := r.readPaginated(ctx, threadID)
-	if err == nil {
-		return turns, nil
-	}
-	if ctx.Err() != nil || errors.Is(err, errHistoryTooLarge) {
-		return nil, err
-	}
-	var read struct {
-		Thread struct {
-			ID    string       `json:"id"`
-			Turns boundedTurns `json:"turns"`
-		} `json:"thread"`
-	}
-	if rerr := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read); rerr == nil &&
-		read.Thread.ID == threadID && inlineHistoryComplete(read.Thread.Turns) {
-		if nativeTurnsBytes(read.Thread.Turns) > maxHistoryBytes {
-			return nil, errHistoryTooLarge
-		}
-		return historyTurns(read.Thread.Turns), nil
-	}
-	return nil, err
+	return r.readPaginated(ctx, threadID)
 }
 
 var errHistoryTooLarge = errors.New("codex: thread history exceeds byte bound")
@@ -233,29 +215,6 @@ func nativeTurnBytes(turn nativeTurn) int {
 		total += len(item) + historyItemOverhead
 	}
 	return total
-}
-
-func nativeTurnsBytes(turns []nativeTurn) int {
-	total := 0
-	for _, t := range turns {
-		total += nativeTurnBytes(t)
-	}
-	return total
-}
-
-// inlineHistoryComplete accepts thread/read Turns only when each one is
-// explicitly marked as carrying its full items; shells or partial items fall
-// back to the paginated thread/turns/list read.
-func inlineHistoryComplete(turns []nativeTurn) bool {
-	if len(turns) == 0 {
-		return false
-	}
-	for _, t := range turns {
-		if t.ID == "" || t.ItemsView != "full" || !t.itemsPresent {
-			return false
-		}
-	}
-	return true
 }
 
 func historyTurns(native []nativeTurn) []historyTurn {
