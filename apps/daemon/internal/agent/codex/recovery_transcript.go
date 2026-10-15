@@ -377,7 +377,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// An unfinished call may complete after the snapshot and repeat its effect.
-		if item.Success == nil && nonterminalStatus(item.Status) {
+		if nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}

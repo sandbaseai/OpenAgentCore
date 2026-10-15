@@ -69,6 +69,40 @@ func (t *nativeTurn) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// maxHistoryTurns bounds Turns decoded from one response.
+const maxHistoryTurns = 10000
+
+// boundedTurns decodes a Turn array incrementally and fails past maxHistoryTurns.
+type boundedTurns []nativeTurn
+
+func (b *boundedTurns) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		*b = nil
+		return nil
+	}
+	if tok != json.Delim('[') {
+		return errors.New("codex: history turns is not an array")
+	}
+	var out []nativeTurn
+	for dec.More() {
+		if len(out) >= maxHistoryTurns {
+			return errHistoryTooLarge
+		}
+		var turn nativeTurn
+		if err := dec.Decode(&turn); err != nil {
+			return err
+		}
+		out = append(out, turn)
+	}
+	*b = out
+	return nil
+}
+
 func decodeBoundedItems(dec *json.Decoder, items *[]json.RawMessage) error {
 	tok, err := dec.Token()
 	if err != nil {
@@ -131,7 +165,7 @@ func (r rpcHistoryReader) ReadHistory(ctx context.Context, threadID string) ([]h
 	var read struct {
 		Thread struct {
 			ID    string       `json:"id"`
-			Turns []nativeTurn `json:"turns"`
+			Turns boundedTurns `json:"turns"`
 		} `json:"thread"`
 	}
 	if rerr := r.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &read); rerr == nil &&
@@ -152,7 +186,7 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 	total := 0
 	for range maxHistoryPages {
 		var page struct {
-			Data       []nativeTurn `json:"data"`
+			Data       boundedTurns `json:"data"`
 			NextCursor *string      `json:"nextCursor"`
 		}
 		args := map[string]any{"threadId": threadID, "itemsView": "full", "sortDirection": "asc", "limit": historyPageLimit, "cursor": cursor}

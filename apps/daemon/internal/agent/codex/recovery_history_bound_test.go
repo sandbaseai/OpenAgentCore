@@ -34,3 +34,19 @@ func TestNativeTurnUnmarshalDecodesFields(t *testing.T) {
 		t.Fatalf("unexpected turn: %+v", turn)
 	}
 }
+
+func TestDynamicToolCallWithOutcomeButInProgressStatusIsUnsupported(t *testing.T) {
+	raw := json.RawMessage(`{"type":"dynamicToolCall","tool":"t","status":"inProgress","success":true}`)
+	var stats historyStats
+	if got := decodeItem(raw, false, false, &stats); got != nil || stats.unsupported != 1 {
+		t.Fatalf("got %v unsupported=%d, want rejected", got, stats.unsupported)
+	}
+}
+
+func TestBoundedTurnsRejectExcessTurns(t *testing.T) {
+	body := `[` + strings.Repeat("{},", maxHistoryTurns) + `{}]`
+	var turns boundedTurns
+	if err := json.Unmarshal([]byte(body), &turns); !errors.Is(err, errHistoryTooLarge) {
+		t.Fatalf("err = %v, want errHistoryTooLarge", err)
+	}
+}
