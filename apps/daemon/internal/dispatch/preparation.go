@@ -50,7 +50,7 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 		return r.rejectPreparation(env, "invalid_request")
 	}
 	req := input.Configuration
-	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && (!r.upstreamRecovery || req.AgentKind != upstreamRecoveryAgentKind || req.ObserveSubagentIdentities) {
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && (!r.upstreamRecovery.Load() || req.AgentKind != upstreamRecoveryAgentKind || req.ObserveSubagentIdentities) {
 		return r.rejectPreparation(env, "unsupported_configuration")
 	}
 	if !req.WorkspaceReadOnly {

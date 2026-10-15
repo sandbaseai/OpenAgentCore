@@ -479,3 +479,13 @@ func TestExecutorResumesSameOwnerAndNextTurnAfterSuspension(t *testing.T) {
 		t.Fatal("resumed Turn retired its healthy native owner")
 	}
 }
+
+func TestRouterSetUpstreamRecoveryRefreshesSelection(t *testing.T) {
+	r, _, _ := executorRouter(t, &reusableExecutor{}, time.Minute)
+	req := executorRequest()
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	r.SetUpstreamRecovery(false)
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted while unselected")
+	}
+}

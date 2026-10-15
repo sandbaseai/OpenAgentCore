@@ -44,7 +44,8 @@ func newSuspendedRouter(conn *transport.Conn, registry *agent.Registry) (*suspen
 		return nil, err
 	}
 	sender := &reconnectSender{conn: conn}
-	router, err := dispatch.New(dispatch.Config{Registry: registry, Sender: sender, Log: obslog.Bg(), LocalWorkspace: local})
+	recovery := conn != nil && conn.UpstreamRecovery()
+	router, err := dispatch.New(dispatch.Config{Registry: registry, Sender: sender, Log: obslog.Bg(), LocalWorkspace: local, UpstreamRecovery: recovery})
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +245,7 @@ func (s *suspendedRouter) resume(ctx context.Context, conn *transport.Conn, requ
 			return errors.Join(transport.ErrPermanent, errors.New("connect: expected authenticated suspension resume"))
 		}
 		s.sender.replace(conn)
+		s.router.SetUpstreamRecovery(conn.UpstreamRecovery())
 		if err := s.router.Resume(echoed, s.sender); err != nil {
 			return errors.Join(transport.ErrPermanent, err)
 		}

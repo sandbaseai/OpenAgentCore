@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
@@ -52,7 +53,7 @@ type Router struct {
 	workspaceExport     *workspaceExport
 	workspaceReads      map[string]struct{}
 	localWorkspace      *localworkspace.Binding
-	upstreamRecovery    bool
+	upstreamRecovery    atomic.Bool
 }
 
 type appliedFunctionResult struct {
@@ -116,7 +117,7 @@ func New(cfg Config) (*Router, error) {
 	if preparationTimeout <= 0 || preparationTimeout > 5*time.Minute {
 		preparationTimeout = 5 * time.Minute
 	}
-	return &Router{
+	r := &Router{
 		registry:            cfg.Registry,
 		sender:              cfg.Sender,
 		log:                 log,
@@ -130,9 +131,14 @@ func New(cfg Config) (*Router, error) {
 		preparationRequests: make(map[string]*preparationState),
 		preparationTimeout:  preparationTimeout,
 		localWorkspace:      cfg.LocalWorkspace,
-		upstreamRecovery:    cfg.UpstreamRecovery,
-	}, nil
+	}
+	r.upstreamRecovery.Store(cfg.UpstreamRecovery)
+	return r, nil
 }
+
+// SetUpstreamRecovery updates the recovery extension selected by the current
+// connection. A Router retained across a suspension reconnect must refresh it.
+func (r *Router) SetUpstreamRecovery(selected bool) { r.upstreamRecovery.Store(selected) }
 
 // Handle dispatches one inbound Envelope. Errors are returned for
 // programmer-visible problems (bad shape, registry miss); transient
