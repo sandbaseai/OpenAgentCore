@@ -382,6 +382,31 @@ func TestExecutionPrepareRejectsRecoveryControlsWithSubagentObservation(t *testi
 		t.Fatalf("status=%+v", status)
 	}
 }
+func TestExecutionPrepareRejectsRecoveryControlsWithoutHarnessCapability(t *testing.T) {
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return &reusableExecutor{}, nil
+	})
+	s := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: s, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.Shutdown(ctx)
+	})
+	req := executorRequest()
+	req.Configuration.AgentKind = "codex"
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted for a harness without native recovery")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("status=%+v", status)
+	}
+}
 func TestExecutorRejectsOutputFromAnotherTurn(t *testing.T) {
 	e := &reusableExecutor{starts: make(chan *reusableTurn, 1)}
 	r, s, _ := executorRouter(t, e, time.Minute)

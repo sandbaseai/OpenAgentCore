@@ -499,12 +499,19 @@ func TestDecodeItemDynamicToolCallKeepsOutcome(t *testing.T) {
 
 func TestDecodeItemCommandWithoutExitCodeKeepsStatus(t *testing.T) {
 	var stats historyStats
-	entries := decodeItem(item("commandExecution", map[string]any{"command": "make", "status": "interrupted"}), false, false, &stats)
-	if len(entries) != 1 || !strings.Contains(entries[0].call, "command (status: interrupted): make") {
+	entries := decodeItem(item("commandExecution", map[string]any{"command": "make", "status": "declined"}), false, false, &stats)
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "command (status: declined): make") {
 		t.Fatalf("status lost: %+v", entries)
 	}
 }
 
+func TestDecodeItemCommandWithUnknownStatusIsUnsupported(t *testing.T) {
+	var stats historyStats
+	entries := decodeItem(item("commandExecution", map[string]any{"command": "make", "status": "queued"}), false, false, &stats)
+	if len(entries) != 0 || stats.unsupported != 1 {
+		t.Fatalf("unknown status accepted: %+v unsupported=%d", entries, stats.unsupported)
+	}
+}
 func TestDecodeItemCommandWithoutOutcomeIsUnsupported(t *testing.T) {
 	var stats historyStats
 	entries := decodeItem(item("commandExecution", map[string]any{"command": "deploy"}), false, false, &stats)

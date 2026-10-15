@@ -51,6 +51,9 @@ func (r *Router) handleExecutorPrepare(ctx context.Context, env proto.Envelope, 
 	if !available {
 		return r.rejectPreparation(env, "resource_unavailable")
 	}
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && !caps.NativeSessionRecovery.IsSupported() {
+		return r.rejectPreparation(env, "unsupported_configuration")
+	}
 	factory, err := r.registry.ResolveExecutor(req.AgentKind)
 	if err != nil || !caps.Preparation.IsSupported() {
 		return r.rejectPreparation(env, "unsupported_preparation")

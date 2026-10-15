@@ -480,15 +480,16 @@ func callExceedsBudget(call string) bool {
 
 // toolEntry builds a tool entry. The call is one escaped, bounded line; output
 // is expected to be escaped and bounded already.
-// nonterminalStatus reports whether a native status means work is still running.
+// nonterminalStatus reports whether a native status is not a known terminal
+// outcome. Only observed terminal values are accepted, so a status added by a
+// native update is treated as unreadable instead of as completed history.
 func nonterminalStatus(status string) bool {
 	switch strings.ToLower(status) {
-	case "inprogress", "in_progress", "running", "pending":
-		return true
+	case "completed", "failed", "declined":
+		return false
 	}
-	return false
+	return true
 }
-
 func toolEntry(call, output string) transcriptEntry {
 	return transcriptEntry{kind: entryTool, call: escapeTranscript(truncateRunes(strings.ReplaceAll(call, "\n", " "), maxToolCallChars)), output: output}
 }
