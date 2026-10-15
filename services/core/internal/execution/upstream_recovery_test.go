@@ -313,3 +313,17 @@ func TestParseUpstreamRecoveriesRejectsAbortedWithoutOldSession(t *testing.T) {
 		t.Fatal("aborted record without old_native_session_id accepted")
 	}
 }
+
+func TestRecoveredRecordAfterTerminalErrorIsDropped(t *testing.T) {
+	result := Result{ErrorCode: "engine_failed"}
+	if err := result.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeRecovered)})); err != nil {
+		t.Fatal(err)
+	}
+	if result.Recoveries != nil || !result.recoveriesDropped {
+		t.Fatalf("recovered record contradicting a terminal error was kept: %+v", result)
+	}
+	exhausted := Result{ErrorCode: "engine_failed"}
+	if err := exhausted.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeExhausted)})); err != nil || len(exhausted.Recoveries) != 1 {
+		t.Fatal(err, exhausted)
+	}
+}

@@ -438,7 +438,13 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 	// instead of being stored as runtime-supplied JSON.
 	if raw, present := done.Metadata[proto.DoneMetaUpstreamRecoveries]; present {
 		delete(done.Metadata, proto.DoneMetaUpstreamRecoveries)
-		if recoveries, ok := proto.ParseUpstreamRecoveries(raw); ok {
+		recoveries, ok := proto.ParseUpstreamRecoveries(raw)
+		// A recovered final record contradicts an error frame already seen:
+		// the daemon marks the last attempt exhausted when the Turn fails.
+		if ok && r.ErrorCode == "engine_failed" && recoveries[len(recoveries)-1].Outcome == proto.RecoveryOutcomeRecovered {
+			ok = false
+		}
+		if ok {
 			r.Recoveries, r.recoveriesDropped = recoveries, false
 		} else {
 			r.Recoveries, r.recoveriesDropped = nil, true

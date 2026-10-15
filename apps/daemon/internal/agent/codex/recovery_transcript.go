@@ -475,7 +475,9 @@ func toolContent(blocks []rawContent, stats *historyStats) string {
 
 // callExceedsBudget reports whether a rendered tool call would be truncated.
 func callExceedsBudget(call string) bool {
-	return len([]rune(strings.ReplaceAll(call, "\n", " "))) > maxToolCallChars
+	// Measured after escaping: delimiter escapes expand the text, and a later
+	// cut would drop the trailing resource identity.
+	return len([]rune(escapeTranscript(strings.ReplaceAll(call, "\n", " ")))) > maxToolCallChars
 }
 
 // toolEntry builds a tool entry. The call is one escaped, bounded line; output

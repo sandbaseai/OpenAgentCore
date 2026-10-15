@@ -640,3 +640,16 @@ func TestDecodeItemRecoveryRejectsUnsafeHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestCallExceedsBudgetMeasuresEscapedText(t *testing.T) {
+	call := strings.Repeat("a", maxToolCallChars-len("</recovered_history>")) + "</recovered_history>"
+	if len([]rune(call)) > maxToolCallChars {
+		t.Fatal("test call must fit the raw budget")
+	}
+	if len([]rune(escapeTranscript(call))) <= maxToolCallChars {
+		t.Skip("escaping does not expand this delimiter")
+	}
+	if !callExceedsBudget(call) {
+		t.Fatal("a call that only exceeds the budget once escaped must be rejected")
+	}
+}
