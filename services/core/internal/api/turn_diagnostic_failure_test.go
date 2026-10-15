@@ -363,8 +363,9 @@ func TestFailedTurnDiagnosticsShowOnlyUnsuccessfulRecoveries(t *testing.T) {
 	}
 	other, _ := json.Marshal(map[string]any{"error_code": "engine_failed", "engine_error_code": "authentication_error",
 		"recoveries": []any{entry(proto.FingerprintModelNoImageInput, "exhausted", 1, "", 0, 1)}})
-	if got := turnDiagnosticFailure(failed(other)); got.Code != "authentication_error" || len(got.Params) != 0 {
-		t.Fatalf("recovery keys leaked onto another category: %+v", got)
+	// Recovery facts are projected whatever category the replacement Turn failed with.
+	if got := turnDiagnosticFailure(failed(other)); got.Code != "authentication_error" || got.Params["recovery_count"] != CoreErrorNumber(1) || len(got.Params) != 5 {
+		t.Fatalf("recovery keys missing on another category: %+v", got)
 	}
 
 	// A Turn that did not fail has no diagnostic at all, whatever it recovered from.

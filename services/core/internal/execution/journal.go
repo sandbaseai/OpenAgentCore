@@ -39,7 +39,7 @@ func recordCancellation(ctx context.Context, journal *journal, reply cancellatio
 		if err != nil {
 			return err
 		}
-		if err := result.mergeDone(raw); err != nil {
+		if err := result.mergeDone(raw, false); err != nil {
 			return err
 		}
 	}

@@ -84,6 +84,9 @@ type Result struct {
 	// recoveriesDropped records that the Runtime reported recovery records
 	// Core rejected as malformed. It is logged and never stored.
 	recoveriesDropped bool
+	// recoveryPolicy is the normalized policy Core sent for this execution.
+	// Records outside it are rejected; nil skips the check.
+	recoveryPolicy *proto.UpstreamRecoveryControls
 }
 
 // Run claims once before subscribing or sending. Uncertain deliveries are not replayed.

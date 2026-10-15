@@ -60,6 +60,11 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 	defer unsubscribeChanges()
 	status = sessions.TurnFailed
 	result.AppliedThrough = first
+	policy := proto.UpstreamRecoveryControls{}
+	if request.ExecutionControls != nil && request.ExecutionControls.UpstreamRecovery != nil {
+		policy = request.ExecutionControls.UpstreamRecovery.Normalized()
+	}
+	result.recoveryPolicy = &policy
 	subscription, err := peer.SubscribeDurable(runID)
 	if err != nil {
 		result.ErrorCode = "device_disconnected"
@@ -407,12 +412,14 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
 	case proto.TypeDone:
-		return r.mergeDone(env.Payload)
+		return r.mergeDone(env.Payload, true)
 	}
 	return nil
 }
 
-func (r *Result) mergeDone(raw json.RawMessage) error {
+// terminal is true for a Runtime done frame, where no earlier error frame means
+// the Turn succeeded; a cancellation outcome may legitimately end aborted.
+func (r *Result) mergeDone(raw json.RawMessage, terminal bool) error {
 	var done proto.DonePayload
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &done); err != nil {
@@ -444,6 +451,16 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 		if ok && r.ErrorCode == "engine_failed" && recoveries[len(recoveries)-1].Outcome == proto.RecoveryOutcomeRecovered {
 			ok = false
 		}
+		// A Turn that ended without an error must end on a recovered record;
+		// an exhausted or aborted final record contradicts a successful Turn.
+		if ok && terminal && r.ErrorCode == "" && recoveries[len(recoveries)-1].Outcome != proto.RecoveryOutcomeRecovered {
+			ok = false
+		}
+		// Records must stay inside the policy Core sent: attempt budget and
+		// enabled classes.
+		if ok && r.recoveryPolicy != nil && !recoveriesWithinPolicy(recoveries, *r.recoveryPolicy) {
+			ok = false
+		}
 		// The audit must describe the native Session Core will resume: the new
 		// ID after a switch, the old ID after an abort.
 		if ok {
@@ -467,4 +484,25 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 	}
 	r.Done = done
 	return nil
+}
+
+// recoveriesWithinPolicy reports whether the records respect the attempt
+// budget and enabled classes of the policy Core sent.
+func recoveriesWithinPolicy(recoveries []proto.UpstreamRecovery, policy proto.UpstreamRecoveryControls) bool {
+	if !policy.Enabled || proto.RecoveryAttemptCount(recoveries) > policy.MaxAttempts {
+		return false
+	}
+	for _, record := range recoveries {
+		allowed := false
+		for _, class := range policy.Classes {
+			if fingerprint, known := proto.RecoveryClassFingerprint(class); known && fingerprint == record.Fingerprint {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
 }

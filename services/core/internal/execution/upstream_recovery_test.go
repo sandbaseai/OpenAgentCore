@@ -175,7 +175,7 @@ func TestRecoveriesMustMatchReportedNativeSession(t *testing.T) {
 	}
 }
 func TestRecoveriesSurviveCancellationReceiptAndDrain(t *testing.T) {
-	var result Result
+	result := Result{ErrorCode: "engine_failed"}
 	j := journal{writer: &recoveringWriter{}, next: 1}
 	events := make(chan proto.Envelope, 1)
 	events <- doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeExhausted)})
@@ -221,7 +221,10 @@ func TestRecoveryCountCountsSwitchesNotAbandonedEntries(t *testing.T) {
 		"aborted only":   {[]any{abortedAfterSwitch("history_unreadable")}, 0},
 		"aborted second": {[]any{recoveryRecord("exhausted"), abortedAfterSwitch("not_applicable")}, 1},
 	} {
-		var result Result
+		result := Result{ErrorCode: "engine_failed"}
+		if name == "recovered" {
+			result.ErrorCode = ""
+		}
 		if err := result.mergeObservation(doneWithRecoveries(t, test.records)); err != nil {
 			t.Fatal(name, err)
 		}
@@ -372,5 +375,50 @@ func TestRecoveredRecordAfterTerminalErrorIsDropped(t *testing.T) {
 	exhausted := Result{ErrorCode: "engine_failed"}
 	if err := exhausted.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeExhausted)})); err != nil || len(exhausted.Recoveries) != 1 {
 		t.Fatal(err, exhausted)
+	}
+}
+func TestSuccessfulDoneRejectsUnsuccessfulFinalRecovery(t *testing.T) {
+	for _, outcome := range []string{proto.RecoveryOutcomeExhausted} {
+		var result Result
+		if err := result.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(outcome)})); err != nil {
+			t.Fatal(err)
+		}
+		if result.Recoveries != nil || !result.recoveriesDropped {
+			t.Fatalf("%s accepted on a successful Turn: %+v", outcome, result)
+		}
+	}
+	var result Result
+	if err := result.mergeObservation(doneWithRecoveries(t, []any{recoveryRecord(proto.RecoveryOutcomeRecovered)})); err != nil || len(result.Recoveries) != 1 {
+		t.Fatal(err, result)
+	}
+}
+func TestRecoveriesMustStayWithinSelectedPolicy(t *testing.T) {
+	enabled := func(attempts int, classes ...string) *proto.UpstreamRecoveryControls {
+		policy := proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: attempts, Classes: classes}.Normalized()
+		return &policy
+	}
+	second := recoveryRecord(proto.RecoveryOutcomeRecovered)
+	second["attempt"] = 2
+	second["old_native_session_id"] = recoveryOldThread
+	first := recoveryRecord(proto.RecoveryOutcomeExhausted)
+	first["new_native_session_id"] = "019e0000-0000-7000-8000-000000000003"
+	second["old_native_session_id"] = "019e0000-0000-7000-8000-000000000003"
+	for name, test := range map[string]struct {
+		policy  *proto.UpstreamRecoveryControls
+		records []any
+		keep    bool
+	}{
+		"within policy":        {enabled(2), []any{first, second}, true},
+		"over attempt budget":  {enabled(1), []any{first, second}, false},
+		"disabled class":       {enabled(2, proto.RecoveryClassImageInput), []any{recoveryRecord(proto.RecoveryOutcomeRecovered)}, false},
+		"recovery not offered": {&proto.UpstreamRecoveryControls{}, []any{recoveryRecord(proto.RecoveryOutcomeRecovered)}, false},
+	} {
+		result := Result{recoveryPolicy: test.policy}
+		if err := result.mergeObservation(doneWithRecoveries(t, test.records)); err != nil {
+			t.Fatal(name, err)
+		}
+		if kept := result.Recoveries != nil; kept != test.keep || result.recoveriesDropped == test.keep {
+			t.Fatalf("%s: %+v", name, result)
+		}
 	}
 }
