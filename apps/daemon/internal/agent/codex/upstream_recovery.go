@@ -339,7 +339,7 @@ func (s *Session) runRecovery(ctx context.Context, cancel context.CancelFunc, ru
 		// Only an explicit refusal proves the new Turn never started, and only if
 		// no turn/started for the rebuilt thread was observed before that reply.
 		s.steering.mu.Lock()
-		startObserved := s.steering.id != ""
+		startObserved := s.steering.id != "" || (s.steering.gate != nil && s.steering.gate.saw)
 		s.steering.mu.Unlock()
 		if !errors.As(err, &rejected) || startObserved {
 			run.set(func() { run.ambiguous = true })
@@ -374,6 +374,7 @@ func (s *Session) switchRootThread(newThreadID string, snap *recoverySnapshot) e
 	}
 	s.retiredTurns[snap.oldTurnID] = true
 	s.steering.id = ""
+	s.steering.gate = newRecoveryGate(newThreadID)
 	// Clear the cancel slot only if it still holds the steer closed at entry.
 	if s.steering.cancelGen == snap.savedGen {
 		s.steering.cancel = nil
@@ -390,6 +391,14 @@ func (s *Session) switchRootThread(newThreadID string, snap *recoverySnapshot) e
 // any later notification: the new Turn is bound and the recovery's bookkeeping
 // moves from "attempt in progress" to "attempt completed".
 func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) error {
+	// Held traffic that outgrew its buffer was already dropped; the recovery is
+	// being abandoned, so the reply must not commit it.
+	s.steering.mu.Lock()
+	overflowed := s.steering.gate != nil && s.steering.gate.overflow
+	s.steering.mu.Unlock()
+	if overflowed {
+		return errRecoveryGateOverflow
+	}
 	if err := s.bindTurnResult(raw); err != nil {
 		return err
 	}
@@ -411,6 +420,14 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	s.steering.mu.Lock()
 	s.steering.recovering, s.steering.recoveringTurnID = false, ""
 	s.steering.recoveryCancel = nil
+	// Input stays refused until held traffic and deferred terminals are settled.
+	s.steering.replaying = true
+	gate := s.steering.gate
+	var held []gatedFrame
+	if gate != nil {
+		held, gate.queue, gate.bytes = gate.queue, nil, 0
+		s.steering.gate = nil
+	}
 	deferred := s.steering.deferredCompleted
 	deferredFailed := s.steering.deferredFailed
 	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
@@ -449,12 +466,19 @@ func (s *Session) acknowledgeRecovery(raw json.RawMessage, run *recoveryRun) err
 	s.recovery.state.Store(recoveryIdle)
 	s.cfg.logger.Info("codex: upstream recovery switched thread",
 		"run_id", s.runID, "fingerprint", run.fingerprint, "attempt", s.recovery.attemptCount())
+	s.replayGated(held)
 	if deferred != nil {
 		s.onTurnCompleted(deferred)
 	}
 	if deferredFailed != nil {
 		s.onTurnFailed(deferredFailed)
 	}
+	s.steering.mu.Lock()
+	s.steering.replaying = false
+	if gate != nil {
+		gate.finishLocked(false)
+	}
+	s.steering.mu.Unlock()
 	return nil
 }
 
@@ -491,6 +515,7 @@ func (s *Session) restoreFromSnapshot(snap *recoverySnapshot) {
 	s.usageThreadID = snap.oldThreadID
 	s.finalText, s.lastErrText = snap.finalText, snap.lastErrText
 	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
+	s.dropGateLocked()
 }
 
 // abandonRecovery ends a recovery that did not produce an acknowledged new Turn.
@@ -531,6 +556,7 @@ func (s *Session) endRecovery() {
 	s.steering.recovering, s.steering.recoveringTurnID = false, ""
 	s.steering.recoveryCancel = nil
 	s.steering.deferredCompleted, s.steering.deferredFailed = nil, nil
+	s.dropGateLocked()
 	s.steering.mu.Unlock()
 	s.threadIDMu.Lock()
 	s.recovery.gateThread = ""

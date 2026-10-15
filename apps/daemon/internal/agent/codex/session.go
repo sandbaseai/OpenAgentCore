@@ -131,18 +131,18 @@ func (s *Session) registerHandlers() {
 	rpc := s.rpc
 
 	rpc.OnNotification("thread/started", func(_ json.RawMessage) {})
-	rpc.OnNotification("turn/started", s.onTurnStarted)
-	rpc.OnNotification("turn/completed", s.onTurnCompleted)
-	rpc.OnNotification("turn/failed", s.onTurnFailed)
-	rpc.OnNotification("item/started", s.onItemStarted)
+	rpc.OnNotification("turn/started", s.gated(s.onTurnStarted))
+	rpc.OnNotification("turn/completed", s.gated(s.onTurnCompleted))
+	rpc.OnNotification("turn/failed", s.gated(s.onTurnFailed))
+	rpc.OnNotification("item/started", s.gated(s.onItemStarted))
 	rpc.OnNotification("item/updated", func(_ json.RawMessage) {}) // silenced
-	rpc.OnNotification("item/completed", s.onItemCompleted)
-	rpc.OnNotification("item/agentMessage/delta", s.onAgentDelta)
-	rpc.OnNotification("item/commandExecution/outputDelta", s.onCommandOutput)
-	rpc.OnNotification("item/reasoning/textDelta", s.onReasoningDelta)
-	rpc.OnNotification("item/reasoning/summaryTextDelta", s.onReasoningDelta)
-	rpc.OnNotification("thread/tokenUsage/updated", s.onUsageUpdated)
-	rpc.OnNotification("error", s.onErrorNotif)
+	rpc.OnNotification("item/completed", s.gated(s.onItemCompleted))
+	rpc.OnNotification("item/agentMessage/delta", s.gated(s.onAgentDelta))
+	rpc.OnNotification("item/commandExecution/outputDelta", s.gated(s.onCommandOutput))
+	rpc.OnNotification("item/reasoning/textDelta", s.gated(s.onReasoningDelta))
+	rpc.OnNotification("item/reasoning/summaryTextDelta", s.gated(s.onReasoningDelta))
+	rpc.OnNotification("thread/tokenUsage/updated", s.gated(s.onUsageUpdated))
+	rpc.OnNotification("error", s.gated(s.onErrorNotif))
 
 	// Harnesses run unattended. Approval policy never and the session plan keep
 	// native asks from being raised; any other server request gets the

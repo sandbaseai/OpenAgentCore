@@ -379,7 +379,8 @@ func TestRecoveryUsageAndOutcomeAcrossWindows(t *testing.T) {
 	})
 	t.Run("after the switch the outcome adds the rebuilt Turn's usage once", func(t *testing.T) {
 		f := newRecoveryFixture(t, fixtureOptions{controls: enabledControls(proto.RecoveryClassReasoningState), history: fixtureHistory("reasoning")})
-		f.native.hold["turn/start"] = nil
+		release := make(chan struct{})
+		f.native.hold["turn/start"] = release
 		f.s.appendFinalText("text before the failure")
 		f.fail(msgReasoning, usageFailed)
 		f.eventually("turn/start", f.seen("turn/start"))
@@ -388,9 +389,19 @@ func TestRecoveryUsageAndOutcomeAcrossWindows(t *testing.T) {
 		if outcome.Usage.InputTokens != 100 || outcome.Content != "text before the failure" || outcome.Metadata[proto.DoneMetaAgentSessionID] != oldThread {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		// (d) the rebuilt Turn reports usage before its start is acknowledged.
+		// (d) the rebuilt Turn reports usage before its start is acknowledged: it is
+		// held, so the outcome keeps the failed Turn's usage until the reply commits.
 		f.native.notify("turn/started", json.RawMessage(`{"threadId":"`+newThread+`","turn":{"id":"`+newTurn+`"}}`))
 		f.native.notify("thread/tokenUsage/updated", usageUpdate(newThread, newTurn, 30, 5))
+		f.eventually("the notifications to be held", func() bool {
+			f.s.steering.mu.Lock()
+			defer f.s.steering.mu.Unlock()
+			return f.s.steering.gate != nil && len(f.s.steering.gate.queue) == 2
+		})
+		if got := f.s.CancellationOutcome().Usage.InputTokens; got != 100 {
+			t.Fatalf("held usage leaked into the outcome: %d", got)
+		}
+		close(release)
 		f.eventually("the new usage", func() bool {
 			return f.s.CancellationOutcome().Usage.InputTokens == 130
 		})

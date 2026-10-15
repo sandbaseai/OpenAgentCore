@@ -37,6 +37,13 @@ type steeringTurn struct {
 	// recoveryCancel ends the recovery's own context; it is not the Turn context,
 	// whose cancellation would also stop terminal delivery.
 	recoveryCancel context.CancelFunc
+	// gate holds the rebuilt Turn's traffic until its turn/start reply is
+	// acknowledged; see recovery_gate.go.
+	gate *recoveryGate
+	// replaying is true while an acknowledged recovery replays held traffic and
+	// deferred terminals. Input stays unforwarded until it ends, because the
+	// rebuilt Turn may already be terminal natively.
+	replaying bool
 }
 
 // TurnSteerParams mirrors the native Codex app-server turn/steer request.
@@ -69,7 +76,7 @@ func (s *Session) steer(ctx context.Context, input proto.PromptSteerPayload, wri
 	// The atomic state flips before beginRecovery takes this lock, so consulting
 	// it here closes the window where a steer could reach the finished Turn.
 	turnID, stopped := s.steering.id, s.steering.stopped
-	recovering := s.steering.recovering || s.recovery.state.Load() == recoveryRecovering
+	recovering := s.steering.recovering || s.steering.replaying || s.recovery.state.Load() == recoveryRecovering
 	slotTaken := false
 	var gen uint64
 	if !stopped && !recovering {
