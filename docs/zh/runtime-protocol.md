@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: e2d7d4217749901fa9c8d72bae9d31944205f5dee49e3b274a98a12d38ec7663
+source_hash: ea1f4df442269a0960c93a3c068f1013eac9301b003a9493727789c71d72fb2d
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -144,6 +144,14 @@ Executor 空闲到期属于 Runtime 资源策略，与 Core 的活动 Turn 并�
 Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `execution_events_ack`。重复确认不增加额度；倒退或超前的值终止连接。确认只代表 transport 已消费，不代表 journal 已提交或原生执行成功。Core 仍须具备有序 journal 与终结回执才能完成 Turn。因此数据库暂停会暂停事件生产，而不是使订阅溢出。Core 拒绝超出任一窗口上限的生产者，并保留流不完整结果。
 
 Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。Core 仅向已选择事件额度的连接发送 ACK/STOP，包括归档后正在排空的精确 Run。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
+
+## 上游恢复 {#upstream-recovery}
+
+本可选扩展保持基础 wire 协议为 `0.16.0`，让 Core 可以要求 Runtime 在可恢复的[上游 HTTP 400](#native-failure-classification) 之后继续该 Turn。支持的 Runtime 在经过认证的 WebSocket upgrade 中发送且仅发送一个 `X-Oac-Upstream-Recovery: v1` header，与事件额度相互独立。Core 在 101 响应中返回同一 header 表示选择；两端在该物理连接内固定选择结果。未知、为空或重复的声明会被以 HTTP 400 `unsupported_upstream_recovery` 拒绝。未声明该扩展的 Runtime（包括本扩展之前构建的所有 Runtime）仍按基础协议连接和运行，Core 绝不向它发送恢复控制。因此，只更新 Core 不会改变现有 Runtime 的任何行为。
+
+只有选择了该扩展的连接才会收到 `execution_controls.upstream_recovery`，其中包含 `enabled`、`max_attempts`（1 或 2）、`classes` 和 `transcript_max_chars`，并且仅当 Core 的 `OAC_UPSTREAM_RECOVERY_ENABLED` 为 true 时才发送；设置由[配置](configuration.md#upstream-recovery)说明。类别为 `reasoning_state`、`image_input`、`tool_result_image` 和 `trailing_assistant` 之一，各自对应一个指纹。`provider_messages_required` 指纹只分类，从不恢复。Runtime 按下发内容原样应用：它绝不为该策略读取自身环境变量，把越界的次数或预算当作默认值，忽略未知类别，并把缺失的块视为禁用。
+
+Turn 结束时，Runtime 可以在 `done.metadata` 中上报 `upstream_recoveries`：最多两条记录，包含 `fingerprint`、`action`（`rebuild_thread`）、`attempt`、`outcome`、`dropped`（`reasoning_items`、`images`）以及新旧原生 Session ID。`attempt` 为 1 或 2 表示已完成线程切换，outcome 为 `recovered` 或 `exhausted`；`attempt` 为 0 表示在切换之前放弃的恢复，outcome 为 `aborted`，并带有 `not_applicable`、`current_input_has_images`、`history_unreadable`、`thread_start_failed`、`turn_start_failed` 或 `cancelled` 之一作为 `reason`，且不含新的 Session ID。Core 校验整个值，只要有未知字段、越界或不一致的内容，就整体丢弃，以 debug 级别记录，并且不保存任何内容。有效记录以 `recoveries` 存入 Turn outcome，并从保存的 metadata 中移除。Core 对每条记录记录 `executor upstream recovery`，并在 Turn 完成时记录 `recovery_count`，即已完成的切换次数。已恢复的 Turn 为 `completed` 且没有诊断；对于失败的 Turn，诊断只以计数和枚举的形式暴露未成功的记录。记录绝不包含消息文本。
 
 ## 活动输入回执 {#active-input-receipts}
 

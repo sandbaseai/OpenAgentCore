@@ -253,6 +253,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				result.ErrorCode, result.Error = "engine_failed", failure.Error
 				obslog.Ctx(ctx).Warn("executor reported failure", append([]any{"session_id", sessionID, "turn_id", runID}, engineFailureAttrs(result)...)...)
 			case proto.TypeDone:
+				observeUpstreamRecoveries(ctx, sessionID, runID, result)
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
 			case proto.TypeFunctionCall:
@@ -422,6 +423,17 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 	}
 	if done.Metadata == nil {
 		done.Metadata = r.Done.Metadata
+	}
+	// Recovery records are validated before they reach the outcome. The raw
+	// metadata key is always removed, so a malformed value is dropped whole
+	// instead of being stored as runtime-supplied JSON.
+	if raw, present := done.Metadata[proto.DoneMetaUpstreamRecoveries]; present {
+		delete(done.Metadata, proto.DoneMetaUpstreamRecoveries)
+		if recoveries, ok := proto.ParseUpstreamRecoveries(raw); ok {
+			r.Recoveries, r.recoveriesDropped = recoveries, false
+		} else {
+			r.Recoveries, r.recoveriesDropped = nil, true
+		}
 	}
 	if done.SourceCompletedAtMS == nil {
 		done.SourceCompletedAtMS = r.Done.SourceCompletedAtMS

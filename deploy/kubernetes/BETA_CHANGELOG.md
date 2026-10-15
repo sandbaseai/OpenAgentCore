@@ -166,3 +166,23 @@ Build and qualify the matching Runtime template, then select it with the support
 ### Release commit and forward integration
 
 The exact production release target is `51fa68f640f7e4fb05eec6279dd521a0f2122f3d`, based on deployed commit `11956c3c78d84e3edfabf43d13bc8497f4f59c25`; this target adds no DDL. The normal merge of that release history into beta preserves beta’s newer typed schemas, generated clients and persistence architecture. The resulting beta HEAD also contains eight existing migrations absent from the deployed baseline. Do not deploy that beta HEAD under this release authorization: build and deploy the exact narrow release commit above. This forward integration records ancestry and does not qualify those eight migrations for production.
+
+## 2026-10-15 — Upstream HTTP 400 classification and opt-in recovery
+
+| Item | Value |
+| --- | --- |
+| Fork beta baseline | `b8819563` (`origin/beta` when the branch started) |
+| Feature branch | `codex/core-auto-recover-upstream-400`; the merge commit is recorded here when it lands |
+| Schema migrations / DDL / SQL changes | None |
+| Runtime wire version | Unchanged (`0.16.0`). The recovery controls travel on the optional `X-Oac-Upstream-Recovery: v1` extension, which only a Runtime that offers it receives |
+| Required assets | Matching Core/Web; a rebuilt Runtime image or template that offers the extension and rebuilds Codex threads (without it Core only classifies) |
+| New settings | `OAC_UPSTREAM_RECOVERY_ENABLED` (default `false`), `OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS`, `OAC_UPSTREAM_RECOVERY_CLASSES`, `OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS`; see [configuration](../../docs/configuration.md#settings) |
+
+The release classifies five fixed upstream HTTP 400 patterns into four new diagnostic codes (`model_input_unsupported_image`, `model_provider_format_rejected`, `model_reasoning_state_invalid`, `model_input_ends_with_assistant`) and records any in-Turn recovery in the Turn outcome (`recoveries`) and Core logs. Classification is always on. Recovery stays off until `OAC_UPSTREAM_RECOVERY_ENABLED=true`, so with the default the behavior of a Turn is unchanged apart from the new codes.
+
+### Deployment requirements
+
+- Deploy the Agents service first. Its diagnostics reader must accept the four new codes, or it discards the whole diagnostic of an affected Turn as a contract error. Rolling Agents back below that change requires first returning Core to a revision that does not emit them.
+- Core can be deployed before the Runtime image. A Runtime that has not been rebuilt does not offer the extension, keeps working unchanged, and never receives the recovery controls.
+- Enable recovery only after the Runtime coverage is known, starting with `OAC_UPSTREAM_RECOVERY_CLASSES=reasoning_state`. A successfully recovered Turn is `completed` and has no diagnostic: it is visible only in the stored outcome (`recoveries`) and in the Core logs (`executor upstream recovery`, `recovery_count`). The Agents interface does not show it.
+- Set `OAC_UPSTREAM_RECOVERY_ENABLED` back to `false` and restart Core to roll recovery back; no image rollback is needed.

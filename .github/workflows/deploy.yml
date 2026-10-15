@@ -319,6 +319,10 @@ jobs:
           OAC_HARNESSES: ${{ vars.OAC_HARNESSES }}
           OAC_DEFAULT_HARNESS: ${{ vars.OAC_DEFAULT_HARNESS }}
           OAC_EXECUTION_CONCURRENCY: ${{ vars.OAC_EXECUTION_CONCURRENCY }}
+          OAC_UPSTREAM_RECOVERY_ENABLED: ${{ vars.OAC_UPSTREAM_RECOVERY_ENABLED }}
+          OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS: ${{ vars.OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS }}
+          OAC_UPSTREAM_RECOVERY_CLASSES: ${{ vars.OAC_UPSTREAM_RECOVERY_CLASSES }}
+          OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS: ${{ vars.OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS }}
           OAC_WRITE_AUDIT_RETENTION: ${{ vars.OAC_WRITE_AUDIT_RETENTION }}
           OAC_LOG_LEVEL: ${{ vars.OAC_LOG_LEVEL }}
           OAC_DATABASE_PASSWORD: ${{ secrets.OAC_DATABASE_PASSWORD }}
@@ -352,6 +356,8 @@ jobs:
           envsubst '$OAC_PUBLIC_URL $OAC_DATABASE_URL' \
             < deploy/kubernetes/prod/core-env.yaml.tpl > "$work/core-env.yaml"
           for name in OAC_HARNESSES OAC_DEFAULT_HARNESS OAC_EXECUTION_CONCURRENCY \
+                      OAC_UPSTREAM_RECOVERY_ENABLED OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS \
+                      OAC_UPSTREAM_RECOVERY_CLASSES OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS \
                       OAC_WRITE_AUDIT_RETENTION OAC_LOG_LEVEL; do
             value="${!name:-}"
             if [ -n "$value" ]; then printf '  %s: "%s"\n' "$name" "$value" >> "$work/core-env.yaml"; fi

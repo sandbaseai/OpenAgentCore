@@ -105,3 +105,47 @@ func DiagnosticUpstreamFailure(outcomeJSON json.RawMessage) UpstreamFailureDetai
 	}
 	return UpstreamFailureDetail{Fingerprint: fingerprint, Summary: EngineFailureSummary(fingerprint, status), RequestID: proto.NormalizeProviderRequestID(requestID)}
 }
+
+// RecoveryDetail summarizes the upstream recovery records of a failed Turn. It
+// carries enumerations and counts only; native Session IDs stay in the outcome.
+type RecoveryDetail struct {
+	// Count is the number of completed thread switches (attempts), 0 to 2.
+	Count int
+	// Fingerprints and Outcomes run in parallel over the unsuccessful records, in
+	// order. A record that recovered is not listed: a Turn that recovered has no
+	// diagnostic of its own.
+	Fingerprints, Outcomes []string
+	// DroppedReasoningItems and DroppedImages sum over all records.
+	DroppedReasoningItems, DroppedImages int
+}
+
+// Present reports whether the Turn has any unsuccessful recovery record to show.
+func (d RecoveryDetail) Present() bool { return len(d.Outcomes) != 0 }
+
+// DiagnosticRecoveries reads the validated `recoveries` of a Turn outcome. Like
+// the other diagnostic readers it trusts the outcome no further than the shared
+// validation rules: a malformed value yields no detail.
+func DiagnosticRecoveries(outcomeJSON json.RawMessage) RecoveryDetail {
+	var outcome map[string]json.RawMessage
+	if json.Unmarshal(outcomeJSON, &outcome) != nil || len(outcome["recoveries"]) == 0 {
+		return RecoveryDetail{}
+	}
+	var raw any
+	if json.Unmarshal(outcome["recoveries"], &raw) != nil {
+		return RecoveryDetail{}
+	}
+	entries, ok := proto.ParseUpstreamRecoveries(raw)
+	if !ok {
+		return RecoveryDetail{}
+	}
+	detail := RecoveryDetail{Count: proto.RecoveryAttemptCount(entries)}
+	for _, entry := range entries {
+		detail.DroppedReasoningItems += entry.Dropped.ReasoningItems
+		detail.DroppedImages += entry.Dropped.Images
+		if entry.Outcome != proto.RecoveryOutcomeRecovered {
+			detail.Fingerprints = append(detail.Fingerprints, entry.Fingerprint)
+			detail.Outcomes = append(detail.Outcomes, entry.Outcome)
+		}
+	}
+	return detail
+}

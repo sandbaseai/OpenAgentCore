@@ -68,6 +68,7 @@ func (d *Dispatcher) RunEnvironmentInput(ctx context.Context, lease Ownership, t
 	if err != nil {
 		return run, err
 	}
+	d.applyUpstreamRecovery(&req, peer)
 	var messages proto.MessageInput
 	for _, input := range run.Reservation.Inputs {
 		if input.Kind != "message" {

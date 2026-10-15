@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		c.WriteAuditRetention != 90*24*time.Hour || c.OAuthTrustedOrigins != nil || c.NativeInstallers != "" || c.ProviderPaths.StateRoot != "/state" {
 		t.Fatalf("%+v", c)
 	}
+	if r := c.UpstreamRecovery; r.Enabled || r.MaxAttempts != 1 || strings.Join(r.Classes, ",") != "reasoning_state,image_input" || r.TranscriptMaxChars != 120000 {
+		t.Fatalf("%+v", r)
+	}
 	if h := c.RuntimeHistory; h.File != "" || h.Endpoint != "" || h.QueueCapacity != 256 || h.Timeout != 2*time.Second || h.SampleInterval != 30*time.Second {
 		t.Fatalf("%+v", h)
 	}
@@ -74,16 +78,20 @@ func TestLoadRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 	rejects(t, "OAC_CORE_KEY_DIGESTS_FILE", "synthetic-secret")
 	required(t)
 	for variable, value := range map[string]string{
-		"OAC_PUBLIC_URL":            "https://user:synthetic-secret@core.example",
-		"OAC_EXECUTION_CONCURRENCY": "synthetic-secret",
-		"OAC_DEFAULT_HARNESS":       "synthetic-secret",
-		"OAC_HARNESSES":             "codex,synthetic-secret",
-		"OAC_WRITE_AUDIT_RETENTION": "synthetic-secret",
-		"OAC_OAUTH_TRUSTED_ORIGINS": "https://synthetic-secret.example/token",
-		"OAC_LOG_LEVEL":             "verbose",
-		"OAC_INSTALLATION_ID_FILE":  write("bad.id", "synthetic-secret"),
-		"OAC_CREDENTIAL_KEY_FILE":   write("bad.key", "synthetic-secret"),
-		"OAC_HISTORY_SETTINGS_FILE": write("history.json", `{"secret":"synthetic-secret"}`),
+		"OAC_PUBLIC_URL":                             "https://user:synthetic-secret@core.example",
+		"OAC_EXECUTION_CONCURRENCY":                  "synthetic-secret",
+		"OAC_DEFAULT_HARNESS":                        "synthetic-secret",
+		"OAC_HARNESSES":                              "codex,synthetic-secret",
+		"OAC_WRITE_AUDIT_RETENTION":                  "synthetic-secret",
+		"OAC_UPSTREAM_RECOVERY_ENABLED":              "synthetic-secret",
+		"OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS":         "synthetic-secret",
+		"OAC_UPSTREAM_RECOVERY_CLASSES":              "reasoning_state,synthetic-secret",
+		"OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS": "synthetic-secret",
+		"OAC_OAUTH_TRUSTED_ORIGINS":                  "https://synthetic-secret.example/token",
+		"OAC_LOG_LEVEL":                              "verbose",
+		"OAC_INSTALLATION_ID_FILE":                   write("bad.id", "synthetic-secret"),
+		"OAC_CREDENTIAL_KEY_FILE":                    write("bad.key", "synthetic-secret"),
+		"OAC_HISTORY_SETTINGS_FILE":                  write("history.json", `{"secret":"synthetic-secret"}`),
 	} {
 		t.Run(variable, func(t *testing.T) {
 			t.Setenv(variable, value)
@@ -126,6 +134,66 @@ func TestExecutionConcurrencyAndAuditRetention(t *testing.T) {
 	for _, value := range []string{"0", "30m", "-1h", "90d"} {
 		t.Setenv("OAC_WRITE_AUDIT_RETENTION", value)
 		rejects(t, "OAC_WRITE_AUDIT_RETENTION", "")
+	}
+}
+
+func TestUpstreamRecoveryIsOffByDefaultAndValidatesEachSetting(t *testing.T) {
+	required(t)
+	for _, value := range []string{"", "false"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_ENABLED", value)
+		if c, err := Load(); err != nil || c.UpstreamRecovery.Enabled {
+			t.Fatal(value, c.UpstreamRecovery, err)
+		}
+	}
+	t.Setenv("OAC_UPSTREAM_RECOVERY_ENABLED", "true")
+	if c, err := Load(); err != nil || !c.UpstreamRecovery.Enabled || c.UpstreamRecovery.MaxAttempts != 1 || c.UpstreamRecovery.TranscriptMaxChars != 120000 {
+		t.Fatal(c.UpstreamRecovery, err)
+	}
+	for _, value := range []string{"TRUE", "True", "1", "0", "yes", " true"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_ENABLED", value)
+		rejects(t, "OAC_UPSTREAM_RECOVERY_ENABLED", "")
+	}
+	t.Setenv("OAC_UPSTREAM_RECOVERY_ENABLED", "")
+	for _, value := range []string{"1", "2"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS", value)
+		if c, err := Load(); err != nil || strconv.Itoa(c.UpstreamRecovery.MaxAttempts) != value {
+			t.Fatal(value, err)
+		}
+	}
+	for _, value := range []string{"0", "3", "-1", "1.5", "two"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS", value)
+		rejects(t, "OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS", "")
+	}
+	t.Setenv("OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS", "")
+	for _, value := range []string{"20000", "400000"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS", value)
+		if c, err := Load(); err != nil || strconv.Itoa(c.UpstreamRecovery.TranscriptMaxChars) != value {
+			t.Fatal(value, err)
+		}
+	}
+	for _, value := range []string{"19999", "400001", "0", "-1", "1e5", "many"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS", value)
+		rejects(t, "OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS", "")
+	}
+}
+
+func TestUpstreamRecoveryClassesAreTrimmedDedupedAndOrdered(t *testing.T) {
+	required(t)
+	for value, want := range map[string]string{
+		"reasoning_state": "reasoning_state",
+		" image_input , reasoning_state ,image_input":                      "reasoning_state,image_input",
+		"trailing_assistant,tool_result_image":                             "tool_result_image,trailing_assistant",
+		"reasoning_state,image_input,tool_result_image,trailing_assistant": "reasoning_state,image_input,tool_result_image,trailing_assistant",
+		"": "reasoning_state,image_input",
+	} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_CLASSES", value)
+		if c, err := Load(); err != nil || strings.Join(c.UpstreamRecovery.Classes, ",") != want {
+			t.Fatalf("%q: %v %v", value, c.UpstreamRecovery.Classes, err)
+		}
+	}
+	for _, value := range []string{"unknown", "reasoning_state,", ",reasoning_state", "reasoning_state,,image_input", "Reasoning_State", "reasoning-state"} {
+		t.Setenv("OAC_UPSTREAM_RECOVERY_CLASSES", value)
+		rejects(t, "OAC_UPSTREAM_RECOVERY_CLASSES", "")
 	}
 }
 
@@ -207,6 +275,8 @@ func TestRuntimeHistoryFile(t *testing.T) {
 func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 	write := required(t)
 	t.Setenv("OAC_EXECUTION_CONCURRENCY", "8")
+	t.Setenv("OAC_UPSTREAM_RECOVERY_ENABLED", "true")
+	t.Setenv("OAC_UPSTREAM_RECOVERY_CLASSES", "image_input")
 	t.Setenv("OAC_LOG_LEVEL", "warn")
 	t.Setenv("OAC_WRITE_AUDIT_RETENTION", "1440m")
 	t.Setenv("OAC_HISTORY_SETTINGS_FILE", write("history.json", `{}`))
@@ -215,7 +285,9 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	found := map[string]any{}
+	defaults := map[string]any{}
 	for _, setting := range c.Settings() {
+		defaults[setting.Key] = setting.Default
 		if setting.Sensitive && (setting.Value != nil || setting.Configured == nil) {
 			t.Fatalf("sensitive setting %s leaked a value", setting.Key)
 		}
@@ -226,6 +298,11 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 		if setting.Key == "core.runtime_history" && (setting.Configured == nil || !*setting.Configured) {
 			t.Fatal("history file was not reported as configured")
 		}
+	}
+	if found["core.upstream_recovery.enabled"] != true || defaults["core.upstream_recovery.enabled"] != false || found["core.upstream_recovery.max_attempts"] != 1 ||
+		strings.Join(found["core.upstream_recovery.classes"].([]string), ",") != "image_input" || strings.Join(defaults["core.upstream_recovery.classes"].([]string), ",") != "reasoning_state,image_input" ||
+		found["core.upstream_recovery.transcript_max_chars"] != 120000 || defaults["core.upstream_recovery.transcript_max_chars"] != 120000 {
+		t.Fatal(found, defaults)
 	}
 	if found["public_url"] != "https://core.example" || found["core.execution_concurrency"] != 8 || found["log.level"] != "warn" || found["log.format"] != "auto" || found["core.write_audit_retention"] != "24h" {
 		t.Fatal(found)

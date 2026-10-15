@@ -24,6 +24,15 @@ func turnDiagnosticFailure(turn sessions.Turn) *DiagnosticFailure {
 		if upstream.RequestID != "" {
 			params["upstream_request_id"] = CoreErrorString(upstream.RequestID)
 		}
+		// Only a failed Turn is diagnosed, so only its unsuccessful recoveries
+		// appear here; a Turn that recovered is read from its stored outcome.
+		if recoveries := sessions.DiagnosticRecoveries(turn.Outcome); recoveries.Present() {
+			params["recovery_count"] = CoreErrorNumber(float64(recoveries.Count))
+			params["recovery_fingerprints"] = CoreErrorStrings(recoveries.Fingerprints...)
+			params["recovery_outcomes"] = CoreErrorStrings(recoveries.Outcomes...)
+			params["recovery_dropped_reasoning_items"] = CoreErrorNumber(float64(recoveries.DroppedReasoningItems))
+			params["recovery_dropped_images"] = CoreErrorNumber(float64(recoveries.DroppedImages))
+		}
 	}
 	return &DiagnosticFailure{Code: code, Params: params, FailedAt: diagnosticTime(turn.CompletedAt)}
 }

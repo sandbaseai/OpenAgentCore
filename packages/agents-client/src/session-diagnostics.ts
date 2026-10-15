@@ -15,12 +15,19 @@ export type UpstreamFingerprint = "provider_messages_required" | "reasoning_encr
 const upstreamFingerprints: readonly UpstreamFingerprint[] = ["provider_messages_required", "reasoning_encrypted_unverifiable", "model_no_image_input", "tool_result_input_image_rejected", "trailing_model_turn"];
 // Mirrors Core's NormalizeProviderRequestID, which accepts any UUID-shaped correlation value.
 const providerRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const recoveryParamKeys = ["recovery_count", "recovery_fingerprints", "recovery_outcomes", "recovery_dropped_reasoning_items", "recovery_dropped_images"];
+const safeCount = (value: unknown, max: number) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 const upstreamRejectionCodes: readonly DiagnosticFailureCode[] = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
 // The schema types params as a free-form object; each code that carries params has one of these shapes.
 export type ProvisioningFailureParams = { step: "setup" | "python" | "npm" | "system" | "file" | "skill" | null; index: number | null; exit_code: number | null };
 export type ConnectionFailureParams = { http_status: number | null };
-/** Upstream HTTP 400 categories carry either no params or a fixed fingerprint with its Core-chosen summary. */
-export type UpstreamRejectionParams = Record<string, never> | { fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string };
+/** Recovery facts of a failed Turn: switches made and the unsuccessful records, in order. Enumerations and counts only. */
+export type UpstreamRecoveryParams = {
+  recovery_count: number; recovery_fingerprints: UpstreamFingerprint[]; recovery_outcomes: ("exhausted" | "aborted")[];
+  recovery_dropped_reasoning_items: number; recovery_dropped_images: number;
+};
+/** Upstream HTTP 400 categories carry either no params or a fixed fingerprint with its Core-chosen summary, plus recovery facts when a recovery was tried. */
+export type UpstreamRejectionParams = Record<string, never> | ({ fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string } & Partial<UpstreamRecoveryParams>);
 export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: Record<string, never> | ProvisioningFailureParams | ConnectionFailureParams | UpstreamRejectionParams };
 export type SessionDiagnosticFailure = DiagnosticFailure & Pick<SessionDiagnosticFailureResource, "source" | "turn_id">;
 export type SessionDiagnostics = Omit<SessionDiagnosticsResource, "failure"> & { failure: SessionDiagnosticFailure | null };
@@ -50,12 +57,23 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
     if (value.code === "provider_billing_unavailable" && p.http_status !== null && p.http_status !== 402) return invalidAdminResponse();
     params = { http_status: p.http_status as number | null };
   } else if (isOneOf(upstreamRejectionCodes, value.code)) {
-    // Core returns no params, or the fingerprint and its fixed summary with an optional UUID request ID.
+    // Core returns no params, or the fingerprint and its fixed summary with an optional UUID request ID
+    // and, when a recovery was tried and did not succeed, the all-or-nothing recovery_* group.
     const p = value.params;
     if (Object.keys(p).length !== 0) {
+      const withId = p.upstream_request_id !== undefined, withRecovery = p.recovery_count !== undefined;
       if (!isOneOf(upstreamFingerprints, p.fingerprint) || typeof p.summary !== "string" || p.summary.length === 0 || p.summary.length > 240 ||
-          !(exactFields(p, fields("fingerprint", "summary")) || (exactFields(p, fields("fingerprint", "summary", "upstream_request_id")) && typeof p.upstream_request_id === "string" && providerRequestId.test(p.upstream_request_id)))) return invalidAdminResponse();
-      params = { fingerprint: p.fingerprint as UpstreamFingerprint, summary: p.summary, ...(p.upstream_request_id === undefined ? {} : { upstream_request_id: p.upstream_request_id as string }) };
+          !exactFields(p, fields("fingerprint", "summary", ...(withId ? ["upstream_request_id"] : []), ...(withRecovery ? recoveryParamKeys : []))) ||
+          (withId && (typeof p.upstream_request_id !== "string" || !providerRequestId.test(p.upstream_request_id)))) return invalidAdminResponse();
+      params = { fingerprint: p.fingerprint as UpstreamFingerprint, summary: p.summary, ...(withId ? { upstream_request_id: p.upstream_request_id as string } : {}) };
+      if (withRecovery) {
+        const fingerprints = p.recovery_fingerprints, outcomes = p.recovery_outcomes;
+        if (!safeCount(p.recovery_count, 2) || !safeCount(p.recovery_dropped_reasoning_items, 1_000_000) || !safeCount(p.recovery_dropped_images, 1_000_000) ||
+            !Array.isArray(fingerprints) || !Array.isArray(outcomes) || fingerprints.length < 1 || fingerprints.length > 2 || outcomes.length !== fingerprints.length ||
+            !fingerprints.every((item) => isOneOf(upstreamFingerprints, item)) || !outcomes.every((item) => item === "exhausted" || item === "aborted")) return invalidAdminResponse();
+        params = { ...params, recovery_count: p.recovery_count as number, recovery_fingerprints: fingerprints as UpstreamFingerprint[], recovery_outcomes: outcomes as ("exhausted" | "aborted")[],
+          recovery_dropped_reasoning_items: p.recovery_dropped_reasoning_items as number, recovery_dropped_images: p.recovery_dropped_images as number };
+      }
     }
   } else if (Object.keys(value.params).length !== 0) return invalidAdminResponse();
   return { code: value.code, params, failed_at: value.failed_at as string | null };

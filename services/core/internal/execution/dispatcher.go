@@ -56,6 +56,9 @@ type Dispatcher struct {
 	// MaxConcurrentExecutions bounds work admitted by this Core execution owner.
 	// Zero uses DefaultExecutionConcurrency. It is independent of sandbox capacity.
 	MaxConcurrentExecutions int
+	// UpstreamRecovery is Core's recovery policy. It reaches only a Runtime
+	// that selected the upstream recovery extension, and only when Enabled.
+	UpstreamRecovery proto.UpstreamRecoveryControls
 }
 
 // Credentials opens the bearer token of a Session's frozen MCP credential
@@ -74,6 +77,13 @@ type Result struct {
 	ErrorCode         string            `json:"error_code,omitempty"`
 	Error             string            `json:"error,omitempty"`
 	AppliedThrough    int64             `json:"applied_through"`
+	// Recoveries are the validated upstream recovery records of this Turn.
+	// With the Turn outcome they are the only durable record of a recovery
+	// that succeeded.
+	Recoveries []proto.UpstreamRecovery `json:"recoveries,omitempty"`
+	// recoveriesDropped records that the Runtime reported recovery records
+	// Core rejected as malformed. It is logged and never stored.
+	recoveriesDropped bool
 }
 
 // Run claims once before subscribing or sending. Uncertain deliveries are not replayed.
@@ -112,6 +122,7 @@ func (d *Dispatcher) Run(ctx context.Context, tenantID, sessionID, turnID string
 	if err != nil {
 		return sessions.Turn{}, err
 	}
+	d.applyUpstreamRecovery(&req, peer)
 	req.DisableExecutionEnvironment = true
 	prepared, err := d.prepareTurnExecutor(ctx, peer, tenantID, sessionID, turnID, req, sessions.TurnQueued)
 	if err != nil {

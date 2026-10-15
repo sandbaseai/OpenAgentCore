@@ -132,9 +132,17 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusBadRequest, "unsupported_execution_flow", "unsupported execution flow offer")
 		return
 	}
+	upstreamRecovery, err := proto.NegotiateUpstreamRecovery(r.Header.Values(proto.UpstreamRecoveryHeader))
+	if err != nil {
+		writeAuthError(w, http.StatusBadRequest, "unsupported_upstream_recovery", "unsupported upstream recovery offer")
+		return
+	}
 	responseHeader := make(http.Header)
 	if eventCredit {
 		responseHeader.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
+	}
+	if upstreamRecovery {
+		responseHeader.Set(proto.UpstreamRecoveryHeader, proto.UpstreamRecoveryV1)
 	}
 	conn, err := h.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
@@ -177,6 +185,7 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := NewSessionWithOwner(conn, auth.DeviceID, auth.WorkspaceID, version, h.cfg.Registry, h.cfg.Log, lease)
 	sess.eventCredit = eventCredit
+	sess.upstreamRecovery = upstreamRecovery
 	sess.heartbeat = h.cfg.Heartbeat
 	sess.archivedCancellations = h.cfg.ArchivedCancellations
 	sess.credentialHash = runtimedevice.HashCredential(token)
@@ -187,7 +196,7 @@ func (h *Handler) WS(w http.ResponseWriter, r *http.Request) {
 		prev.Close("preempted by newer connection from same device_id")
 	}
 	h.cfg.Log("agentdaemon gateway: device_id=%s registered in registry, starting session", auth.DeviceID)
-	obslog.Ctx(r.Context()).Info("runtime transport registered", "device_id", auth.DeviceID, "protocol_version", version, "event_credit", eventCredit,
+	obslog.Ctx(r.Context()).Info("runtime transport registered", "device_id", auth.DeviceID, "protocol_version", version, "event_credit", eventCredit, "upstream_recovery", upstreamRecovery,
 		"allocation_id", auth.RuntimeAllocationID, "node_id", auth.RuntimeNodeID)
 	sess.Start()
 }

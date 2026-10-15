@@ -3,8 +3,10 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
@@ -49,7 +51,28 @@ func engineFailureAttrs(result Result) []any {
 	if summary := sessions.EngineFailureSummary(result.EngineFingerprint, result.EngineHTTPStatus); summary != "" {
 		attrs = append(attrs, "engine_summary", summary)
 	}
+	// Counts completed thread switches; abandoned entries are not attempts.
+	if len(result.Recoveries) != 0 {
+		attrs = append(attrs, "recovery_count", proto.RecoveryAttemptCount(result.Recoveries))
+	}
 	return attrs
+}
+
+// observeUpstreamRecoveries logs what a Runtime reported at Done. A recovery
+// that succeeded leaves no diagnostic, so this line and the stored outcome are
+// where it can be found. Every value is an enumeration or a count.
+func observeUpstreamRecoveries(ctx context.Context, session, turn string, result Result) {
+	if result.recoveriesDropped {
+		slog.Default().DebugContext(ctx, "executor upstream recovery records dropped", "session_id", session, "turn_id", turn)
+	}
+	for _, recovery := range result.Recoveries {
+		attrs := []any{"session_id", session, "turn_id", turn, "fingerprint", recovery.Fingerprint, "action", recovery.Action,
+			"attempt", recovery.Attempt, "outcome", recovery.Outcome}
+		if recovery.Reason != "" {
+			attrs = append(attrs, "reason", recovery.Reason)
+		}
+		obslog.Ctx(ctx).Info("executor upstream recovery", attrs...)
+	}
 }
 
 // Only artifact capture activates these fixed workspace boundaries. Directory

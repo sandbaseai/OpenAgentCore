@@ -79,6 +79,9 @@ type Session struct {
 	DaemonVersion string
 	eventCredit   bool // Immutable per authenticated WebSocket upgrade.
 	ConnectedAt   time.Time
+	// upstreamRecovery records that the Runtime offered and Core selected the
+	// upstream recovery extension. Immutable per authenticated WebSocket upgrade.
+	upstreamRecovery bool
 
 	conn WSConn
 	log  SessionLogger
@@ -705,3 +708,7 @@ func connectionCloseReason(reason string) string {
 	}
 	return "closed"
 }
+
+// UpstreamRecovery reports whether this connection selected the upstream
+// recovery extension, the only connections that may receive its controls.
+func (s *Session) UpstreamRecovery() bool { return s.upstreamRecovery }

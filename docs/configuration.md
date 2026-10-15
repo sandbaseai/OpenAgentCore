@@ -50,6 +50,10 @@ Model providers are not process settings; see [Default models](#default-models).
 | `OAC_LOG_FORMAT` | `auto` | `auto`, `text` or `json` |
 | `OAC_LOG_ADD_SOURCE` | unset | `1` adds source locations |
 | `OAC_EXECUTION_CONCURRENCY` | `4` | Concurrent execution work, from 1 to 1024 |
+| `OAC_UPSTREAM_RECOVERY_ENABLED` | `false` | `true` lets a Runtime rebuild its native thread and continue the Turn after a recoverable [upstream HTTP 400](#upstream-recovery). Any other value than `true` or `false` stops startup |
+| `OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS` | `1` | Recoveries per Turn, 1 or 2 |
+| `OAC_UPSTREAM_RECOVERY_CLASSES` | `reasoning_state,image_input` | Comma-separated classes recovery may handle: `reasoning_state`, `image_input`, `tool_result_image`, `trailing_assistant`. Unknown names stop startup |
+| `OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS` | `120000` | Character budget of the rebuilt history, from 20000 to 400000 |
 | `OAC_SANDBOX_MAX_ACTIVE` | `100` | Active sandbox limit for direct Providers with suspension, from 1 to 100000. Independent of execution concurrency and node capacity |
 | `OAC_SANDBOX_MAX_RETAINED` | `400` | Retained sandbox limit for direct Providers, from 1 to 100000, including active, suspended and unconfirmed cleanup. Must be at least the active limit |
 | `OAC_DEFAULT_HARNESS` | `codex` | Harness used when a request does not name one |
@@ -59,6 +63,14 @@ Model providers are not process settings; see [Default models](#default-models).
 | `OAC_HISTORY_SETTINGS_FILE` | unset | Optional [Runtime history file](#runtime-history-file). Sensitive; Core reports only whether it is configured |
 
 An unset or empty value selects the default. Edit `.env`, then run `oac apply`. Core reads every process setting, and every file a setting names, once at startup and reports what it loaded at `GET /core/v1/installation`. `oac-core check-config` loads and validates the same settings and files without starting Core. The native installer catalog under `OAC_PROVIDER_ROOT` is not a setting; Core checks it only when it starts. Errors name the variable, never its value. Sensitive settings report only whether they are configured.
+
+### Upstream recovery {#upstream-recovery}
+
+Core always classifies five fixed upstream HTTP 400 patterns into diagnostic codes. With `OAC_UPSTREAM_RECOVERY_ENABLED=true`, a Runtime that supports it also tries to continue the same Turn once or twice. It starts a new native thread from a rendered transcript of the old one, which leaves out reasoning state and images, and it never retries a request the provider rejected for another reason. Core sends this policy only to a Runtime whose connection selected the optional [recovery extension](runtime-protocol.md#upstream-recovery); a Runtime built without it keeps its behavior, and the other three settings have no effect on it.
+
+Recovery changes what the model sees, costs one more uncached request, and may repeat a step with side effects, so it is off by default. Enable one class at a time, starting with `reasoning_state`. `tool_result_image` and `trailing_assistant` are off by default because their causes are not well established. Set `OAC_UPSTREAM_RECOVERY_ENABLED` back to `false` and run `oac apply` to roll back; no image change is needed.
+
+A Turn that recovered completes normally and has no diagnostic. Its records are in the Turn outcome (`recoveries`), and Core logs `executor upstream recovery` and `recovery_count` on the Turn's completion; the Agents interface does not show them. A failed Turn shows only unsuccessful records through [Session diagnostics](../contracts/agents-api/session-diagnostics.md). Records hold enumerations, counts and native Session IDs only. Query the outcome's `recoveries` and never its `error` text when you inspect a Turn.
 
 ### Runtime history file
 
@@ -270,7 +282,7 @@ Core reads its process environment. Compose interpolates `.env` into it and moun
 | `OAC_CREDENTIAL_KEY_FILE` | Required. `/run/oac/credential.key`: a base64-encoded random 32-byte key. Core seals stored credentials with it |
 | `OAC_CORE_KEY_DIGESTS_FILE` | Required. `/run/oac/core-key-digests.json`: a JSON array with the SHA-256 of the Core key |
 | `OAC_INSTALLATION_ID_FILE` | Required. `/run/oac/installation.id`: the installation ID, a canonical UUID. Core refuses an ID other than the one its database recorded |
-| `OAC_SANDBOX_MAX_ACTIVE`, `OAC_SANDBOX_MAX_RETAINED`, `OAC_EXECUTION_CONCURRENCY`, `OAC_DEFAULT_HARNESS`, `OAC_HARNESSES`, `OAC_WRITE_AUDIT_RETENTION`, `OAC_OAUTH_TRUSTED_ORIGINS`, `OAC_HISTORY_SETTINGS_FILE`, `OAC_LOG_LEVEL`, `OAC_LOG_FORMAT`, `OAC_LOG_ADD_SOURCE` | The matching [process settings](#settings). Web reads the three log settings too |
+| `OAC_SANDBOX_MAX_ACTIVE`, `OAC_SANDBOX_MAX_RETAINED`, `OAC_EXECUTION_CONCURRENCY`, `OAC_UPSTREAM_RECOVERY_ENABLED`, `OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS`, `OAC_UPSTREAM_RECOVERY_CLASSES`, `OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS`, `OAC_DEFAULT_HARNESS`, `OAC_HARNESSES`, `OAC_WRITE_AUDIT_RETENTION`, `OAC_OAUTH_TRUSTED_ORIGINS`, `OAC_HISTORY_SETTINGS_FILE`, `OAC_LOG_LEVEL`, `OAC_LOG_FORMAT`, `OAC_LOG_ADD_SOURCE` | The matching [process settings](#settings). Web reads the three log settings too |
 | `OAC_PROVIDER_ROOT` | Absolute adapter artifact root. The Core image sets `/opt/oac`. Each adapter owns its helper paths beneath this root. Core serves self-hosted daemon installers from its `native-installers/` directory when that holds a `catalog.json`, after checking the catalog against its own release. Adapter state lives at `/state`, the data volume's [`state/`](#compose-installations) |
 
 Core logs the history file path it loads, never environment values or file contents.

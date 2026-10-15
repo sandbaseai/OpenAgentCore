@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/api"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/credentialcrypto"
@@ -57,7 +58,11 @@ type Config struct {
 	// CoreKeys authenticates the Core key from OAC_CORE_KEY_DIGESTS_FILE.
 	CoreKeys             *api.DeploymentAuthenticator
 	ExecutionConcurrency int
-	DefaultHarness       string
+	// UpstreamRecovery is the policy Core sends with each execution to a Runtime
+	// that selected the upstream recovery extension. Disabled unless
+	// OAC_UPSTREAM_RECOVERY_ENABLED is true.
+	UpstreamRecovery proto.UpstreamRecoveryControls
+	DefaultHarness   string
 	// Harnesses is the sorted set of enabled Harnesses, the default included.
 	Harnesses           []string
 	WriteAuditRetention time.Duration
@@ -135,6 +140,9 @@ func Load() (Config, error) {
 	if c.ExecutionConcurrency, err = executionConcurrency(); err != nil {
 		return Config{}, err
 	}
+	if c.UpstreamRecovery, err = upstreamRecovery(); err != nil {
+		return Config{}, err
+	}
 	c.DefaultHarness = cmp.Or(os.Getenv("OAC_DEFAULT_HARNESS"), defaultHarness)
 	if _, known := (engine.Catalog{}).Lookup(c.DefaultHarness); !known {
 		return Config{}, configError("OAC_DEFAULT_HARNESS is not a known harness")
@@ -177,6 +185,10 @@ func (c Config) Settings() []api.InstallationSetting {
 		setting("core.sandbox_capacity.max_active", c.SandboxCapacity.MaxActive, defaultSandboxMaxActive, []api.InstallationService{api.InstallationCore}),
 		setting("core.sandbox_capacity.max_retained", c.SandboxCapacity.MaxRetained, defaultSandboxMaxRetained, []api.InstallationService{api.InstallationCore}),
 		setting("core.execution_concurrency", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
+		setting("core.upstream_recovery.enabled", c.UpstreamRecovery.Enabled, false, []api.InstallationService{api.InstallationCore}),
+		setting("core.upstream_recovery.max_attempts", c.UpstreamRecovery.MaxAttempts, proto.DefaultUpstreamRecoveryAttempts, []api.InstallationService{api.InstallationCore}),
+		setting("core.upstream_recovery.classes", c.UpstreamRecovery.Classes, proto.DefaultUpstreamRecoveryClasses(), []api.InstallationService{api.InstallationCore}),
+		setting("core.upstream_recovery.transcript_max_chars", c.UpstreamRecovery.TranscriptMaxChars, proto.DefaultUpstreamRecoveryTranscriptChars, []api.InstallationService{api.InstallationCore}),
 		setting("core.harnesses", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
 		setting("core.default_harness", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
 		setting("core.write_audit_retention", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
@@ -268,6 +280,52 @@ func executionConcurrency() (int, error) {
 		return 0, configError("OAC_EXECUTION_CONCURRENCY must be an integer between 1 and 1024")
 	}
 	return limit, nil
+}
+
+// upstreamRecovery reads the four OAC_UPSTREAM_RECOVERY_* settings. Recovery is
+// off unless OAC_UPSTREAM_RECOVERY_ENABLED is exactly true; the other three keep
+// their values while it is off, so enabling it changes one variable. Unset or
+// empty selects the default; any other invalid value stops startup.
+func upstreamRecovery() (proto.UpstreamRecoveryControls, error) {
+	c := proto.UpstreamRecoveryControls{MaxAttempts: proto.DefaultUpstreamRecoveryAttempts, Classes: proto.DefaultUpstreamRecoveryClasses(), TranscriptMaxChars: proto.DefaultUpstreamRecoveryTranscriptChars}
+	switch os.Getenv("OAC_UPSTREAM_RECOVERY_ENABLED") {
+	case "", "false":
+	case "true":
+		c.Enabled = true
+	default:
+		return proto.UpstreamRecoveryControls{}, configError("OAC_UPSTREAM_RECOVERY_ENABLED must be true or false")
+	}
+	if value := os.Getenv("OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS"); value != "" {
+		attempts, err := strconv.Atoi(value)
+		if err != nil || attempts < proto.MinUpstreamRecoveryAttempts || attempts > proto.MaxUpstreamRecoveryAttempts {
+			return proto.UpstreamRecoveryControls{}, configError("OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS must be an integer between 1 and 2")
+		}
+		c.MaxAttempts = attempts
+	}
+	if value := os.Getenv("OAC_UPSTREAM_RECOVERY_CLASSES"); value != "" {
+		named := strings.Split(value, ",")
+		for i, class := range named {
+			named[i] = strings.TrimSpace(class)
+			if !slices.Contains(proto.UpstreamRecoveryClasses(), named[i]) {
+				return proto.UpstreamRecoveryControls{}, configError("OAC_UPSTREAM_RECOVERY_CLASSES contains an unknown class")
+			}
+		}
+		// Reported and sent in the catalog's order, whatever order the operator wrote.
+		c.Classes = nil
+		for _, class := range proto.UpstreamRecoveryClasses() {
+			if slices.Contains(named, class) {
+				c.Classes = append(c.Classes, class)
+			}
+		}
+	}
+	if value := os.Getenv("OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS"); value != "" {
+		chars, err := strconv.Atoi(value)
+		if err != nil || chars < proto.MinUpstreamRecoveryTranscriptChars || chars > proto.MaxUpstreamRecoveryTranscriptChars {
+			return proto.UpstreamRecoveryControls{}, configError("OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS must be an integer between 20000 and 400000")
+		}
+		c.TranscriptMaxChars = chars
+	}
+	return c, nil
 }
 
 // harnesses reads OAC_HARNESSES. Unset enables every Harness this build

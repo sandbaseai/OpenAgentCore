@@ -89,6 +89,38 @@ it.each([
 ])("rejects unsafe upstream 400 parameters", (params) => {
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).toThrow();
 });
+const recoveryParams = { recovery_count: 1, recovery_fingerprints: ["reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted"], recovery_dropped_reasoning_items: 4, recovery_dropped_images: 0 };
+it.each(upstreamCodes)("projects recovery facts of a failed %s Turn", (code) => {
+  for (const params of [{ ...upstreamParams, ...recoveryParams }, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary, ...recoveryParams, recovery_count: 0, recovery_outcomes: ["aborted"] },
+    { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"], recovery_outcomes: ["exhausted", "aborted"] }]) {
+    const failed = { ...failure, code, params };
+    expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
+  }
+});
+it.each([
+  { recovery_count: 3 },
+  { recovery_count: -1 },
+  { recovery_count: 1.5 },
+  { recovery_count: "1" },
+  { recovery_fingerprints: [] },
+  { recovery_fingerprints: ["model_no_image_input", "model_no_image_input", "model_no_image_input"], recovery_outcomes: ["aborted", "aborted", "aborted"] },
+  { recovery_fingerprints: ["secret-canary"] },
+  { recovery_fingerprints: "reasoning_encrypted_unverifiable" },
+  { recovery_outcomes: ["recovered"] },
+  { recovery_outcomes: ["exhausted", "aborted"] },
+  { recovery_dropped_reasoning_items: 1_000_001 },
+  { recovery_dropped_images: -1 },
+  { recovery_dropped_images: null },
+])("rejects unsafe recovery facts %j", (override) => {
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...recoveryParams, ...override } } }, id, turn)).toThrow();
+});
+it("rejects partial or extra recovery keys and recovery facts on other categories", () => {
+  const { recovery_dropped_images: _omitted, ...partial } = recoveryParams;
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...partial } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...recoveryParams, recovery_native_session_id: "secret-canary" } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...recoveryParams } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: { ...upstreamParams, ...recoveryParams } } }, id, turn)).toThrow();
+});
 it("rejects upstream 400 parameters on other categories", () => {
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: upstreamParams } }, id, turn)).toThrow();
 });

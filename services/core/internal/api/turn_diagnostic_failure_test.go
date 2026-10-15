@@ -249,3 +249,112 @@ func TestUpstream400DiagnosticParamsAreFlatBoundedAndFreeOfNativeText(t *testing
 		t.Fatal("connection_failed params changed", got)
 	}
 }
+
+func TestFailedTurnDiagnosticsShowOnlyUnsuccessfulRecoveries(t *testing.T) {
+	const old, next = "019e0000-0000-7000-8000-000000000001", "019e0000-0000-7000-8000-000000000002"
+	entry := func(fingerprint, outcome string, attempt int, reason string, reasoning, images int) map[string]any {
+		e := map[string]any{"fingerprint": fingerprint, "action": "rebuild_thread", "attempt": attempt, "outcome": outcome,
+			"dropped": map[string]any{"reasoning_items": reasoning, "images": images}, "old_native_session_id": old}
+		if attempt > 0 {
+			e["new_native_session_id"] = next
+		}
+		if reason != "" {
+			e["reason"] = reason
+		}
+		return e
+	}
+	outcome := func(code, fingerprint string, recoveries any) json.RawMessage {
+		o := map[string]any{"error_code": "engine_failed", "error": "raw-secret-canary", "engine_error_code": code, "engine_http_status": 400, "engine_fingerprint": fingerprint}
+		if recoveries != nil {
+			o["recoveries"] = recoveries
+		}
+		raw, _ := json.Marshal(o)
+		return raw
+	}
+	params := func(t *testing.T, turn sessions.Turn) map[string]any {
+		t.Helper()
+		got := turnDiagnosticFailure(turn)
+		if validated := validCoreDetails(got.Params); len(validated) != len(got.Params) {
+			t.Fatal("params rejected by the shared detail validator", got.Params)
+		}
+		encoded, _ := json.Marshal(got.Params)
+		if strings.Contains(string(encoded), "canary") || strings.Contains(string(encoded), old) || strings.Contains(string(encoded), next) {
+			t.Fatalf("native text or Session ID in params: %s", encoded)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	failed := func(raw json.RawMessage) sessions.Turn {
+		return sessions.Turn{Status: sessions.TurnFailed, Outcome: raw}
+	}
+
+	exhausted := params(t, failed(outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable,
+		[]any{entry(proto.FingerprintReasoningEncryptedUnverifiable, "exhausted", 1, "", 6, 2)})))
+	want := map[string]any{"fingerprint": proto.FingerprintReasoningEncryptedUnverifiable, "recovery_count": float64(1), "recovery_fingerprints": []any{proto.FingerprintReasoningEncryptedUnverifiable},
+		"recovery_outcomes": []any{"exhausted"}, "recovery_dropped_reasoning_items": float64(6), "recovery_dropped_images": float64(2)}
+	for key, value := range want {
+		if !reflect.DeepEqual(exhausted[key], value) {
+			t.Fatalf("%s = %v, want %v", key, exhausted[key], value)
+		}
+	}
+	if len(exhausted) != len(want)+1 { // plus summary
+		t.Fatalf("unexpected keys: %v", exhausted)
+	}
+
+	// An abandoned attempt is not a switch: count 0, outcome aborted, never the reason or IDs.
+	aborted := params(t, failed(outcome(proto.EngineCodeInputUnsupportedImage, proto.FingerprintModelNoImageInput,
+		[]any{entry(proto.FingerprintModelNoImageInput, "aborted", 0, "current_input_has_images", 0, 0)})))
+	if aborted["recovery_count"] != float64(0) || !reflect.DeepEqual(aborted["recovery_outcomes"], []any{"aborted"}) || aborted["recovery_dropped_images"] != float64(0) {
+		t.Fatalf("%v", aborted)
+	}
+
+	// Two records keep their order; counts add up.
+	two := params(t, failed(outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{
+		entry(proto.FingerprintModelNoImageInput, "exhausted", 1, "", 0, 3), entry(proto.FingerprintReasoningEncryptedUnverifiable, "exhausted", 2, "", 5, 0)})))
+	if two["recovery_count"] != float64(2) || !reflect.DeepEqual(two["recovery_fingerprints"], []any{proto.FingerprintModelNoImageInput, proto.FingerprintReasoningEncryptedUnverifiable}) ||
+		two["recovery_dropped_reasoning_items"] != float64(5) || two["recovery_dropped_images"] != float64(3) {
+		t.Fatalf("%v", two)
+	}
+
+	// A record that recovered is not listed; it still counts as a switch.
+	mixed := params(t, failed(outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{
+		entry(proto.FingerprintModelNoImageInput, "recovered", 1, "", 0, 1), entry(proto.FingerprintReasoningEncryptedUnverifiable, "exhausted", 2, "", 2, 0)})))
+	if mixed["recovery_count"] != float64(2) || !reflect.DeepEqual(mixed["recovery_outcomes"], []any{"exhausted"}) {
+		t.Fatalf("%v", mixed)
+	}
+	onlyRecovered := params(t, failed(outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable,
+		[]any{entry(proto.FingerprintReasoningEncryptedUnverifiable, "recovered", 1, "", 1, 0)})))
+	if _, present := onlyRecovered["recovery_count"]; present {
+		t.Fatalf("a recovered record produced recovery keys: %v", onlyRecovered)
+	}
+
+	// Malformed records, no records, or another failure category add no recovery keys.
+	for name, raw := range map[string]json.RawMessage{
+		"none":       outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, nil),
+		"unknown":    outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{map[string]any{"fingerprint": "x"}}),
+		"too many":   outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{entry(proto.FingerprintModelNoImageInput, "aborted", 0, "cancelled", 0, 0), entry(proto.FingerprintModelNoImageInput, "aborted", 0, "cancelled", 0, 0), entry(proto.FingerprintModelNoImageInput, "aborted", 0, "cancelled", 0, 0)}),
+		"not a list": outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, "secret-canary"),
+	} {
+		for key := range params(t, failed(raw)) {
+			if strings.HasPrefix(key, "recovery_") {
+				t.Fatalf("%s: %s present", name, key)
+			}
+		}
+	}
+	other, _ := json.Marshal(map[string]any{"error_code": "engine_failed", "engine_error_code": "authentication_error",
+		"recoveries": []any{entry(proto.FingerprintModelNoImageInput, "exhausted", 1, "", 0, 1)}})
+	if got := turnDiagnosticFailure(failed(other)); got.Code != "authentication_error" || len(got.Params) != 0 {
+		t.Fatalf("recovery keys leaked onto another category: %+v", got)
+	}
+
+	// A Turn that did not fail has no diagnostic at all, whatever it recovered from.
+	for _, status := range []string{sessions.TurnCompleted, sessions.TurnCancelled, sessions.TurnInProgress} {
+		raw := outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{entry(proto.FingerprintReasoningEncryptedUnverifiable, "recovered", 1, "", 1, 0)})
+		if got := turnDiagnosticFailure(sessions.Turn{Status: status, Outcome: raw}); got != nil {
+			t.Fatal(status, got)
+		}
+	}
+}
