@@ -13,6 +13,11 @@ func (s *Session) isRootTurn(threadID, turnID string) bool {
 	if !s.isRootThread(threadID) || turnID == "" || s.terminal.Load() {
 		return false
 	}
+	// While a recovery replaces the failed Turn, the old thread's late traffic
+	// must not reach the buffers or the usage it has already captured.
+	if s.recoveryGateClosed(threadID) {
+		return false
+	}
 	s.steering.mu.Lock()
 	defer s.steering.mu.Unlock()
 	return turnID == s.steering.id

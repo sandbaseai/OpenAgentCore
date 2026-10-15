@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 873cd7d9517675d5b409daedbe664b015e33bf49e04a41bd9ff3e55020cebf48
+source_hash: 50ae3e8ef8859e7b02a8038e939f2607f2a29c624ed191e89c9b4ef452aeb553
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -145,6 +145,14 @@ Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `exec
 
 Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。Core 仅向已选择事件额度的连接发送 ACK/STOP，包括归档后正在排空的精确 Run。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
 
+## 上游恢复 {#upstream-recovery}
+
+本可选扩展保持基础 wire 协议为 `0.16.0`，让 Core 可以要求 Runtime 在可恢复的[上游 HTTP 400](#native-failure-classification) 之后继续该 Turn。支持的 Runtime 在经过认证的 WebSocket upgrade 中发送且仅发送一个 `X-Oac-Upstream-Recovery: v1` header，与事件额度相互独立。Core 在 101 响应中返回同一 header 表示选择；两端在该物理连接内固定选择结果。未知、为空或重复的声明会被以 HTTP 400 `unsupported_upstream_recovery` 拒绝。未声明该扩展的 Runtime（包括本扩展之前构建的所有 Runtime）仍按基础协议连接和运行，Core 绝不向它发送恢复控制。因此，只更新 Core 不会改变现有 Runtime 的任何行为。
+
+只有选择了该扩展的连接才会收到 `execution_controls.upstream_recovery`，其中包含 `enabled`、`max_attempts`（1 或 2）、`classes` 和 `transcript_max_chars`，并且仅当 Core 的 `OAC_UPSTREAM_RECOVERY_ENABLED` 为 true 时才发送；设置由[配置](configuration.md#upstream-recovery)说明。类别为 `reasoning_state`、`image_input`、`tool_result_image` 和 `trailing_assistant` 之一，各自对应一个指纹。`provider_messages_required` 指纹只分类，从不恢复。Runtime 按下发内容原样应用：它绝不为该策略读取自身环境变量，把越界的次数或预算当作默认值，忽略未知类别，并把缺失的块视为禁用。
+
+Turn 结束时，Runtime 可以在 `done.metadata` 中上报 `upstream_recoveries`：最多两条记录，包含 `fingerprint`、`action`（`rebuild_thread`）、`attempt`、`outcome`、`dropped`（`reasoning_items`、`images`）以及新旧原生 Session ID。`attempt` 为 1 或 2 表示已完成线程切换，outcome 为 `recovered` 或 `exhausted`；`attempt` 为 0 表示在切换之前放弃的恢复，outcome 为 `aborted`，并带有 `not_applicable`、`current_input_has_images`、`history_unreadable`、`thread_start_failed`、`turn_start_failed`、`cancelled` 或 `model_changed` 之一作为 `reason`，且不含新的 Session ID。Core 校验整个值，只要有未知字段、越界或不一致的内容，就整体丢弃，以 debug 级别记录，并且不保存任何内容。有效记录以 `recoveries` 存入 Turn outcome，并从保存的 metadata 中移除。Core 对每条记录记录 `executor upstream recovery`，并在 Turn 完成时记录 `recovery_count`，即已完成的切换次数。已恢复的 Turn 为 `completed` 且没有诊断；对于失败的 Turn，诊断只以计数和枚举的形式暴露未成功的记录。记录绝不包含消息文本。
+
 ## 活动输入回执 {#active-input-receipts}
 
 Core 通过 `prompt_steer` 交付活动输入，设置 `durable_receipt: true`，每个 Run 一次交付一个输入，并等待回执后再发送下一个：
@@ -197,9 +205,11 @@ transport 与 execution 结果分开。Core 唯一 Run 订阅入口是 `Subscrib
 
 adapter 可以给 Run 的 `error` frame 添加 `code` 和 `http_status`。它们是可选的中性元数据，不是终结事件或公开错误契约；frame 文本、Usage、`done`、原生 Session 身份和取消回执保持原顺序与含义。
 
-接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy`、`provider_billing_unavailable` 和 `connection_failed`（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。`connection_failed` 保留 100 到 599 的整数 `http_status`；402 归一为 `provider_billing_unavailable`，此分类仅保留状态 402。它表示模型端点的计费拒绝，不代表应用用户余额不足，也不授权自动重试。其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
+接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy`、`provider_billing_unavailable`、`connection_failed` 以及下文所述的四个上游 HTTP 400 code（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。`connection_failed` 保留 100 到 599 的整数 `http_status`；402 归一为 `provider_billing_unavailable`，此分类仅保留状态 402。它表示模型端点的计费拒绝，不代表应用用户余额不足，也不授权自动重试。其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
 
-Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engine_http_status`。同一 Turn 内，后续有效分类会替换此前分类及其状态码；未分类的 error frame 不会清空它们。分类不会沿用到其他 Turn。可选 `upstream_request_id` 仅接受 UUID，并私有保存为 `engine_request_id`；不得进入 Project 诊断、公开 Session/Turn 响应或 SSE。分类从属于终结状态和 Core 的 `error_code`：不能将已完成或已取消 Turn 变成失败、隐藏不完整事件流，或覆盖持久化或取消回执失败。正常 delivery 和 terminal journal draining 使用同一提取逻辑。[Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)仅为 Core error 为 `engine_failed` 的失败 Turn 暴露类别。[Codex](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/README.md) 和 [Claude Code](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/claude/README.md) adapter 指南给出各 Harness 的映射；adapter 不依据任意错误文字分类。仅 Codex 在结构化信息缺失或为 `other` 时识别准确的终态 HTTP 402 封装；严格边界见该适配器指南。
+四个上游 HTTP 400 code 为 `model_input_unsupported_image`、`model_provider_format_rejected`、`model_reasoning_state_invalid` 和 `model_input_ends_with_assistant`。Runtime 通过在 `error` frame 中添加可选的 `fingerprint` 来选择其一：`provider_messages_required` 与 `tool_result_input_image_rejected` 对应 `model_provider_format_rejected`，`reasoning_encrypted_unverifiable` 对应 `model_reasoning_state_invalid`，`model_no_image_input` 对应 `model_input_unsupported_image`，`trailing_model_turn` 对应 `model_input_ends_with_assistant`。该映射由 Core 持有。此类 code 仅在与其配对的 fingerprint 和 `http_status` 400 同时出现时保留；其他组合、未知 fingerprint 或附在其他 code 上的 fingerprint 都会丢弃，且不丢弃 Usage 或 `done`。Runtime 从不发送摘要：Core 依据 fingerprint 生成固定句子。
+
+Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engine_http_status`，400 类另保存 `engine_fingerprint`。同一 Turn 内，后续有效分类会替换此前分类及其状态码；未分类的 error frame 不会清空它们。分类不会沿用到其他 Turn。可选 `upstream_request_id` 仅接受 UUID，并私有保存为 `engine_request_id`；不得进入 Project 诊断、公开 Session/Turn 响应或 SSE。分类从属于终结状态和 Core 的 `error_code`：不能将已完成或已取消 Turn 变成失败、隐藏不完整事件流，或覆盖持久化或取消回执失败。正常 delivery 和 terminal journal draining 使用同一提取逻辑。[Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)仅为 Core error 为 `engine_failed` 的失败 Turn 暴露类别。[Codex](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/README.md) 和 [Claude Code](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/claude/README.md) adapter 指南给出各 Harness 的映射；adapter 不依据任意错误文字分类。仅 Codex 会读取原生文本，且只在结构化信息缺失、为 `other` 或 `badRequest` 时采用两种有界形式：准确的终态 HTTP 402 封装，以及 HTTP 400 封装中的提供商消息（仅在该消息起始处与封闭列表比对，只产生 fingerprint）。严格边界见该适配器指南。
 
 ## 工作区操作 {#workspace-operations}
 

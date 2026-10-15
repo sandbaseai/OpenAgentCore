@@ -57,6 +57,18 @@ The adapter classifies a failed Turn only from the exact root terminal Turn's `c
 
 HTTP status 402 normalizes to `provider_billing_unavailable` and is not a retry recommendation. When `codexErrorInfo` is missing, null, or the exact string `other`, the adapter can recognize a single-line native terminal message beginning exactly `unexpected status 402 Payment Required`, followed only by the native colon/comma separator or end of message. It never searches partial assistant text, accumulated outcome text, retry notifications, response-body keywords or unknown structured variants. Known structured variants take precedence. A trailing `, request id: ` UUID is retained as private correlation only; arbitrary identifiers, multiline messages and suffixes are rejected. Terminal logs contain classification, status, bounded correlation and lengths rather than raw native payloads.
 
+For HTTP 400 the adapter applies one more bounded rule before the table above, so it also overrides `badRequest`. The variant must be missing, null, `other`, `badRequest` or `httpConnectionFailed` with `httpStatusCode` 400. The message must be at most 4 KiB, begin exactly `unexpected status 400 Bad Request:`, and may span lines. The error message is the body's `error.message` or top-level `message` when the body is JSON, otherwise the body text. Only the start of that message is compared with a closed list, never an arbitrary position, so provider or tool text echoed inside a parameter cannot select a fingerprint:
+
+| Message begins | Fingerprint | Code |
+| --- | --- | --- |
+| `field messages is required` | `provider_messages_required` | `model_provider_format_rejected` |
+| `The encrypted content for item rs_…` and `could not be verified` | `reasoning_encrypted_unverifiable` | `model_reasoning_state_invalid` |
+| `Model do not support image input` | `model_no_image_input` | `model_input_unsupported_image` |
+| `tool_result.content.N: Input tag 'input_image'` … `does not match any of the expected tags` (optionally behind `messages.N.content.N.`) | `tool_result_input_image_rejected` | `model_provider_format_rejected` |
+| `Requests ending with a model turn are not supported` | `trailing_model_turn` | `model_input_ends_with_assistant` |
+
+A match returns the fingerprint, its code, status 400 and the UUID request ID when the message is a single-line envelope. Any other 400 keeps the classification of the table above. The wording is taken from observed provider responses and has not yet been calibrated against a live pinned Codex; a provider that wraps the message in another error object (for example an outer `Provider returned error`) is not matched until a real sample is added. The `turn/failed` notification carries no error and is never classified.
+
 Every other variant stays unclassified.
 
 ## Runtime image

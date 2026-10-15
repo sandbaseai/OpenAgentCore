@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -370,5 +371,38 @@ func TestExecutorCloseTerminatesAfterMissingCancellationTerminal(t *testing.T) {
 		}
 	case <-retry.Done():
 		t.Fatal("original cancellation waiter was abandoned")
+	}
+}
+
+func TestExecutorAppliesRecoveryPolicyPerTurn(t *testing.T) {
+	req, cfg, _ := preparationFixture(t)
+	req.ExecutionControls = &proto.ExecutionControls{WebSearch: "disabled", TextVerbosity: "medium", UpstreamRecovery: &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}}
+	e, err := testExecutor(t, "complete", req, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		policy  *proto.UpstreamRecoveryControls
+		enabled bool
+		max     int
+	}{
+		{nil, true, 1},
+		{nil, false, 0},
+		{&proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}, true, 1},
+		{&proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 2, Classes: []string{proto.RecoveryClassImageInput}}, true, 2},
+	}
+	for i, step := range steps {
+		if i > 0 {
+			e.SetUpstreamRecovery(step.policy)
+		}
+		out := make(chan proto.Envelope, 20)
+		turn, err := e.StartTurn(t.Context(), fmt.Sprintf("turn-%d", i), proto.TextInput("answer"), out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := turn.(*Session).recovery.controls; got.Enabled != step.enabled || got.MaxAttempts != step.max {
+			t.Fatalf("turn %d controls = %+v", i, got)
+		}
+		awaitExecutorTurn(t, turn, out)
 	}
 }

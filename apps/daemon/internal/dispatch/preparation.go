@@ -38,6 +38,11 @@ type preparationState struct {
 	handoff          *preparedHandoff
 }
 
+// upstreamRecoveryAgentKind is the only Harness that applies upstream recovery
+// controls; others would silently ignore them, so the daemon rejects the pairing.
+// Turns that observe subagents are rejected too: recovery supports root Turns only.
+const upstreamRecoveryAgentKind = "codex"
+
 func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope) error {
 	localStarted := time.Now()
 	var input proto.ExecutionPreparePayload
@@ -45,6 +50,9 @@ func (r *Router) handleExecutionPrepare(ctx context.Context, env proto.Envelope)
 		return r.rejectPreparation(env, "invalid_request")
 	}
 	req := input.Configuration
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && (!r.upstreamRecovery.Load() || req.AgentKind != upstreamRecoveryAgentKind || req.ObserveSubagentIdentities) {
+		return r.rejectPreparation(env, "unsupported_configuration")
+	}
 	if !req.WorkspaceReadOnly {
 		return r.handleExecutorPrepare(ctx, env, input)
 	}

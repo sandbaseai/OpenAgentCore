@@ -5,7 +5,7 @@ import "time"
 // ExecutionDiagnostic is the safe failure projection of a committed snapshot.
 // It deliberately excludes native messages, parameters and executor identities.
 type ExecutionDiagnostic struct {
-	Code     string     `json:"code" binding:"required" enums:"unknown,harness_error,model_provider_required,runtime_unavailable,runtime_disconnected,runtime_preparation_failed,execution_interrupted,delivery_unconfirmed,input_rejected,executor_protocol_error,core_storage_failed,environment_connection_timeout,environment_unavailable,environment_provisioning_failed,authentication_error,rate_limit_exceeded,usage_limit_exceeded,provider_billing_unavailable,server_overloaded,server_error,invalid_request,resource_not_found,request_timeout,context_length_exceeded,cyber_policy,connection_failed"`
+	Code     string     `json:"code" binding:"required" enums:"unknown,harness_error,model_provider_required,runtime_unavailable,runtime_disconnected,runtime_preparation_failed,execution_interrupted,delivery_unconfirmed,input_rejected,executor_protocol_error,core_storage_failed,environment_connection_timeout,environment_unavailable,environment_provisioning_failed,authentication_error,rate_limit_exceeded,usage_limit_exceeded,provider_billing_unavailable,model_input_unsupported_image,model_provider_format_rejected,model_reasoning_state_invalid,model_input_ends_with_assistant,server_overloaded,server_error,invalid_request,resource_not_found,request_timeout,context_length_exceeded,cyber_policy,connection_failed"`
 	Source   string     `json:"source" binding:"required" enums:"turn,environment,environment_input"`
 	FailedAt *time.Time `json:"failed_at" binding:"required" extensions:"x-nullable"`
 }

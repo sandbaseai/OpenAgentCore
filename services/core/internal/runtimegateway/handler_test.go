@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
@@ -95,6 +96,59 @@ func TestWebSocketNegotiatesEventCredit(t *testing.T) {
 			}
 			if resp.StatusCode != tc.want || resp.Header.Get(proto.ExecutionFlowHeader) != tc.selected {
 				t.Fatalf("status=%d selection=%q", resp.StatusCode, resp.Header.Get(proto.ExecutionFlowHeader))
+			}
+		})
+	}
+}
+func TestWebSocketNegotiatesUpstreamRecovery(t *testing.T) {
+	const credential = "fixture-runtime-key"
+	for _, tc := range []struct {
+		name     string
+		offer    []string
+		want     int
+		selected string
+	}{
+		{"old runtime", nil, http.StatusSwitchingProtocols, ""},
+		{"new runtime", []string{proto.UpstreamRecoveryV1}, http.StatusSwitchingProtocols, proto.UpstreamRecoveryV1},
+		{"unknown", []string{"v2"}, http.StatusBadRequest, ""},
+		{"duplicate", []string{proto.UpstreamRecoveryV1, proto.UpstreamRecoveryV1}, http.StatusBadRequest, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := NewRegistry()
+			handler := NewHandler(HandlerConfig{Registry: registry, Authenticator: NewAuthenticator(&stubRuntimeStore{ok: true, row: runtimedevice.Credential{ID: "device", WorkspaceID: "tenant", Type: runtimedevice.RuntimeTypeAgentDaemon, CredentialHash: runtimedevice.HashCredential(credential)}})})
+			server := httptest.NewServer(http.HandlerFunc(handler.WS))
+			defer server.Close()
+			header := http.Header{"Authorization": {"Bearer " + credential}}
+			if tc.offer != nil {
+				header[proto.UpstreamRecoveryHeader] = tc.offer
+			}
+			conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?device_id=device&version="+proto.Version, header)
+			if resp == nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if conn != nil {
+				defer conn.Close()
+			}
+			if resp.StatusCode != tc.want || resp.Header.Get(proto.UpstreamRecoveryHeader) != tc.selected {
+				t.Fatalf("status=%d selection=%q", resp.StatusCode, resp.Header.Get(proto.UpstreamRecoveryHeader))
+			}
+			// The extension is independent of event credit: neither header selects the other.
+			if resp.Header.Get(proto.ExecutionFlowHeader) != "" {
+				t.Fatalf("event credit selected without an offer: %q", resp.Header.Get(proto.ExecutionFlowHeader))
+			}
+			if tc.selected != "" {
+				// The registered peer remembers the selection for the Dispatcher.
+				deadline := time.Now().Add(2 * time.Second)
+				for {
+					if peer, err := registry.LookupDevice("device"); err == nil && peer.UpstreamRecovery() {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("registered session did not record the selection")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
 			}
 		})
 	}

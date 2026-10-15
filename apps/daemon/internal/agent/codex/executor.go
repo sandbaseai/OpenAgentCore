@@ -40,6 +40,22 @@ func newExecutor(ctx context.Context, req proto.PromptRequestPayload, cfg sessio
 	return &Executor{prepared: p}, nil
 }
 
+// The router relies on this to apply recovery policy to retained executors.
+var _ interface {
+	SetUpstreamRecovery(*proto.UpstreamRecoveryControls)
+} = (*Executor)(nil)
+
+// SetUpstreamRecovery replaces the recovery policy used by Turns started after
+// the call; nil disables recovery. A Turn already running keeps the policy it began with.
+func (e *Executor) SetUpstreamRecovery(controls *proto.UpstreamRecoveryControls) {
+	var next proto.UpstreamRecoveryControls
+	if controls != nil {
+		next = controls.Normalized()
+	}
+	e.mu.Lock()
+	e.prepared.session.recovery.controls = next
+	e.mu.Unlock()
+}
 func (e *Executor) StartTurn(ctx context.Context, runID string, input proto.MessageInput, out chan<- proto.Envelope) (agent.Turn, error) {
 	entered := time.Now()
 	if out == nil || strings.TrimSpace(runID) == "" || input.Validate() != nil {
@@ -73,21 +89,20 @@ func (e *Executor) StartTurn(ctx context.Context, runID string, input proto.Mess
 		functions: functions, observeMessages: base.observeMessages, observeSubagentIdentities: base.observeSubagentIdentities,
 		cfg: base.cfg, rpc: base.rpc, cancelCtx: turnCtx, cancelFn: cancel,
 		waitDone: make(chan struct{}), outputDone: make(chan struct{}), cleanup: func() {},
-		bufs: NewItemBuffers(), resolvedModel: base.resolvedModel, runID: runID, out: out}
+		bufs: NewItemBuffers(), resolvedModel: base.model(), runID: runID, out: out}
 	if previous != nil {
-		s.threadID = previous.currentThreadID()
-		s.retiredTurns = make(map[string]bool, len(previous.retiredTurns)+1)
-		for id := range previous.retiredTurns {
-			s.retiredTurns[id] = true
-		}
-		previous.steering.mu.Lock()
-		s.retiredTurns[previous.steering.id] = true
-		previous.steering.mu.Unlock()
-		s.resolvedModel = previous.resolvedModel
+		s.threadID = previous.reportedThread()
+		s.retiredTurns = previous.retiredSnapshotPlus()
+		s.setModel(previous.model())
 		previous.usageMu.Lock()
 		s.usageTotal = previous.usageTotal
 		previous.usageMu.Unlock()
 	}
+	s.recovery.controls = base.recovery.controls
+	s.recovery.plan = &e.prepared.plan
+	s.recovery.input = input
+	s.recovery.reader = base.recovery.reader
+	s.recovery.timeouts = base.recovery.timeouts
 	e.active = s
 	if s.observeSubagentIdentities {
 		s.startSubagentObservations()

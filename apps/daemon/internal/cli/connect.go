@@ -244,7 +244,8 @@ func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile
 			// tag. proto.VersionCompatible requires an exact version
 			// match against proto.Version. Build-tag reporting goes
 			// in heartbeat's DaemonVersion field.
-			DaemonVersion: proto.Version,
+			DaemonVersion:    proto.Version,
+			UpstreamRecovery: agentCLIs.supportsUpstreamRecovery(),
 		})
 		observeRuntimeStartup(ctx, "transport_dial", dialStarted, err)
 		if remote != "" && err != nil {
@@ -328,10 +329,11 @@ func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.R
 		return err
 	}
 	router, err := dispatch.New(dispatch.Config{
-		Registry:       registry,
-		Sender:         conn,
-		Log:            obslog.Bg(),
-		LocalWorkspace: local,
+		Registry:         registry,
+		Sender:           conn,
+		Log:              obslog.Bg(),
+		LocalWorkspace:   local,
+		UpstreamRecovery: conn.UpstreamRecovery(),
 	})
 	if err != nil {
 		return fmt.Errorf("router init: %w", err)

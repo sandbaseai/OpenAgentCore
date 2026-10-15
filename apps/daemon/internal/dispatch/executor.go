@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -14,6 +15,20 @@ import (
 )
 
 const executorIdleCapacity = 16
+
+// recoveryPolicyApplier is implemented by executors whose upstream recovery policy
+// can change between Turns; nil disables recovery for subsequent Turns.
+type recoveryPolicyApplier interface {
+	SetUpstreamRecovery(*proto.UpstreamRecoveryControls)
+}
+
+func wantsRecovery(req proto.PromptRequestPayload) bool {
+	return req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil
+}
+func implementsRecoveryPolicy(e agent.Executor) bool {
+	_, ok := e.(recoveryPolicyApplier)
+	return ok
+}
 
 type executorState struct {
 	capabilities                           proto.AgentKindCapabilities
@@ -38,6 +53,17 @@ func executorFingerprint(req proto.PromptRequestPayload) ([32]byte, error) {
 	req.RunID, req.Input = "", nil
 	req.AgentSessionID = ""
 	req.RequireExistingNativeSession = false
+	// The recovery policy is applied to a retained owner per prepare, so a policy
+	// change never makes the owner's configuration conflict.
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil {
+		controls := *req.ExecutionControls
+		controls.UpstreamRecovery = nil
+		req.ExecutionControls = &controls
+		// An otherwise empty block must hash like an absent one, or on/off flips would conflict.
+		if reflect.ValueOf(controls).IsZero() {
+			req.ExecutionControls = nil
+		}
+	}
 	data, err := json.Marshal(req)
 	return sha256.Sum256(data), err
 }
@@ -50,6 +76,9 @@ func (r *Router) handleExecutorPrepare(ctx context.Context, env proto.Envelope, 
 	caps, available := r.availableCapabilities(req.AgentKind)
 	if !available {
 		return r.rejectPreparation(env, "resource_unavailable")
+	}
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil && !caps.NativeSessionRecovery.IsSupported() {
+		return r.rejectPreparation(env, "unsupported_configuration")
 	}
 	factory, err := r.registry.ResolveExecutor(req.AgentKind)
 	if err != nil || !caps.Preparation.IsSupported() {
@@ -125,6 +154,10 @@ func (r *Router) handleExecutorPrepare(ctx context.Context, env proto.Envelope, 
 			code = "native_session_conflict"
 		case req.RequireExistingNativeSession && owner.nativeID == "":
 			code = "history_unavailable"
+		case wantsRecovery(req) && !implementsRecoveryPolicy(owner.native):
+			// Fail safe: never keep running a retained executor under a recovery
+			// policy it cannot apply.
+			code = "unsupported_configuration"
 		}
 		if code != "" {
 			r.mu.Unlock()
@@ -134,6 +167,14 @@ func (r *Router) handleExecutorPrepare(ctx context.Context, env proto.Envelope, 
 			owner.timer.Stop()
 		}
 		owner.idleLease++
+		// Core sends the current policy with every prepare and omits it when recovery is off.
+		if applier, ok := owner.native.(recoveryPolicyApplier); ok {
+			var policy *proto.UpstreamRecoveryControls
+			if req.ExecutionControls != nil {
+				policy = req.ExecutionControls.UpstreamRecovery
+			}
+			applier.SetUpstreamRecovery(policy)
+		}
 	} else {
 		if len(r.executors) >= executorIdleCapacity+preparationCapacity {
 			r.mu.Unlock()

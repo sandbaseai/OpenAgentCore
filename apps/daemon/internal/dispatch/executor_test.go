@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,7 @@ type reusableExecutor struct {
 	mu       sync.Mutex
 	closeErr error
 	startErr error
+	policies []*proto.UpstreamRecoveryControls
 }
 
 func (e *reusableExecutor) Close(context.Context) error {
@@ -38,6 +40,13 @@ func (e *reusableExecutor) StartTurn(_ context.Context, id string, _ proto.Messa
 	t := &reusableTurn{id: id, out: out, settled: make(chan struct{})}
 	e.starts <- t
 	return t, nil
+}
+
+// SetUpstreamRecovery records the policy Core sent with the latest prepare.
+func (e *reusableExecutor) SetUpstreamRecovery(c *proto.UpstreamRecoveryControls) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.policies = append(e.policies, c)
 }
 
 type reusableTurn struct {
@@ -319,6 +328,94 @@ func TestExecutorRejectsUnsupportedConfigurationBeforeFactory(t *testing.T) {
 	}
 }
 
+func TestExecutionPrepareRejectsRecoveryControlsWithoutNegotiation(t *testing.T) {
+	r, s, calls := executorRouter(t, &reusableExecutor{}, time.Minute)
+	req := executorRequest()
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted without negotiated extension")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" || calls.Load() != 0 {
+		t.Fatalf("status=%+v factory calls=%d", status, calls.Load())
+	}
+}
+
+func TestExecutionPrepareRejectsRecoveryControlsForOtherHarness(t *testing.T) {
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "reusable", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return &reusableExecutor{}, nil
+	})
+	s := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: s, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.Shutdown(ctx)
+	})
+	req := executorRequest()
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted for a harness that ignores them")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("status=%+v", status)
+	}
+}
+func TestExecutionPrepareRejectsRecoveryControlsWithSubagentObservation(t *testing.T) {
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return &reusableExecutor{}, nil
+	})
+	s := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: s, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.Shutdown(ctx)
+	})
+	req := executorRequest()
+	req.Configuration.AgentKind = "codex"
+	req.Configuration.ObserveSubagentIdentities = true
+	req.Configuration.DisableSubagents = true
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted for a turn that observes subagents")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("status=%+v", status)
+	}
+}
+func TestExecutionPrepareRejectsRecoveryControlsWithoutHarnessCapability(t *testing.T) {
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return &reusableExecutor{}, nil
+	})
+	s := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: s, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.Shutdown(ctx)
+	})
+	req := executorRequest()
+	req.Configuration.AgentKind = "codex"
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted for a harness without native recovery")
+	}
+	if status := waitPreparationStatus(t, s, "request", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("status=%+v", status)
+	}
+}
 func TestExecutorRejectsOutputFromAnotherTurn(t *testing.T) {
 	e := &reusableExecutor{starts: make(chan *reusableTurn, 1)}
 	r, s, _ := executorRouter(t, e, time.Minute)
@@ -389,5 +486,116 @@ func TestExecutorResumesSameOwnerAndNextTurnAfterSuspension(t *testing.T) {
 	waitFor(t, func() bool { return r.ActiveRuns() == 0 }, "resumed Turn settled")
 	if owner.closes.Load() != 0 {
 		t.Fatal("resumed Turn retired its healthy native owner")
+	}
+}
+
+func TestRouterSetUpstreamRecoveryRefreshesSelection(t *testing.T) {
+	r, _, _ := executorRouter(t, &reusableExecutor{}, time.Minute)
+	req := executorRequest()
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
+	r.SetUpstreamRecovery(false)
+	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
+		t.Fatal("recovery controls accepted while unselected")
+	}
+}
+
+func TestRetainedOwnerReceivesCurrentRecoveryPolicy(t *testing.T) {
+	owner := &reusableExecutor{starts: make(chan *reusableTurn, 4)}
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, NativeSessionRecovery: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return owner, nil
+	})
+	sender := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: sender, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	on := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}
+	changed := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 2, Classes: []string{proto.RecoveryClassImageInput}}
+	// on -> off -> on -> changed: none of the policy changes may conflict with the retained owner.
+	steps := []*proto.UpstreamRecoveryControls{on, nil, on, changed}
+	for i, policy := range steps {
+		req := executorRequest()
+		req.Configuration.AgentKind = "codex"
+		if policy != nil {
+			req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: policy}
+		}
+		key := fmt.Sprintf("step-%d", i)
+		if i > 0 {
+			req.Configuration.AgentSessionID = "native-session"
+		}
+		status := executorAdmission(t, r, sender, key, req)
+		if (i > 0) != status.Reused {
+			t.Fatalf("step %d reuse = %v", i, status.Reused)
+		}
+		startExecutorTurn(t, r, sender, key, fmt.Sprintf("turn-%d", i), status)
+		(<-owner.starts).finish()
+		waitFor(t, func() bool { return r.ActiveRuns() == 0 }, "Turn settled")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	// The first prepare creates the owner with the policy; each reuse then applies the one Core sent.
+	if len(owner.policies) != 3 || owner.policies[0] != nil || owner.policies[1] == nil || owner.policies[1].MaxAttempts != 1 || owner.policies[2] == nil || owner.policies[2].MaxAttempts != 2 || len(owner.policies[2].Classes) != 1 {
+		t.Fatalf("applied policies = %+v", owner.policies)
+	}
+	if owner.closes.Load() != 0 {
+		t.Fatal("policy change retired the owner")
+	}
+}
+
+// plainExecutor hides reusableExecutor's SetUpstreamRecovery.
+type plainExecutor struct{ agent.Executor }
+
+func TestRetainedOwnerWithoutPolicyApplierNeverGetsRecoveryPolicy(t *testing.T) {
+	inner := &reusableExecutor{starts: make(chan *reusableTurn, 4)}
+	reg := agent.NewRegistry()
+	registerExecutorKind(reg, proto.SupportedAgentKind{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, NativeSessionRecovery: proto.CapabilitySupported})}, func(context.Context, proto.PromptRequestPayload) (agent.Executor, error) {
+		return plainExecutor{inner}, nil
+	})
+	sender := &recSender{}
+	r, err := dispatch.New(dispatch.Config{Registry: reg, Sender: sender, IdleTimeout: time.Minute, UpstreamRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(context.Background()) })
+	policy := &proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 1}
+	prepare := func(key string, p *proto.UpstreamRecoveryControls) error {
+		req := executorRequest()
+		req.Configuration.AgentKind = "codex"
+		req.Configuration.AgentSessionID = "native-session"
+		if p != nil {
+			req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: p}
+		}
+		return r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, key, req))
+	}
+	req := executorRequest()
+	req.Configuration.AgentKind = "codex"
+	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: policy}
+	first := executorAdmission(t, r, sender, "first", req)
+	startExecutorTurn(t, r, sender, "first", "turn-0", first)
+	(<-inner.starts).finish()
+	waitFor(t, func() bool { return r.ActiveRuns() == 0 }, "Turn settled")
+	// A non-off policy the executor cannot apply is rejected explicitly, not as a conflict.
+	if err := prepare("second", policy); err == nil || !strings.Contains(err.Error(), "unsupported_configuration") {
+		t.Fatalf("prepare error = %v", err)
+	}
+	if status := waitPreparationStatus(t, sender, "second", "rejected", ""); status.ErrorCode != "unsupported_configuration" {
+		t.Fatalf("error code = %q", status.ErrorCode)
+	}
+	// Recovery off needs no action: the retained owner is reused.
+	if err := prepare("third", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status := waitPreparationStatus(t, sender, "third", "ready", ""); !status.Reused {
+		t.Fatal("owner was not reused")
+	}
+	if inner.closes.Load() != 0 {
+		t.Fatal("rejection retired the owner")
+	}
+	inner.mu.Lock()
+	defer inner.mu.Unlock()
+	if len(inner.policies) != 0 {
+		t.Fatalf("policy delivered to executor without applier: %+v", inner.policies)
 	}
 }

@@ -32,11 +32,11 @@ func (s *Session) settleExecutorTurn(startErr error) {
 	}
 	// Detach the old callbacks before waiting for their captured Turn and native
 	// replies. Later frames cannot acquire this Turn or redirect to a successor.
-	if !s.nativeSettled.Load() || startErr != nil || !s.rpc.Alive() {
+	if !s.nativeConfirmed() || startErr != nil || !s.rpc.Alive() {
 		s.cancelFn()
 		s.settlementErr = errors.Join(s.settlementErr, s.rpc.Close())
 	}
-	if !s.nativeSettled.Load() {
+	if !s.nativeConfirmed() {
 		s.settlementErr = errors.Join(s.settlementErr, errors.New("codex: native Turn settlement is unconfirmed"))
 	}
 	s.rpc.detachHandlers()
@@ -45,7 +45,7 @@ func (s *Session) settleExecutorTurn(startErr error) {
 	s.operationMu.Unlock()
 	s.stopSteering()
 	s.stopFunctionCalls()
-	if !s.nativeSettled.Load() || startErr != nil || !s.rpc.Alive() {
+	if !s.nativeConfirmed() || startErr != nil || !s.rpc.Alive() {
 		s.cancelFn()
 		s.settlementErr = errors.Join(s.settlementErr, s.rpc.Close())
 		s.settlement = agent.TurnSettlement{Reason: "native_execution_unavailable"}
@@ -76,7 +76,7 @@ func (s *Session) settleExecutorTurn(startErr error) {
 			s.settlementErr = errors.Join(s.settlementErr, s.cancelErr, s.rpc.Close())
 		}
 	}
-	if s.cancelled.Load() && s.nativeSettled.Load() && s.cancelErr == nil && s.rpc.Alive() {
+	if s.cancelled.Load() && s.nativeConfirmed() && s.cancelErr == nil && s.rpc.Alive() {
 		cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		err := s.cleanupNativeTerminals(cleanupCtx)
 		stop()
@@ -86,6 +86,13 @@ func (s *Session) settleExecutorTurn(startErr error) {
 		}
 	}
 	s.cancelFn()
+}
+
+// nativeConfirmed reports that native finished the Turn and nothing it may have
+// started is unaccounted for. A recovery whose new Turn start went unanswered
+// leaves native unconfirmed even though the Turn has settled.
+func (s *Session) nativeConfirmed() bool {
+	return s.nativeSettled.Load() && !s.recovery.unconfirmed.Load()
 }
 
 func (s *Session) beginOperation() bool {
@@ -119,8 +126,8 @@ func (s *Session) cancelExecutorTurn(ctx context.Context) error {
 		go func() {
 			defer close(s.cancelReady)
 			s.stopFunctionCalls()
-			turnID, active := s.stopSteering()
-			if !s.terminal.Load() && active {
+			turnID, active, deferred := s.stopSteeringForCancel()
+			if !s.terminal.Load() && active && !deferred {
 				if turnID == "" {
 					s.cancelErr = errors.New("codex: cancellation has no native turn identity")
 					s.cancelFn()
@@ -151,7 +158,9 @@ var _ agent.Turn = (*Session)(nil)
 
 // Server callbacks retain their originating Turn, whose ID must match exactly.
 func (s *Session) onServerRequest(method string, handler ServerRequestHandler) {
-	s.rpc.OnServerRequest(method, func(raw json.RawMessage, id any) (any, error) {
+	// A rebuilt Turn's request is registered with its gate on the read loop and
+	// waits for its recovery to be acknowledged.
+	s.rpc.OnServerRequestAdmitted(method, s.admitAckGate, func(raw json.RawMessage, id any) (any, error) {
 		if s.executor != nil {
 			var scope struct {
 				ThreadID string `json:"threadId"`

@@ -1,9 +1,12 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -145,5 +148,142 @@ func TestEngineClassificationUpdatesOnlyFromAcceptedMetadata(t *testing.T) {
 		if result.EngineErrorCode != step.code || (result.EngineHTTPStatus == nil) != (step.status == nil) || (step.status != nil && *result.EngineHTTPStatus != *step.status) {
 			t.Fatalf("payload=%s: %+v", step.payload, result)
 		}
+	}
+}
+
+func upstream400Failure(t *testing.T, fingerprint string, text string) proto.Envelope {
+	t.Helper()
+	code, _ := proto.FingerprintCode(fingerprint)
+	status := 400
+	env, err := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: text, Code: code, HTTPStatus: &status, Fingerprint: fingerprint, UpstreamRequestID: "88a8d808-59c1-4bf3-8950-b34ce57e028b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+func TestUpstream400FingerprintMergesIntoOutcomeAndSurvivesSettlement(t *testing.T) {
+	for _, drain := range []bool{false, true} {
+		result := Result{ErrorCode: "engine_failed"}
+		settlement, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: "executor Turn settlement failed"})
+		done, _ := proto.NewEnvelope(proto.TypeDone, "run", proto.DonePayload{Usage: proto.Usage{InputTokens: 7}})
+		events := []proto.Envelope{upstream400Failure(t, proto.FingerprintModelNoImageInput, "raw native text"), settlement, done}
+		if drain {
+			queued := make(chan proto.Envelope, len(events))
+			for _, event := range events {
+				queued <- event
+			}
+			close(queued)
+			j := journal{writer: &recoveringWriter{}, next: 1}
+			if err := j.drain(queued, &result); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			for _, event := range events {
+				if err := result.mergeObservation(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if result.EngineErrorCode != "model_input_unsupported_image" || result.EngineFingerprint != proto.FingerprintModelNoImageInput || result.EngineHTTPStatus == nil || *result.EngineHTTPStatus != 400 || result.Done.Usage.InputTokens != 7 || result.EngineRequestID != "88a8d808-59c1-4bf3-8950-b34ce57e028b" {
+			t.Fatalf("drain=%v: %+v", drain, result)
+		}
+		raw, _ := json.Marshal(result)
+		var persisted Result
+		if json.Unmarshal(raw, &persisted) != nil || persisted.EngineFingerprint != result.EngineFingerprint {
+			t.Fatal(string(raw))
+		}
+	}
+	// A later accepted classification replaces the fingerprint with it; a
+	// classification from another Turn never inherits one.
+	result := Result{}
+	if err := result.mergeObservation(upstream400Failure(t, proto.FingerprintTrailingModelTurn, "x")); err != nil {
+		t.Fatal(err)
+	}
+	unrelated, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: "x", Code: "authentication_error"})
+	if err := result.mergeObservation(unrelated); err != nil || result.EngineErrorCode != "authentication_error" || result.EngineFingerprint != "" || result.EngineHTTPStatus != nil {
+		t.Fatalf("fingerprint outlived its classification: %v %+v", err, result)
+	}
+	next := Result{}
+	if err := next.mergeObservation(unrelated); err != nil || next.EngineFingerprint != "" {
+		t.Fatal(err, next)
+	}
+}
+
+func TestUpstream400MalformedFingerprintMetadataIsDropped(t *testing.T) {
+	for _, payload := range []string{
+		`{"error":"x","code":"model_input_unsupported_image","http_status":400}`,
+		`{"error":"x","code":"model_input_unsupported_image","http_status":429,"fingerprint":"model_no_image_input"}`,
+		`{"error":"x","code":"model_input_unsupported_image","http_status":400,"fingerprint":"trailing_model_turn"}`,
+		`{"error":"x","code":"model_input_unsupported_image","http_status":400,"fingerprint":{"canary":1}}`,
+	} {
+		result := Result{}
+		if err := result.mergeObservation(proto.Envelope{Type: proto.TypeError, Payload: json.RawMessage(payload)}); err != nil {
+			t.Fatal(err)
+		}
+		if result.EngineErrorCode != "" || result.EngineFingerprint != "" || result.EngineHTTPStatus != nil {
+			t.Fatalf("%s: %+v", payload, result)
+		}
+	}
+}
+
+func TestTurnCompletionLogsFingerprintAndSummaryWithoutNativeText(t *testing.T) {
+	const canary = "sk-canary-secret-token"
+	logs := captureExecutionLogs(t)
+	status := 400
+	result := Result{ErrorCode: "engine_failed", Error: "unexpected status 400 Bad Request: " + canary, EngineErrorCode: "model_reasoning_state_invalid", EngineHTTPStatus: &status,
+		EngineRequestID: "88a8d808-59c1-4bf3-8950-b34ce57e028b", EngineFingerprint: proto.FingerprintReasoningEncryptedUnverifiable}
+	observeTerminalCommit(context.Background(), "session", "turn", sessions.TurnFailed, sessions.TurnFailed, 1, time.Now(), "event", nil, result)
+	rows := terminalRows(t, logs.Bytes())
+	if len(rows) != 1 {
+		t.Fatal(logs.String())
+	}
+	row := rows[0]
+	want := map[string]any{"error_code": "engine_failed", "engine_error_code": "model_reasoning_state_invalid", "engine_http_status": float64(400),
+		"engine_request_id": "88a8d808-59c1-4bf3-8950-b34ce57e028b", "engine_fingerprint": proto.FingerprintReasoningEncryptedUnverifiable,
+		"engine_summary": "upstream could not verify encrypted reasoning content carried in thread history"}
+	for key, value := range want {
+		if row[key] != value {
+			t.Fatalf("%s = %v, want %v", key, row[key], value)
+		}
+	}
+	if strings.Contains(logs.String(), canary) || strings.Contains(logs.String(), "unexpected status") {
+		t.Fatal("native text reached the log")
+	}
+	// A completed Turn without failure evidence adds no failure fields.
+	logs.Reset()
+	observeTerminalCommit(context.Background(), "session", "turn", sessions.TurnCompleted, sessions.TurnCompleted, 1, time.Now(), "event", nil, Result{})
+	for _, key := range []string{"error_code", "engine_error_code", "engine_http_status", "engine_request_id", "engine_fingerprint", "engine_summary"} {
+		if bytes.Contains(logs.Bytes(), []byte(`"`+key+`"`)) {
+			t.Fatalf("%s logged for a Turn without failure: %s", key, logs.String())
+		}
+	}
+}
+
+func TestEngineFailureAttrsOnlyLogWhitelistedCoreCodes(t *testing.T) {
+	// Input rejection codes embed an executor-supplied suffix and must not be logged verbatim.
+	for _, code := range []string{"input_secret-canary", "secret-canary", ""} {
+		for _, attr := range engineFailureAttrs(Result{ErrorCode: code}) {
+			if text, ok := attr.(string); ok && strings.Contains(text, "canary") {
+				t.Fatalf("%q leaked: %v", code, attr)
+			}
+		}
+	}
+	attrs := engineFailureAttrs(Result{ErrorCode: "input_busy"})
+	if len(attrs) != 2 || attrs[0] != "error_code" || attrs[1] != "input_busy" {
+		t.Fatal(attrs)
+	}
+	// An untyped 400 is summarized without any fingerprint.
+	status := 400
+	attrs = engineFailureAttrs(Result{EngineErrorCode: "connection_failed", EngineHTTPStatus: &status})
+	if !strings.Contains(strings.Join(func() (v []string) {
+		for _, a := range attrs {
+			if s, ok := a.(string); ok {
+				v = append(v, s)
+			}
+		}
+		return
+	}(), " "), "upstream returned HTTP 400 (unclassified)") {
+		t.Fatal(attrs)
 	}
 }

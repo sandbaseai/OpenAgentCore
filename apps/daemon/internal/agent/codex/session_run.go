@@ -32,22 +32,11 @@ func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.P
 		ThreadID: s.currentThreadID(),
 		Input:    input,
 	}
-	model := strings.TrimSpace(s.resolvedModel)
-	if model == "" {
-		return fmt.Errorf("codex: collaboration mode requires a resolved model")
+	collaboration, err := s.collaborationMode(plan)
+	if err != nil {
+		return err
 	}
-	var developerInstructions *string
-	if plan.SystemPrompt != "" {
-		developerInstructions = &plan.SystemPrompt
-	}
-	turnParams.CollaborationMode = &CollaborationMode{
-		Mode: CollaborationModeDefault,
-		Settings: CollaborationModeSettings{
-			ReasoningEffort:       plan.ModelReasoningEffort,
-			Model:                 model,
-			DeveloperInstructions: developerInstructions,
-		},
-	}
+	turnParams.CollaborationMode = collaboration
 	turnCtx, turnCancel := context.WithTimeout(ctx, 10*time.Second)
 	_, ackErr := s.rpc.requestWithResult(withNativeBoundary(turnCtx, s.boundary), "turn/start", turnParams, s.bindTurnResult)
 	turnCancel()
@@ -57,4 +46,24 @@ func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.P
 	}
 
 	return nil
+}
+
+// collaborationMode derives the per-Turn collaboration settings from the plan.
+func (s *Session) collaborationMode(plan SessionPlan) (*CollaborationMode, error) {
+	model := strings.TrimSpace(s.model())
+	if model == "" {
+		return nil, fmt.Errorf("codex: collaboration mode requires a resolved model")
+	}
+	var developerInstructions *string
+	if plan.SystemPrompt != "" {
+		developerInstructions = &plan.SystemPrompt
+	}
+	return &CollaborationMode{
+		Mode: CollaborationModeDefault,
+		Settings: CollaborationModeSettings{
+			ReasoningEffort:       plan.ModelReasoningEffort,
+			Model:                 model,
+			DeveloperInstructions: developerInstructions,
+		},
+	}, nil
 }

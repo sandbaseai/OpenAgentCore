@@ -118,3 +118,22 @@ func TestSteeringDoesNotStartOrReviveTurns(t *testing.T) {
 		t.Fatalf("cancelled run: %v", err)
 	}
 }
+
+// The atomic recovery state flips before beginRecovery marks the steering slot;
+// a steer in that window must not be written to the finished Turn.
+func TestSteerNotReadyWhenRecoveryStateFlippedFirst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Session{cancelCtx: ctx}
+	s.setThreadID("native-thread")
+	s.steering.id = "turn-1"
+	s.recovery.state.Store(recoveryRecovering)
+	// A nil RPC client proves nothing is written.
+	err := s.Steer(ctx, proto.PromptSteerPayload{InputID: "input-1", Input: proto.TextInput("extra")})
+	if !errors.Is(err, agent.ErrSteeringNotReady) {
+		t.Fatalf("steer during recovery takeover = %v, want ErrSteeringNotReady", err)
+	}
+	if s.steering.cancel != nil {
+		t.Fatal("steer registered a cancel slot during recovery takeover")
+	}
+}

@@ -43,10 +43,7 @@ func TestSchedulingObservationBoundedConcurrentAndOwnerLocal(t *testing.T) {
 	}
 	observations.finish(ctx, first, "completed")
 	observations.finish(ctx, first, "completed")
-	var row map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &row); err != nil {
-		t.Fatal(err)
-	}
+	row := singleSchedulingRow(t, logs.String())
 	if row["state_count"] != float64(2) || row["notify_to_handler_ms"] != nil || row["observation_complete"] != false {
 		t.Fatal(row)
 	}
@@ -74,10 +71,7 @@ func TestSchedulingObservationDelayAndInvalidIntervals(t *testing.T) {
 		t.Fatal("first observation overwritten")
 	}
 	observations.finish(ctx, scope, "completed")
-	var row map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &row); err != nil {
-		t.Fatal(err)
-	}
+	row := singleSchedulingRow(t, logs.String())
 	if row["eligible_to_selected_ms"].(float64) < 10 {
 		t.Fatal("delay excluded", row)
 	}
@@ -143,10 +137,7 @@ func TestSchedulingObservationExistingReadClassifications(t *testing.T) {
 				t.Fatal("business reads changed", reader.calls, allocationCalls)
 			}
 			observations.finish(ctx, scope, "unknown")
-			var row map[string]any
-			if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &row); err != nil {
-				t.Fatal(err)
-			}
+			row := singleSchedulingRow(t, logs.String())
 			if row[tc.state+"_observed"] != true || strings.Contains(logs.String(), "SECRET_CANARY") {
 				t.Fatal(row)
 			}
@@ -251,10 +242,7 @@ func TestSchedulingObservationAdmittedHandlerPreservesDispatch(t *testing.T) {
 	observeSchedulingState(ctx, "promoted")
 	observeSchedulingState(ctx, "notification_sent")
 	scopes.finish(ctx, value, "completed")
-	var row map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(logs.String())), &row); err != nil {
-		t.Fatal(err)
-	}
+	row := singleSchedulingRow(t, logs.String())
 	if row["handler_observed_observed"] != true || row["promoted_observed"] != true || row["notification_sent_observed"] != true {
 		t.Fatal("lost concurrent dispatch milestones", row)
 	}

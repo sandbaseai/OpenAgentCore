@@ -60,6 +60,11 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 	defer unsubscribeChanges()
 	status = sessions.TurnFailed
 	result.AppliedThrough = first
+	policy := proto.UpstreamRecoveryControls{}
+	if request.ExecutionControls != nil && request.ExecutionControls.UpstreamRecovery != nil {
+		policy = request.ExecutionControls.UpstreamRecovery.Normalized()
+	}
+	result.recoveryPolicy = &policy
 	subscription, err := peer.SubscribeDurable(runID)
 	if err != nil {
 		result.ErrorCode = "device_disconnected"
@@ -74,13 +79,20 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 		}
 	}()
 	var doneReceived time.Time
+	recoveriesObserved := false
 	journal := &journal{ctx: ctx, writer: d.sessionExecution, tenant: tenantID, session: sessionID, turn: runID, next: 1,
 		observeSubagents: request.ObserveSubagentIdentities}
 	defer func() {
 		finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cleanupStarted := time.Now()
+		recoveriesBefore, droppedBefore := len(result.Recoveries), result.recoveriesDropped
 		drainErr := journal.drain(upstream, &result)
+		// Records merged outside the Done path (cancellation receipt, final drain) are logged once here.
+		changed := len(result.Recoveries) != recoveriesBefore || result.recoveriesDropped != droppedBefore
+		if changed || (!recoveriesObserved && (len(result.Recoveries) != 0 || result.recoveriesDropped)) {
+			observeUpstreamRecoveries(ctx, sessionID, runID, result)
+		}
 		observeExecutionStage(ctx, "delivery_final_drain", cleanupStarted, drainErr, "session_id", sessionID, "turn_id", runID)
 		if drainErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
@@ -251,7 +263,10 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 					return
 				}
 				result.ErrorCode, result.Error = "engine_failed", failure.Error
+				obslog.Ctx(ctx).Warn("executor reported failure", append([]any{"session_id", sessionID, "turn_id", runID}, engineFailureAttrs(result)...)...)
 			case proto.TypeDone:
+				observeUpstreamRecoveries(ctx, sessionID, runID, result)
+				recoveriesObserved = true
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
 			case proto.TypeFunctionCall:
@@ -385,18 +400,26 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 		}
 		// Unclassified settlement errors must not erase native failure evidence.
 		if code, status := proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus); code != "" {
-			r.EngineErrorCode, r.EngineHTTPStatus = code, status
+			// A fingerprint belongs to exactly one classification and never
+			// outlives it; a failed pairing leaves the previous evidence intact.
+			paired, fingerprint := proto.NormalizeEngineFingerprint(code, failure.Fingerprint)
+			if paired != "" {
+				r.EngineErrorCode, r.EngineHTTPStatus, r.EngineFingerprint = code, status, fingerprint
+				// The request ID travels with the accepted classification only.
+				r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
+			}
 		}
-		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
 	case proto.TypeDone:
-		return r.mergeDone(env.Payload)
+		return r.mergeDone(env.Payload, true)
 	}
 	return nil
 }
 
-func (r *Result) mergeDone(raw json.RawMessage) error {
+// terminal is true for a Runtime done frame, where no earlier error frame means
+// the Turn succeeded; a cancellation outcome may legitimately end aborted.
+func (r *Result) mergeDone(raw json.RawMessage, terminal bool) error {
 	var done proto.DonePayload
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &done); err != nil {
@@ -417,9 +440,77 @@ func (r *Result) mergeDone(raw json.RawMessage) error {
 	if done.Metadata == nil {
 		done.Metadata = r.Done.Metadata
 	}
+	// Recovery records are validated before they reach the outcome. The raw
+	// metadata key is always removed, so a malformed value is dropped whole
+	// instead of being stored as runtime-supplied JSON.
+	if raw, present := done.Metadata[proto.DoneMetaUpstreamRecoveries]; present {
+		delete(done.Metadata, proto.DoneMetaUpstreamRecoveries)
+		recoveries, ok := proto.ParseUpstreamRecoveries(raw)
+		// A recovered final record contradicts an error frame already seen:
+		// the daemon marks the last attempt exhausted when the Turn fails.
+		if ok && r.ErrorCode == "engine_failed" && recoveries[len(recoveries)-1].Outcome == proto.RecoveryOutcomeRecovered {
+			ok = false
+		}
+		// A Turn that ended without an error must end on a recovered record;
+		// an exhausted or aborted final record contradicts a successful Turn.
+		if ok && terminal && r.ErrorCode == "" && recoveries[len(recoveries)-1].Outcome != proto.RecoveryOutcomeRecovered {
+			ok = false
+		}
+		// An abort happens before any thread switch and settles the failure the
+		// recovery was admitted for, so it must carry the terminal fingerprint.
+		if ok && r.EngineFingerprint != "" {
+			last := recoveries[len(recoveries)-1]
+			if last.Outcome == proto.RecoveryOutcomeAborted && last.Fingerprint != r.EngineFingerprint {
+				ok = false
+			}
+		}
+		// Records must stay inside the policy Core sent: attempt budget and
+		// enabled classes.
+		if ok && r.recoveryPolicy != nil && !recoveriesWithinPolicy(recoveries, *r.recoveryPolicy) {
+			ok = false
+		}
+		// The audit must describe the native Session Core will resume: the new
+		// ID after a switch, the old ID after an abort.
+		if ok {
+			last := recoveries[len(recoveries)-1]
+			want := last.NewNativeSessionID
+			if last.Attempt == 0 {
+				want = last.OldNativeSessionID
+			}
+			if reported, _ := done.Metadata[proto.DoneMetaAgentSessionID].(string); reported != want {
+				ok = false
+			}
+		}
+		if ok {
+			r.Recoveries, r.recoveriesDropped = recoveries, false
+		} else {
+			r.Recoveries, r.recoveriesDropped = nil, true
+		}
+	}
 	if done.SourceCompletedAtMS == nil {
 		done.SourceCompletedAtMS = r.Done.SourceCompletedAtMS
 	}
 	r.Done = done
 	return nil
+}
+
+// recoveriesWithinPolicy reports whether the records respect the attempt
+// budget (every admission, including a final abort) and enabled classes of the policy Core sent.
+func recoveriesWithinPolicy(recoveries []proto.UpstreamRecovery, policy proto.UpstreamRecoveryControls) bool {
+	if !policy.Enabled || len(recoveries) > policy.MaxAttempts {
+		return false
+	}
+	for _, record := range recoveries {
+		allowed := false
+		for _, class := range policy.Classes {
+			if fingerprint, known := proto.RecoveryClassFingerprint(class); known && fingerprint == record.Fingerprint {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	return true
 }

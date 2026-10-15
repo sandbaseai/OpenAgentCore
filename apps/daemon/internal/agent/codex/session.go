@@ -86,6 +86,11 @@ type Session struct {
 
 	threadIDMu sync.Mutex
 	threadID   string
+	// reportedID is the thread id reported outward (Done metadata, cancellation
+	// outcome, the next Turn's resume target). It trails threadID only while an
+	// upstream recovery has switched routing to a new thread that its Turn start
+	// has not yet acknowledged. Empty means threadID. Guarded by threadIDMu.
+	reportedID string
 	steering   steeringTurn
 
 	deltaSeq    atomic.Uint64
@@ -101,12 +106,20 @@ type Session struct {
 	resumeUsageThreadID string
 	resumeUsageTotal    *TurnUsage
 	resolvedModel       string
+	modelMu             sync.RWMutex // guards resolvedModel; leaf lock, never held while taking another
+	// Upstream recovery usage state, guarded by usageMu; see effectiveUsageLocked.
+	usageCarry      *TurnUsage
+	usageSwitched   bool
+	usageInRecovery bool
+	usageThreadID   string
 
 	finalTextMu sync.Mutex
 	finalText   string
 	lastErrText string
 
 	outcome cancellationOutcomeState
+
+	recovery sessionRecovery
 }
 
 var _ agent.Session = (*Session)(nil)
@@ -119,18 +132,18 @@ func (s *Session) registerHandlers() {
 	rpc := s.rpc
 
 	rpc.OnNotification("thread/started", func(_ json.RawMessage) {})
-	rpc.OnNotification("turn/started", s.onTurnStarted)
-	rpc.OnNotification("turn/completed", s.onTurnCompleted)
-	rpc.OnNotification("turn/failed", s.onTurnFailed)
-	rpc.OnNotification("item/started", s.onItemStarted)
+	rpc.OnNotification("turn/started", s.gated(s.onTurnStarted))
+	rpc.OnNotification("turn/completed", s.gated(s.onTurnCompleted))
+	rpc.OnNotification("turn/failed", s.gated(s.onTurnFailed))
+	rpc.OnNotification("item/started", s.gated(s.onItemStarted))
 	rpc.OnNotification("item/updated", func(_ json.RawMessage) {}) // silenced
-	rpc.OnNotification("item/completed", s.onItemCompleted)
-	rpc.OnNotification("item/agentMessage/delta", s.onAgentDelta)
-	rpc.OnNotification("item/commandExecution/outputDelta", s.onCommandOutput)
-	rpc.OnNotification("item/reasoning/textDelta", s.onReasoningDelta)
-	rpc.OnNotification("item/reasoning/summaryTextDelta", s.onReasoningDelta)
-	rpc.OnNotification("thread/tokenUsage/updated", s.onUsageUpdated)
-	rpc.OnNotification("error", s.onErrorNotif)
+	rpc.OnNotification("item/completed", s.gated(s.onItemCompleted))
+	rpc.OnNotification("item/agentMessage/delta", s.gated(s.onAgentDelta))
+	rpc.OnNotification("item/commandExecution/outputDelta", s.gated(s.onCommandOutput))
+	rpc.OnNotification("item/reasoning/textDelta", s.gated(s.onReasoningDelta))
+	rpc.OnNotification("item/reasoning/summaryTextDelta", s.gated(s.onReasoningDelta))
+	rpc.OnNotification("thread/tokenUsage/updated", s.gated(s.onUsageUpdated))
+	rpc.OnNotification("error", s.gated(s.onErrorNotif))
 
 	// Harnesses run unattended. Approval policy never and the session plan keep
 	// native asks from being raised; any other server request gets the
@@ -169,19 +182,36 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 	if json.Unmarshal(raw, &p) != nil || !s.isRootTurn(p.ThreadID, p.Turn.ID) {
 		return
 	}
+	// A rebuilt Turn can finish before its turn/start reply is acknowledged;
+	// hold that terminal until the recovery has committed its record.
+	s.steering.mu.Lock()
+	if s.steering.recovering && p.Turn.ID != s.steering.recoveringTurnID {
+		s.steering.deferredCompleted = append(json.RawMessage(nil), raw...)
+		s.steering.mu.Unlock()
+		return
+	}
+	s.steering.mu.Unlock()
+	// A rebuild of the thread takes over a failed Turn; nothing is settled or
+	// emitted until it ends. Every other Turn settles exactly as before.
+	if fingerprint, ok := s.shouldRecover(p); ok && s.beginRecovery(p, fingerprint) {
+		return
+	}
+	s.completeTurnLocked(p)
+}
+
+// completeTurnLocked settles the root Turn. The caller holds notificationMu and
+// has established that p is the root Turn's terminal notification.
+func (s *Session) completeTurnLocked(p TurnCompletedNotification) {
 	s.nativeSettled.Store(true)
 	s.stopSteering()
 
-	usage := p.Turn.Usage
-	if usage == nil {
-		s.usageMu.Lock()
-		usage = s.latestUsage
-		s.usageMu.Unlock()
+	s.usageMu.Lock()
+	if p.Turn.Usage != nil {
+		s.latestUsage = p.Turn.Usage
 	}
+	usage := s.effectiveUsageLocked()
+	s.usageMu.Unlock()
 	if usage != nil {
-		s.usageMu.Lock()
-		s.latestUsage = usage
-		s.usageMu.Unlock()
 		s.emitUsage(*usage)
 	}
 
@@ -276,6 +306,15 @@ func (s *Session) onTurnFailed(raw json.RawMessage) {
 	if json.Unmarshal(raw, &p) != nil || !s.isRootTurn(p.ThreadID, p.Turn.ID) {
 		return
 	}
+	// A rebuilt Turn can fail before its turn/start reply is acknowledged; hold
+	// that terminal until the recovery has committed its record.
+	s.steering.mu.Lock()
+	if s.steering.recovering && p.Turn.ID != s.steering.recoveringTurnID {
+		s.steering.deferredFailed = append(json.RawMessage(nil), raw...)
+		s.steering.mu.Unlock()
+		return
+	}
+	s.steering.mu.Unlock()
 	// turn/failed carries no payload detail today; the actual cause
 	// usually arrived earlier on the "error" notification stream and is
 	// already buffered in lastErrText. Log both so post-mortems can
@@ -338,10 +377,15 @@ func (s *Session) emitDoneAt(content string, usage *TurnUsage, completedAt *int6
 	s.stopSteering()
 	s.stopFunctionCalls()
 	doneMeta := map[string]any{}
-	if tid := s.currentThreadID(); tid != "" {
+	// Settle any in-flight recovery first: once the abort is recorded the
+	// acknowledgement can no longer publish a new identity, so the thread id
+	// read afterwards agrees with the recovery records.
+	s.recordInflightRecoveryAbort()
+	if tid := s.reportedThread(); tid != "" {
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.attachRecoveries(doneMeta, false)
 	payload := proto.DonePayload{Content: content, Metadata: doneMeta, SourceCompletedAtMS: completedAt}
 	if usage != nil {
 		payload.Usage = s.usagePayload(*usage)
@@ -385,6 +429,7 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 			"error_code", failure.Code,
 			"http_status", failure.HTTPStatus,
 			"upstream_request_id", proto.NormalizeProviderRequestID(failure.UpstreamRequestID),
+			"fingerprint", failure.Fingerprint,
 			"message_len", len(message))
 	} else {
 		s.cfg.logger.Info("codex: emitting terminal done",
@@ -401,10 +446,15 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 		}
 	}
 	doneMeta := map[string]any{}
-	if tid := s.currentThreadID(); tid != "" {
+	// Settle any in-flight recovery first: once the abort is recorded the
+	// acknowledgement can no longer publish a new identity, so the thread id
+	// read afterwards agrees with the recovery records.
+	s.recordInflightRecoveryAbort()
+	if tid := s.reportedThread(); tid != "" {
 		doneMeta[proto.DoneMetaAgentSessionID] = tid
 		doneMeta[proto.DoneMetaAgentSessionType] = "codex_thread"
 	}
+	s.attachRecoveries(doneMeta, asError)
 	payload := proto.DonePayload{
 		Content:  message,
 		Metadata: doneMeta,
@@ -443,6 +493,16 @@ func (s *Session) finishAfterTerminal() {
 func (s *Session) currentThreadID() string {
 	s.threadIDMu.Lock()
 	defer s.threadIDMu.Unlock()
+	return s.threadID
+}
+
+// reportedThread is the thread id reported outward; see Session.reportedID.
+func (s *Session) reportedThread() string {
+	s.threadIDMu.Lock()
+	defer s.threadIDMu.Unlock()
+	if s.reportedID != "" {
+		return s.reportedID
+	}
 	return s.threadID
 }
 

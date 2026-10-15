@@ -1,7 +1,7 @@
 ---
 title: "Agents API 覆盖台账"
 source: contracts/agents-api/index.md
-source_hash: 2232f59baf1c8b6a95a78059c081828ba47d9a58bf367179bc2d06984997984e
+source_hash: eb12556acf3f5d0e6e996fb738675083c4cf6854e921beebdf0f24cf70880d21
 ---
 
 Core 旨在以下方固定版本为准支持完整的 OpenAI Agents API（[public API rule](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/AGENTS.md#public-api)）。本台账记录 Core 对各项资源实现了哪些内容、哪些契约保存其详细信息，并列出相对于 OpenAI 服务的所有已知差异和所有未解决缺口。[API namespaces and credentials](../../../docs/zh/api/index.md) 说明谁调用哪些 API；[Agents API guide](../../../docs/zh/api/public-agent-api.md) 介绍使用方法。
@@ -165,3 +165,4 @@ Core 自身字段位于 `x_agents_core` 中（[Core extensions](../../../docs/zh
 - Environment file 列表的默认值（limit 为 20、默认路径为工作区根目录、不递归、page-token 失效）、50 MiB 的 `file_id` 复制上限，以及创建时的检查顺序。
 - Artifact 对硬链接、特殊文件和链接形式的 `outputs` 目录的捕获，内容字节变化后的重新发布，以及内容标头和范围。
 - Vault 和 Credential 的错误与重试语义、并发写入下的分页、删除后的可见性、依据官方规范化处理进行精确 URL 匹配、OAuth 刷新的时机和错误，以及受限密钥范围。
+- Codex Harness 上的上游 400 自动恢复：`thread/read` 历史响应（`includeTurns` 是否返回每个 Turn 的 items，还是需要 `thread/turns/list`），以及用于选择恢复类别的 provider 400 错误原文，均未针对在线 Codex 校准。恢复默认关闭，无法读取历史时放弃本次尝试。

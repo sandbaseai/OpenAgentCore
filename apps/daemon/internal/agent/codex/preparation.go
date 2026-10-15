@@ -74,6 +74,9 @@ func newPreparation(parent context.Context, req proto.PromptRequestPayload, cfg 
 		resolvedModel:             plan.Model,
 	}
 	plan.Cleanup = s.cleanup
+	if req.ExecutionControls != nil && req.ExecutionControls.UpstreamRecovery != nil {
+		s.recovery.controls = req.ExecutionControls.UpstreamRecovery.Normalized()
+	}
 	p := &Prepared{
 		session: s, plan: plan,
 		resumeID: req.AgentSessionID, requireExistingNativeSession: req.RequireExistingNativeSession,

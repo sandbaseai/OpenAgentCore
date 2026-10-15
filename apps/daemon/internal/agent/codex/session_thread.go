@@ -12,7 +12,9 @@ const (
 	sandboxDangerFullAccess = "danger-full-access"
 )
 
-func (s *Session) startThread(plan SessionPlan) error {
+// buildThreadStartParams is the one place a root thread's start parameters are
+// derived from the plan, shared by the first start and a recovery rebuild.
+func (s *Session) buildThreadStartParams(plan SessionPlan) ThreadStartParams {
 	params := ThreadStartParams{
 		Cwd:                   plan.Cwd,
 		Model:                 plan.Model,
@@ -27,6 +29,11 @@ func (s *Session) startThread(plan SessionPlan) error {
 	if s.functions != nil {
 		params.DynamicTools = s.functions.definitions
 	}
+	return params
+}
+
+func (s *Session) startThread(plan SessionPlan) error {
+	params := s.buildThreadStartParams(plan)
 	s.cfg.logger.Info("codex: thread/start request",
 		"run_id", s.runID,
 		"cwd", params.Cwd,
@@ -85,7 +92,7 @@ func (s *Session) bindThreadResult(raw json.RawMessage, expectedID string) error
 	}
 	s.setThreadID(res.Thread.ID)
 	if res.Model != "" {
-		s.resolvedModel = res.Model
+		s.setModel(res.Model)
 	}
 	return nil
 }

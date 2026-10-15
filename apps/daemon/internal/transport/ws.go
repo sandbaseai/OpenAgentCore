@@ -41,6 +41,9 @@ type DialOptions struct {
 	// HandshakeTimeout caps WS upgrade wait. Zero → 10s.
 	HandshakeTimeout time.Duration
 
+	// UpstreamRecovery offers the upstream recovery extension; set it only when
+	// an installed Harness can apply the controls.
+	UpstreamRecovery bool
 	// HTTPHeader is appended to the upgrade request. Useful in tests.
 	HTTPHeader http.Header
 }
@@ -69,8 +72,11 @@ type Conn struct {
 	firstHeartbeat heartbeatObservation
 
 	eventCredit bool // Immutable selection confirmed by the upgrade response.
-	flowMu      sync.Mutex
-	flows       map[string]*eventFlow
+	// upstreamRecovery records that Core selected the upstream recovery extension.
+	// Core sends recovery controls only on a connection that selected it.
+	upstreamRecovery bool
+	flowMu           sync.Mutex
+	flows            map[string]*eventFlow
 }
 
 // envelopeWithAck pairs an outbound frame with a done channel so Send
@@ -111,6 +117,11 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 	}
 	headers.Set("Authorization", "Bearer "+opts.Credential)
 	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
+	// Offered only when an installed codex harness can rebuild a thread after a
+	// recoverable upstream 400; otherwise Core must not send recovery controls.
+	if opts.UpstreamRecovery {
+		headers.Set(proto.UpstreamRecoveryHeader, proto.UpstreamRecoveryV1)
+	}
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {
 		// 401/403/426 are operator-fixable and MUST NOT be retried —
@@ -137,23 +148,37 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		_ = wsConn.Close()
 		return nil, fmt.Errorf("transport.Dial: invalid execution flow selection: %w", ErrPermanent)
 	}
+	upstreamRecovery, err := proto.NegotiateUpstreamRecovery(resp.Header.Values(proto.UpstreamRecoveryHeader))
+	if err != nil {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: invalid upstream recovery selection: %w", ErrPermanent)
+	}
+	if upstreamRecovery && !opts.UpstreamRecovery {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: upstream recovery selected but not offered: %w", ErrPermanent)
+	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
 	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
-		eventCredit:  eventCredit,
-		ws:           wsConn,
-		deviceID:     opts.DeviceID,
-		recvCh:       make(chan ReceivedEnvelope, 64),
-		connectionID: uuid.NewString(),
-		sendCh:       make(chan envelopeWithAck, 64),
-		closed:       make(chan struct{}),
+		eventCredit:      eventCredit,
+		upstreamRecovery: upstreamRecovery,
+		ws:               wsConn,
+		deviceID:         opts.DeviceID,
+		recvCh:           make(chan ReceivedEnvelope, 64),
+		connectionID:     uuid.NewString(),
+		sendCh:           make(chan envelopeWithAck, 64),
+		closed:           make(chan struct{}),
 	}
 	go c.writeLoop()
 	go c.readLoop()
 	return c, nil
 }
+
+// UpstreamRecovery reports whether Core selected the upstream recovery extension
+// for this connection.
+func (c *Conn) UpstreamRecovery() bool { return c.upstreamRecovery }
 
 // Recv returns the inbound envelope channel. Closes when the connection
 // terminates; Err() returns the cause after.

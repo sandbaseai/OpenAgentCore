@@ -68,6 +68,9 @@ type ExecutionControls struct {
 	WebSearch                      string        `json:"web_search"`
 	TextVerbosity                  string        `json:"text_verbosity"`
 	OutputFormat                   *OutputFormat `json:"output_format,omitempty"`
+	// UpstreamRecovery is sent only on a connection that selected the
+	// X-Oac-Upstream-Recovery extension; an older Runtime never sees it.
+	UpstreamRecovery *UpstreamRecoveryControls `json:"upstream_recovery,omitempty"`
 }
 
 // OutputFormat passes the public schema unchanged to a qualified native adapter.

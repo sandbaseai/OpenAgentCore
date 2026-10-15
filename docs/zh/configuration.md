@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: 4056796c254ff529e7ae771f10a9b6725a4260de30e11c48bd7291a333254f1a
+source_hash: 19d8aa63d01d3330a52e3a63e8dc07b855cd188edd2cd44656722f302d66c8ea
 ---
 
 Core 安装的每项设置都恰好只有一个归属位置，分属以下三类：
@@ -54,6 +54,10 @@ Core 安装的每项设置都恰好只有一个归属位置，分属以下三类
 | `OAC_LOG_FORMAT` | `auto` | `auto`, `text` or `json` |
 | `OAC_LOG_ADD_SOURCE` | unset | `1` adds source locations |
 | `OAC_EXECUTION_CONCURRENCY` | `4` | Concurrent execution work, from 1 to 1024 |
+| `OAC_UPSTREAM_RECOVERY_ENABLED` | `false` | `true` 允许 Runtime 在可恢复的[上游 HTTP 400](#upstream-recovery) 之后重建原生线程并继续该 Turn。除 `true` 和 `false` 之外的值会使启动失败 |
+| `OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS` | `1` | 每个 Turn 的恢复次数，取 1 或 2 |
+| `OAC_UPSTREAM_RECOVERY_CLASSES` | `reasoning_state,image_input` | 恢复可处理的类别，以逗号分隔：`reasoning_state`、`image_input`、`tool_result_image`、`trailing_assistant`。未知名称会使启动失败 |
+| `OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS` | `120000` | 重建历史的字符预算，范围 20000–400000 |
 | `OAC_SANDBOX_MAX_ACTIVE` | `100` | 启用暂停能力的直接 Provider 的活跃沙箱上限，范围 1–100000；独立于执行并发度和节点容量 |
 | `OAC_SANDBOX_MAX_RETAINED` | `400` | 直接 Provider 的保留沙箱上限，范围 1–100000，包括活跃、已暂停以及尚未确认清理完成的分配；必须不小于活跃上限 |
 | `OAC_DEFAULT_HARNESS` | `codex` | Harness used when a request does not name one |
@@ -63,6 +67,14 @@ Core 安装的每项设置都恰好只有一个归属位置，分属以下三类
 | `OAC_HISTORY_SETTINGS_FILE` | unset | 可选的 [Runtime 历史文件](#runtime-history-file)。敏感；Core 只报告它是否已配置 |
 
 未设置或为空的值使用默认值。编辑 `.env`，然后运行 `oac apply`。Core 在启动时一次性读取所有进程设置及设置指向的文件，并在 `GET /core/v1/installation` 报告加载的结果。`oac-core check-config` 会在不启动 Core 的情况下加载并校验同样的设置和文件。`OAC_PROVIDER_ROOT` 下的原生安装程序目录清单不属于设置，Core 只在启动时检查它。错误信息只指明变量名，绝不包含其值。敏感设置只报告是否已配置。
+
+### 上游恢复 {#upstream-recovery}
+
+Core 始终把五种固定的上游 HTTP 400 模式归类为诊断代码。设置 `OAC_UPSTREAM_RECOVERY_ENABLED=true` 后，支持该能力的 Runtime 还会尝试一到两次继续同一个 Turn：它根据旧线程渲染出的历史记录启动新的原生线程，其中不含推理状态和图片；对于因其他原因被提供商拒绝的请求，它绝不会重试。Core 只会向其连接选择了可选[恢复扩展](runtime-protocol.md#upstream-recovery)的 Runtime 发送该策略；未构建该扩展的 Runtime 行为不变，另外三项设置对它没有影响。
+
+恢复会改变模型看到的内容，多花一次未命中缓存的请求，并可能重复带副作用的步骤，所以默认关闭。请一次只启用一个类别，先从 `reasoning_state` 开始。`tool_result_image` 和 `trailing_assistant` 默认关闭，因为它们的成因尚未得到充分确认。回滚时把 `OAC_UPSTREAM_RECOVERY_ENABLED` 改回 `false` 并运行 `oac apply`，无需更换镜像。
+
+已恢复的 Turn 会正常完成，且没有诊断。它的记录位于 Turn outcome 的 `recoveries` 中，Core 会在该 Turn 完成时记录 `executor upstream recovery` 和 `recovery_count`；Agents 界面不会显示这些内容。失败的 Turn 只通过 [Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)显示未成功的记录。记录只包含枚举、计数和原生 Session ID。检查 Turn 时请查询 outcome 的 `recoveries`，不要查询其 `error` 文本。
 
 ### Runtime 历史文件 {#runtime-history-file}
 
@@ -274,7 +286,7 @@ Core 读取进程环境。Compose 将 `.env` 插值到环境中，并把机密�
 | `OAC_CREDENTIAL_KEY_FILE` | 必填。`/run/oac/credential.key`：Base64 编码的 32 字节随机密钥。Core 用它加密存储的凭据 |
 | `OAC_CORE_KEY_DIGESTS_FILE` | 必填。`/run/oac/core-key-digests.json`：一个包含 Core 密钥 SHA-256 的 JSON 数组 |
 | `OAC_INSTALLATION_ID_FILE` | 必填。`/run/oac/installation.id`：安装 ID，采用规范 UUID 格式。如果 ID 与数据库记录的 ID 不一致，Core 会拒绝它 |
-| `OAC_SANDBOX_MAX_ACTIVE`、`OAC_SANDBOX_MAX_RETAINED`、`OAC_EXECUTION_CONCURRENCY`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
+| `OAC_SANDBOX_MAX_ACTIVE`、`OAC_SANDBOX_MAX_RETAINED`、`OAC_EXECUTION_CONCURRENCY`、`OAC_UPSTREAM_RECOVERY_ENABLED`、`OAC_UPSTREAM_RECOVERY_MAX_ATTEMPTS`、`OAC_UPSTREAM_RECOVERY_CLASSES`、`OAC_UPSTREAM_RECOVERY_TRANSCRIPT_MAX_CHARS`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
 | `OAC_PROVIDER_ROOT` | 适配器构件的绝对根目录。Core 镜像设置为 `/opt/oac`。每个适配器都拥有此根目录下的辅助路径。当其中的 `native-installers/` 目录包含 `catalog.json` 时，Core 在核对该目录清单与自身发行版后提供自托管守护进程安装程序。适配器状态位于 `/state`，即数据卷的 [`state/`](#compose-installations) |
 
 Core 会记录所加载的历史文件路径，但绝不记录环境变量的值或文件内容。
