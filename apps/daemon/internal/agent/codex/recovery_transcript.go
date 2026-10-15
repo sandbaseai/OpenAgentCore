@@ -243,6 +243,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Server    string          `json:"server"`
 			Tool      string          `json:"tool"`
 			Arguments json.RawMessage `json:"arguments"`
+			Status    string          `json:"status"`
 			Result    *struct {
 				Content           []rawContent    `json:"content"`
 				StructuredContent json.RawMessage `json:"structuredContent"`
@@ -255,6 +256,10 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		}
 		entry := toolEntry("tool: "+item.Server+"/"+item.Tool+" "+string(item.Arguments), "")
 		var parts []string
+		// The typed status tells the model whether the call's side effect completed.
+		if item.Status != "" {
+			parts = append(parts, "status: "+escapeTranscript(item.Status))
+		}
 		if item.Result != nil {
 			if out := toolContent(item.Result.Content, stats); out != "" {
 				parts = append(parts, out)

@@ -13,6 +13,14 @@ import {
 export type { DiagnosticFailureCode, ItemDiagnosticTiming };
 export type UpstreamFingerprint = "provider_messages_required" | "reasoning_encrypted_unverifiable" | "model_no_image_input" | "tool_result_input_image_rejected" | "trailing_model_turn";
 const upstreamFingerprints: readonly UpstreamFingerprint[] = ["provider_messages_required", "reasoning_encrypted_unverifiable", "model_no_image_input", "tool_result_input_image_rejected", "trailing_model_turn"];
+// Mirrors Core's closed fingerprint to code and fixed summary tables (proto.FingerprintCode, EngineFailureSummary).
+const upstreamFingerprintTuples: Record<UpstreamFingerprint, { code: DiagnosticFailureCode; summary: string }> = {
+  provider_messages_required: { code: "model_provider_format_rejected", summary: "upstream provider rejected the Responses request body (messages field required)" },
+  reasoning_encrypted_unverifiable: { code: "model_reasoning_state_invalid", summary: "upstream could not verify encrypted reasoning content carried in thread history" },
+  model_no_image_input: { code: "model_input_unsupported_image", summary: "selected model does not accept image input" },
+  tool_result_input_image_rejected: { code: "model_provider_format_rejected", summary: "upstream provider rejected an input_image block inside a tool result" },
+  trailing_model_turn: { code: "model_input_ends_with_assistant", summary: "upstream rejected a request that ends with a model turn" },
+};
 // Mirrors Core's NormalizeProviderRequestID, which accepts any UUID-shaped correlation value.
 const providerRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const recoveryParamKeys = ["recovery_count", "recovery_fingerprints", "recovery_outcomes", "recovery_dropped_reasoning_items", "recovery_dropped_images"];
@@ -62,7 +70,7 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
     const p = value.params;
     if (Object.keys(p).length !== 0) {
       const withId = p.upstream_request_id !== undefined, withRecovery = p.recovery_count !== undefined;
-      if (!isOneOf(upstreamFingerprints, p.fingerprint) || typeof p.summary !== "string" || p.summary.length === 0 || p.summary.length > 240 ||
+      if (!isOneOf(upstreamFingerprints, p.fingerprint) || upstreamFingerprintTuples[p.fingerprint].code !== value.code || p.summary !== upstreamFingerprintTuples[p.fingerprint].summary ||
           !exactFields(p, fields("fingerprint", "summary", ...(withId ? ["upstream_request_id"] : []), ...(withRecovery ? recoveryParamKeys : []))) ||
           (withId && (typeof p.upstream_request_id !== "string" || !providerRequestId.test(p.upstream_request_id)))) return invalidAdminResponse();
       params = { fingerprint: p.fingerprint as UpstreamFingerprint, summary: p.summary, ...(withId ? { upstream_request_id: p.upstream_request_id as string } : {}) };

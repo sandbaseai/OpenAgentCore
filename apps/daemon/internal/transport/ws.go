@@ -115,7 +115,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 	headers.Set("Authorization", "Bearer "+opts.Credential)
 	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
 	// The codex adapter can rebuild a thread after a recoverable upstream 400;
-	// other adapters ignore the controls a selection makes possible.
+	// the dispatcher rejects the controls for any other adapter.
 	headers.Set(proto.UpstreamRecoveryHeader, proto.UpstreamRecoveryV1)
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {

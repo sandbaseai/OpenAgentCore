@@ -69,7 +69,10 @@ it.each(["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", 
 const upstreamCodes = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
 const upstreamParams = { fingerprint: "model_no_image_input", summary: "selected model does not accept image input", upstream_request_id: "88a8d808-59c1-4bf3-8950-b34ce57e028b" };
 it.each(upstreamCodes)("projects upstream 400 category %s with and without params", (code) => {
-  for (const params of [{}, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary }, upstreamParams]) {
+  const tuple = { model_input_unsupported_image: upstreamParams, model_provider_format_rejected: { ...upstreamParams, fingerprint: "provider_messages_required", summary: "upstream provider rejected the Responses request body (messages field required)" },
+    model_reasoning_state_invalid: { ...upstreamParams, fingerprint: "reasoning_encrypted_unverifiable", summary: "upstream could not verify encrypted reasoning content carried in thread history" },
+    model_input_ends_with_assistant: { ...upstreamParams, fingerprint: "trailing_model_turn", summary: "upstream rejected a request that ends with a model turn" } }[code]!;
+  for (const params of [{}, { fingerprint: tuple.fingerprint, summary: tuple.summary }, tuple]) {
     const failed = { ...failure, code, params };
     expect(projectTurnDiagnostics({ ...snapshot, failure: failed }, id, turn).failure).toEqual(failed);
     expect(projectSessionDiagnostics({ ...session, failure: { ...failed, source: "turn", turn_id: turn } }, id).failure?.code).toBe(code);
@@ -90,7 +93,8 @@ it.each([
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).toThrow();
 });
 const recoveryParams = { recovery_count: 1, recovery_fingerprints: ["reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted"], recovery_dropped_reasoning_items: 4, recovery_dropped_images: 0 };
-it.each(upstreamCodes)("projects recovery facts of a failed %s Turn", (code) => {
+it("projects recovery facts of a failed upstream 400 Turn", () => {
+  const code = "model_input_unsupported_image";
   for (const params of [{ ...upstreamParams, ...recoveryParams }, { fingerprint: upstreamParams.fingerprint, summary: upstreamParams.summary, ...recoveryParams, recovery_count: 0, recovery_outcomes: ["aborted"] },
     { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["model_no_image_input", "trailing_model_turn"], recovery_outcomes: ["exhausted", "aborted"] }]) {
     const failed = { ...failure, code, params };
@@ -113,14 +117,20 @@ it.each([
   { recovery_dropped_images: -1 },
   { recovery_dropped_images: null },
 ])("rejects unsafe recovery facts %j", (override) => {
-  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...recoveryParams, ...override } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params: { ...upstreamParams, ...recoveryParams, ...override } } }, id, turn)).toThrow();
 });
 it("rejects partial or extra recovery keys and recovery facts on other categories", () => {
   const { recovery_dropped_images: _omitted, ...partial } = recoveryParams;
-  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...partial } } }, id, turn)).toThrow();
-  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...upstreamParams, ...recoveryParams, recovery_native_session_id: "secret-canary" } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params: { ...upstreamParams, ...partial } } }, id, turn)).toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params: { ...upstreamParams, ...recoveryParams, recovery_native_session_id: "secret-canary" } } }, id, turn)).toThrow();
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params: { ...recoveryParams } } }, id, turn)).toThrow();
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: { ...upstreamParams, ...recoveryParams } } }, id, turn)).toThrow();
+});
+it("rejects a fingerprint or summary that does not match the failure code", () => {
+  for (const params of [{ ...upstreamParams, fingerprint: "trailing_model_turn" }, { ...upstreamParams, summary: "something else" }]) {
+    expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).toThrow();
+  }
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_ends_with_assistant", params: upstreamParams } }, id, turn)).toThrow();
 });
 it("rejects upstream 400 parameters on other categories", () => {
   expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "server_error", params: upstreamParams } }, id, turn)).toThrow();
@@ -162,5 +172,5 @@ it.each([{}, { http_status: 400 }, { http_status: 403 }, { http_status: 500 }, {
 });
 it("accepts the two-record aggregate of dropped recovery items", () => {
   const params = { ...upstreamParams, ...recoveryParams, recovery_count: 2, recovery_fingerprints: ["reasoning_encrypted_unverifiable", "reasoning_encrypted_unverifiable"], recovery_outcomes: ["exhausted", "exhausted"], recovery_dropped_reasoning_items: 2_000_000, recovery_dropped_images: 2_000_000 };
-  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_reasoning_state_invalid", params } }, id, turn)).not.toThrow();
+  expect(() => projectTurnDiagnostics({ ...snapshot, failure: { ...failure, code: "model_input_unsupported_image", params } }, id, turn)).not.toThrow();
 });

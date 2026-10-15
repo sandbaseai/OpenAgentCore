@@ -388,6 +388,13 @@ func TestDecodeMCPKeepsStructuredContentAndError(t *testing.T) {
 		t.Fatalf("error lost: %+v", failed)
 	}
 }
+func TestDecodeMCPKeepsStatus(t *testing.T) {
+	stats := &historyStats{}
+	got := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"status":"completed","result":{"content":[]}}`), false, false, stats)
+	if len(got) != 1 || !strings.Contains(got[0].output, "status: completed") {
+		t.Fatalf("status lost: %+v", got)
+	}
+}
 func TestPlanRecoveryAbortsWhenTruncationWouldDropToolCall(t *testing.T) {
 	items := []json.RawMessage{userItem(text("FIRST")), item("reasoning", nil),
 		item("commandExecution", map[string]any{"command": "deploy", "aggregatedOutput": "ok"})}
