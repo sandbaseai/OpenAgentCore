@@ -190,6 +190,7 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 		return nil, false
 	}
 	attempts := 0
+	previousNew := ""
 	for _, entry := range entries {
 		if !entry.valid() {
 			return nil, false
@@ -199,6 +200,11 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 			if entry.Attempt != attempts {
 				return nil, false
 			}
+			// A later rebuild starts from the thread the earlier switch produced.
+			if previousNew != "" && entry.OldNativeSessionID != previousNew {
+				return nil, false
+			}
+			previousNew = entry.NewNativeSessionID
 		}
 	}
 	return entries, true

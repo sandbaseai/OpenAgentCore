@@ -373,6 +373,7 @@ func TestExecutionPrepareRejectsRecoveryControlsWithSubagentObservation(t *testi
 	req := executorRequest()
 	req.Configuration.AgentKind = "codex"
 	req.Configuration.ObserveSubagentIdentities = true
+	req.Configuration.DisableSubagents = true
 	req.Configuration.ExecutionControls = &proto.ExecutionControls{UpstreamRecovery: &proto.UpstreamRecoveryControls{}}
 	if err := r.Handle(t.Context(), mustEnv(t, proto.TypeExecutionPrepare, "request", req)); err == nil {
 		t.Fatal("recovery controls accepted for a turn that observes subagents")
