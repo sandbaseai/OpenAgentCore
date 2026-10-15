@@ -429,7 +429,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// A search still running may finish after the snapshot; replaying it would repeat the work.
-		if strings.EqualFold(item.Status, "inProgress") {
+		if item.Status != "" && nonterminalStatus(item.Status) {
 			stats.unsupported++
 			return nil
 		}
@@ -531,6 +531,15 @@ func nonterminalStatus(status string) bool {
 		return false
 	}
 	return true
+}
+
+// terminalTurnStatus reports whether an earlier Turn status is a known final one.
+func terminalTurnStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "completed", "failed", "interrupted":
+		return true
+	}
+	return false
 }
 func toolEntry(call, output string) transcriptEntry {
 	return transcriptEntry{kind: entryTool, call: escapeTranscript(truncateRunes(strings.ReplaceAll(call, "\n", " "), maxToolCallChars)), output: output}
@@ -746,7 +755,7 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 			return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
 		}
 		// An earlier Turn that is still running may complete effects after the snapshot.
-		if turn.ID != failedTurnID && strings.EqualFold(turn.Status, "inProgress") {
+		if turn.ID != failedTurnID && !terminalTurnStatus(turn.Status) {
 			return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
 		}
 	}
