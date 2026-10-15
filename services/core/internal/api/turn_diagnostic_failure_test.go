@@ -338,7 +338,7 @@ func TestFailedTurnDiagnosticsShowOnlyUnsuccessfulRecoveries(t *testing.T) {
 
 	// A record that recovered is not listed; it still counts as a switch.
 	mixed := params(t, failed(outcome(proto.EngineCodeReasoningStateInvalid, proto.FingerprintReasoningEncryptedUnverifiable, []any{
-		entry(proto.FingerprintModelNoImageInput, "recovered", 1, "", 0, 1), entry(proto.FingerprintReasoningEncryptedUnverifiable, "exhausted", 2, "", 2, 0)})))
+		entry(proto.FingerprintModelNoImageInput, "exhausted", 1, "", 0, 1), entry(proto.FingerprintReasoningEncryptedUnverifiable, "recovered", 2, "", 2, 0)})))
 	if mixed["recovery_count"] != float64(2) || !reflect.DeepEqual(mixed["recovery_outcomes"], []any{"exhausted"}) {
 		t.Fatalf("%v", mixed)
 	}
