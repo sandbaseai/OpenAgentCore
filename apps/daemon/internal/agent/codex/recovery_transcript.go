@@ -92,14 +92,15 @@ type rawContent struct {
 	Path string `json:"path"`
 }
 
-func decodeUserParts(raw json.RawMessage) []userPart {
+// decodeUserParts reports ok=false when the content cannot be decoded or holds
+// a block type this build does not recognize, so recovery never drops input.
+func decodeUserParts(raw json.RawMessage) (parts []userPart, ok bool) {
 	var message struct {
 		Content []rawContent `json:"content"`
 	}
 	if json.Unmarshal(raw, &message) != nil {
-		return nil
+		return nil, false
 	}
-	var parts []userPart
 	for _, c := range message.Content {
 		switch c.Type {
 		case "text", "input_text":
@@ -108,9 +109,11 @@ func decodeUserParts(raw json.RawMessage) []userPart {
 			parts = append(parts, userPart{image: true})
 		case "localImage", "local_image":
 			parts = append(parts, userPart{image: true, path: c.Path})
+		default:
+			return nil, false
 		}
 	}
-	return parts
+	return parts, true
 }
 
 // splitRecoveredInput recognizes the input a previous recovery sent as a Turn's
@@ -167,7 +170,11 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 	}
 	switch head.Type {
 	case "userMessage":
-		parts := decodeUserParts(raw)
+		parts, ok := decodeUserParts(raw)
+		if !ok {
+			stats.unsupported++
+			return nil
+		}
 		if carried, current, ok := splitRecoveredInput(parts); ok {
 			entries := []transcriptEntry{{kind: entryCarried, text: carried}}
 			if !firstOfFailedTurn && len(current) > 0 {

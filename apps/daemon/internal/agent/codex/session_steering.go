@@ -28,6 +28,10 @@ type steeringTurn struct {
 	// failed Turn is already terminal natively, so input is never forwarded to it.
 	recovering       bool
 	recoveringTurnID string
+	// deferredCompleted holds a rebuilt Turn's terminal notification that arrived
+	// before its turn/start reply; acknowledgement replays it once the recovery
+	// record and thread identity are committed.
+	deferredCompleted json.RawMessage
 	// recoveryCancel ends the recovery's own context; it is not the Turn context,
 	// whose cancellation would also stop terminal delivery.
 	recoveryCancel context.CancelFunc

@@ -680,3 +680,24 @@ func TestEveryAbortReasonIsExercised(t *testing.T) {
 		t.Fatal("a test claims a reason the protocol does not define")
 	}
 }
+func TestRecoveryDefersRebuiltTerminalUntilAcknowledged(t *testing.T) {
+	f := newRecoveryFixture(t, fixtureOptions{controls: enabledControls(proto.RecoveryClassReasoningState), history: fixtureHistory("reasoning"), settle: true})
+	f.native.before["turn/start"] = func(JsonRpcRequest) {
+		// The rebuilt Turn starts and completes before the RPC reply.
+		f.native.notify("turn/started", json.RawMessage(`{"threadId":"`+newThread+`","turn":{"id":"`+newTurn+`"}}`))
+		f.s.appendFinalText("done")
+		f.native.notify("turn/completed", json.RawMessage(`{"threadId":"`+newThread+`","turn":{"id":"`+newTurn+`","status":"completed"}}`))
+	}
+	f.fail(msgReasoning, usageFailed)
+	f.eventually("the new Turn to be acknowledged", f.acked)
+	result := summarize(t, f.frames())
+	if result.dones != 1 || len(result.errors) != 0 {
+		t.Fatalf("terminal = %+v", result)
+	}
+	if len(result.recovery) != 1 || result.recovery[0].Outcome != proto.RecoveryOutcomeRecovered || result.recovery[0].NewNativeSessionID != newThread {
+		t.Fatalf("recovery records = %+v", result.recovery)
+	}
+	if got := result.done.Metadata[proto.DoneMetaAgentSessionID]; got != newThread {
+		t.Fatalf("native session id = %v, want %s", got, newThread)
+	}
+}

@@ -181,6 +181,15 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 	if json.Unmarshal(raw, &p) != nil || !s.isRootTurn(p.ThreadID, p.Turn.ID) {
 		return
 	}
+	// A rebuilt Turn can finish before its turn/start reply is acknowledged;
+	// hold that terminal until the recovery has committed its record.
+	s.steering.mu.Lock()
+	if s.steering.recovering && p.Turn.ID != s.steering.recoveringTurnID {
+		s.steering.deferredCompleted = append(json.RawMessage(nil), raw...)
+		s.steering.mu.Unlock()
+		return
+	}
+	s.steering.mu.Unlock()
 	// A rebuild of the thread takes over a failed Turn; nothing is settled or
 	// emitted until it ends. Every other Turn settles exactly as before.
 	if fingerprint, ok := s.shouldRecover(p); ok && s.beginRecovery(p, fingerprint) {

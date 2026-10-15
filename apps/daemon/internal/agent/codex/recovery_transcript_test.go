@@ -359,3 +359,20 @@ func TestPlanRecoveryRejectsUnrecognizedHistoryItems(t *testing.T) {
 		})
 	}
 }
+func TestPlanRecoveryRejectsMalformedUserContent(t *testing.T) {
+	for name, content := range map[string]any{
+		"content not an array": "plain string",
+		"unknown block type":   []map[string]any{{"type": "somethingNew", "text": "x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			history := []historyTurn{
+				{ID: "t1", Items: []json.RawMessage{item("userMessage", map[string]any{"content": content}), item("reasoning", map[string]any{})}},
+				{ID: oldTurn, Items: []json.RawMessage{userItem(text("current request"))}},
+			}
+			_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, history, oldTurn, proto.TextInput("current request"), 100000)
+			if reason != proto.RecoveryAbortHistoryUnreadable {
+				t.Fatalf("reason = %q, want %q", reason, proto.RecoveryAbortHistoryUnreadable)
+			}
+		})
+	}
+}
