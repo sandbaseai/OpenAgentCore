@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -129,6 +130,45 @@ func decodeUserParts(raw json.RawMessage) (parts []userPart, ok bool) {
 		}
 	}
 	return parts, true
+}
+
+// maxNestedListItems bounds elements decoded from one nested tool-history array.
+const maxNestedListItems = 10000
+
+// boundedList decodes a JSON array incrementally and fails past
+// maxNestedListItems, so a huge array of tiny elements cannot force a large
+// allocation. A failed decode marks the item unsupported.
+type boundedList[T any] []T
+
+func (l *boundedList[T]) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		*l = nil
+		return nil
+	}
+	if tok != json.Delim('[') {
+		return errors.New("codex: nested list is not an array")
+	}
+	var out []T
+	for dec.More() {
+		if len(out) >= maxNestedListItems {
+			return errors.New("codex: nested list exceeds bound")
+		}
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return err
+		}
+		out = append(out, v)
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	*l = out
+	return nil
 }
 
 // maxUserContentBlocks bounds content blocks decoded from one user message.
@@ -278,9 +318,9 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 	case "fileChange":
 		var item struct {
 			Status  string `json:"status"`
-			Changes []struct {
+			Changes boundedList[struct {
 				Path string `json:"path"`
-			} `json:"changes"`
+			}] `json:"changes"`
 		}
 		if json.Unmarshal(raw, &item) != nil || item.Status == "" {
 			// A file change without a typed status has an unknown outcome.
@@ -320,8 +360,8 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Arguments json.RawMessage `json:"arguments"`
 			Status    string          `json:"status"`
 			Result    *struct {
-				Content           []rawContent    `json:"content"`
-				StructuredContent json.RawMessage `json:"structuredContent"`
+				Content           boundedList[rawContent] `json:"content"`
+				StructuredContent json.RawMessage         `json:"structuredContent"`
 			} `json:"result"`
 			Error json.RawMessage `json:"error"`
 		}
@@ -377,12 +417,12 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		return []transcriptEntry{entry}
 	case "dynamicToolCall":
 		var item struct {
-			Namespace    string          `json:"namespace"`
-			Tool         string          `json:"tool"`
-			Arguments    json.RawMessage `json:"arguments"`
-			ContentItems []rawContent    `json:"contentItems"`
-			Status       string          `json:"status"`
-			Success      *bool           `json:"success"`
+			Namespace    string                  `json:"namespace"`
+			Tool         string                  `json:"tool"`
+			Arguments    json.RawMessage         `json:"arguments"`
+			ContentItems boundedList[rawContent] `json:"contentItems"`
+			Status       string                  `json:"status"`
+			Success      *bool                   `json:"success"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
 			stats.unsupported++
@@ -435,11 +475,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Query  string `json:"query"`
 			Status string `json:"status"`
 			Action *struct {
-				Type    string   `json:"type"`
-				Query   *string  `json:"query"`
-				Queries []string `json:"queries"`
-				URL     *string  `json:"url"`
-				Pattern *string  `json:"pattern"`
+				Type    string              `json:"type"`
+				Query   *string             `json:"query"`
+				Queries boundedList[string] `json:"queries"`
+				URL     *string             `json:"url"`
+				Pattern *string             `json:"pattern"`
 			} `json:"action"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
@@ -507,7 +547,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 
 // toolContent flattens a tool result's content blocks; image blocks become
 // placeholders and are counted as tool-result images.
-func toolContent(blocks []rawContent, stats *historyStats) string {
+func toolContent(blocks boundedList[rawContent], stats *historyStats) string {
 	var lines []string
 	for _, b := range blocks {
 		switch b.Type {

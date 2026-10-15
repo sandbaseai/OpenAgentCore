@@ -40,7 +40,9 @@ export type UpstreamRecoveryParams = {
 export type UpstreamRejectionParams = Record<string, never> | ({ fingerprint: UpstreamFingerprint; summary: string; upstream_request_id?: string } & (({ [K in keyof UpstreamRecoveryParams]?: never }) | UpstreamRecoveryParams));
 /** Recovery facts accompany a failed Turn of any category, alongside that category's own params. */
 type WithRecovery<T> = T | (T & UpstreamRecoveryParams);
-export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: WithRecovery<Record<string, never>> | ProvisioningFailureParams | WithRecovery<ConnectionFailureParams> | UpstreamRejectionParams };
+/** An empty base has no keys to intersect with, so the recovery-only case is the recovery group itself. */
+type EmptyWithRecovery = Record<string, never> | UpstreamRecoveryParams;
+export type DiagnosticFailure = Omit<DiagnosticFailureResource, "params"> & { params: EmptyWithRecovery | ProvisioningFailureParams | WithRecovery<ConnectionFailureParams> | UpstreamRejectionParams };
 export type SessionDiagnosticFailure = DiagnosticFailure & Pick<SessionDiagnosticFailureResource, "source" | "turn_id">;
 export type SessionDiagnostics = Omit<SessionDiagnosticsResource, "failure"> & { failure: SessionDiagnosticFailure | null };
 export type TurnDiagnostics = Omit<TurnDiagnosticsResource, "failure"> & { failure: DiagnosticFailure | null };

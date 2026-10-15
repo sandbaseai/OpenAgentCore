@@ -65,3 +65,23 @@ func TestCommandWithExitCodeButInProgressStatusIsUnsupported(t *testing.T) {
 		t.Fatalf("got %v unsupported=%d, want rejected", got, stats.unsupported)
 	}
 }
+func TestNestedToolArraysRejectExcessElements(t *testing.T) {
+	many := func(elem string) string { return `[` + strings.Repeat(elem+",", maxNestedListItems) + elem + `]` }
+	items := map[string]string{
+		"mcp":     `{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"status":"completed","result":{"content":` + many(`{"type":"text"}`) + `}}`,
+		"dynamic": `{"type":"dynamicToolCall","tool":"t","arguments":{},"status":"completed","success":true,"contentItems":` + many(`{"type":"text"}`) + `}`,
+		"file":    `{"type":"fileChange","status":"completed","changes":` + many(`{"path":"a"}`) + `}`,
+		"search":  `{"type":"webSearch","status":"completed","query":"q","action":{"type":"search","queries":` + many(`"q"`) + `}}`,
+	}
+	for name, body := range items {
+		var stats historyStats
+		if got := decodeItem(json.RawMessage(body), false, false, &stats); got != nil || stats.unsupported != 1 {
+			t.Errorf("%s: got %v unsupported=%d, want rejected", name, got, stats.unsupported)
+		}
+	}
+}
+func TestNativeTurnBytesChargesTurnOverhead(t *testing.T) {
+	if got := nativeTurnBytes(nativeTurn{}); got < historyTurnOverhead {
+		t.Fatalf("nativeTurnBytes = %d, want >= %d", got, historyTurnOverhead)
+	}
+}

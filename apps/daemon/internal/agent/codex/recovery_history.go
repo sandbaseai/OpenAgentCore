@@ -148,6 +148,9 @@ const maxHistoryBytes = 64 * 1024 * 1024
 // historyPageLimit keeps each response well below rpcStdoutBufferMax.
 const historyPageLimit = 20
 
+// historyTurnOverhead approximates the nativeTurn structure and its copy in historyTurn.
+const historyTurnOverhead = 256
+
 // historyItemOverhead approximates the per-item json.RawMessage header and allocation.
 const historyItemOverhead = 64
 
@@ -193,6 +196,10 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 		if err := r.call(ctx, "thread/turns/list", args, &page); err != nil {
 			return nil, err
 		}
+		if len(page.Data) > historyPageLimit {
+			// A child ignoring the requested limit could retain unbounded Turns.
+			return nil, errHistoryTooLarge
+		}
 		for _, turn := range page.Data {
 			if turn.ID == "" || turn.ItemsView != "full" {
 				return nil, errors.New("codex: thread history incomplete")
@@ -218,7 +225,7 @@ func (r rpcHistoryReader) readPaginated(ctx context.Context, threadID string) ([
 // allocation each retained item costs, so millions of tiny items cannot stay
 // under the byte bound.
 func nativeTurnBytes(turn nativeTurn) int {
-	total := len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
+	total := historyTurnOverhead + len(turn.ID) + len(turn.Status) + len(turn.ItemsView)
 	for _, item := range turn.Items {
 		total += len(item) + historyItemOverhead
 	}
