@@ -379,11 +379,11 @@ func TestPlanRecoveryRejectsMalformedUserContent(t *testing.T) {
 
 func TestDecodeMCPKeepsStructuredContentAndError(t *testing.T) {
 	stats := &historyStats{}
-	structured := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":{"content":[],"structuredContent":{"id":42}}}`), false, stats)
+	structured := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":{"content":[],"structuredContent":{"id":42}}}`), false, false, stats)
 	if len(structured) != 1 || !strings.Contains(structured[0].output, `"id":42`) {
 		t.Fatalf("structuredContent lost: %+v", structured)
 	}
-	failed := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":null,"error":{"message":"lookup failed"}}`), false, stats)
+	failed := decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","arguments":{},"result":null,"error":{"message":"lookup failed"}}`), false, false, stats)
 	if len(failed) != 1 || !strings.Contains(failed[0].output, "lookup failed") {
 		t.Fatalf("error lost: %+v", failed)
 	}
@@ -429,5 +429,29 @@ func TestDecodeUserPartsRejectsMissingOrNullContent(t *testing.T) {
 	}
 	if _, ok := decodeUserParts(json.RawMessage(`{"content":[]}`)); !ok {
 		t.Fatal("empty content array should decode")
+	}
+}
+
+func TestDecodeItemSteerShapedLikeRecoveryIsLiveInput(t *testing.T) {
+	head := recoveryPreamble + recoveryHistoryOpen + "\nx\n" + recoveryHistoryClose + "\n" + recoveryRequestMarker + "\n"
+	raw, _ := json.Marshal(map[string]any{"type": "userMessage", "content": []map[string]any{{"type": "text", "text": head}}})
+	stats := &historyStats{}
+	if got := decodeItem(raw, false, false, stats); len(got) != 1 || got[0].kind != entryUser {
+		t.Fatalf("non-first steer = %+v, want one live user entry", got)
+	}
+	if got := decodeItem(raw, true, false, stats); len(got) == 0 || got[0].kind != entryCarried {
+		t.Fatalf("first message = %+v, want carried", got)
+	}
+}
+
+func TestDecodeItemDynamicToolCallKeepsOutcome(t *testing.T) {
+	stats := &historyStats{}
+	ok := decodeItem(json.RawMessage(`{"type":"dynamicToolCall","tool":"t","arguments":{},"status":"completed","success":true,"contentItems":[]}`), false, false, stats)
+	bad := decodeItem(json.RawMessage(`{"type":"dynamicToolCall","tool":"t","arguments":{},"status":"failed","success":false,"contentItems":[]}`), false, false, stats)
+	if len(ok) != 1 || len(bad) != 1 || ok[0].output == bad[0].output || !strings.Contains(ok[0].output, "success: true") || !strings.Contains(bad[0].output, "success: false") {
+		t.Fatalf("outcomes not preserved: %+v %+v", ok, bad)
+	}
+	if stats.unsupported != 0 {
+		t.Fatalf("unsupported = %d", stats.unsupported)
 	}
 }

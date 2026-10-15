@@ -161,7 +161,7 @@ func renderUserParts(parts []userPart, stats *historyStats) string {
 
 // decodeItem turns one native item into transcript entries. Reasoning is only
 // counted; images become placeholders; unknown item types are skipped.
-func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats) []transcriptEntry {
+func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *historyStats) []transcriptEntry {
 	var head struct {
 		Type string `json:"type"`
 	}
@@ -175,6 +175,11 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 		if !ok {
 			stats.unsupported++
 			return nil
+		}
+		// Only a Turn's first item can be a recovery's carried input; a later
+		// steer with the same shape is live user input.
+		if !turnFirst {
+			return []transcriptEntry{{kind: entryUser, text: renderUserParts(parts, stats)}}
 		}
 		if carried, current, ok := splitRecoveredInput(parts); ok {
 			entries := []transcriptEntry{{kind: entryCarried, text: carried}}
@@ -268,12 +273,30 @@ func decodeItem(raw json.RawMessage, firstOfFailedTurn bool, stats *historyStats
 			Tool         string          `json:"tool"`
 			Arguments    json.RawMessage `json:"arguments"`
 			ContentItems []rawContent    `json:"contentItems"`
+			Status       string          `json:"status"`
+			Success      *bool           `json:"success"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
 			stats.unsupported++
 			return nil
 		}
-		return []transcriptEntry{toolEntry("tool: "+item.Tool+" "+string(item.Arguments), toolContent(item.ContentItems, stats))}
+		// The typed outcome tells the model whether a side effect completed.
+		var outcome []string
+		if item.Status != "" {
+			outcome = append(outcome, "status: "+escapeTranscript(item.Status))
+		}
+		if item.Success != nil {
+			outcome = append(outcome, fmt.Sprintf("success: %t", *item.Success))
+		}
+		if len(outcome) == 0 {
+			// Without a typed outcome the call's result is unknown.
+			stats.unsupported++
+		}
+		out := toolContent(item.ContentItems, stats)
+		if len(outcome) > 0 {
+			out = strings.TrimSpace(strings.Join(outcome, ", ") + "\n" + out)
+		}
+		return []transcriptEntry{toolEntry("tool: "+item.Tool+" "+string(item.Arguments), out)}
 	case "webSearch":
 		var item struct {
 			Query string `json:"query"`
@@ -339,7 +362,7 @@ func partitionHistory(turns []historyTurn, failedTurnID string, stats *historySt
 					Type string `json:"type"`
 				}
 				isFirstUser := first && json.Unmarshal(raw, &head) == nil && head.Type == "userMessage"
-				entries := decodeItem(raw, isFirstUser, stats)
+				entries := decodeItem(raw, first, isFirstUser, stats)
 				if isFirstUser {
 					// A recovered Turn's own first message carries older history.
 					for _, e := range entries {
@@ -356,8 +379,8 @@ func partitionHistory(turns []historyTurn, failedTurnID string, stats *historySt
 			found = true
 			break
 		}
-		for _, raw := range turn.Items {
-			history = append(history, decodeItem(raw, false, stats)...)
+		for i, raw := range turn.Items {
+			history = append(history, decodeItem(raw, i == 0, false, stats)...)
 		}
 	}
 	return history, tail, found

@@ -102,7 +102,7 @@ func fixtureHistory(kind string) []historyTurn {
 		finished.Items = append([]json.RawMessage{userItem(text("look at this"), image())}, finished.Items...)
 		finished.Items = append(finished.Items[:2], finished.Items[3:]...) // no reasoning
 	case "tool-image":
-		failed.Items = append(failed.Items, item("dynamicToolCall", map[string]any{"tool": "screenshot", "arguments": map[string]any{}, "contentItems": []any{map[string]any{"type": "inputImage", "imageUrl": canaryImageData}}}))
+		failed.Items = append(failed.Items, item("dynamicToolCall", map[string]any{"tool": "screenshot", "status": "completed", "success": true, "arguments": map[string]any{}, "contentItems": []any{map[string]any{"type": "inputImage", "imageUrl": canaryImageData}}}))
 	case "trailing":
 		failed.Items = append(failed.Items, item("agentMessage", map[string]any{"text": "partial answer"}))
 	}
