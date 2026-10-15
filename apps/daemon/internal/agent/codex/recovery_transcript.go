@@ -327,6 +327,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			stats.unsupported++
 			return nil
 		}
+		// Absent arguments hide which resource the call affected; an explicit {} is fine.
+		if len(strings.TrimSpace(string(item.Arguments))) == 0 || strings.TrimSpace(string(item.Arguments)) == "null" {
+			stats.unsupported++
+			return nil
+		}
 		mcpCall := "tool: " + item.Server + "/" + item.Tool + " " + string(item.Arguments)
 		if callExceedsBudget(mcpCall) {
 			// A truncated side-effecting call could hide the affected resource.
@@ -395,6 +400,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if item.Namespace != "" {
 			// Two namespaces may expose the same tool name.
 			dynName = item.Namespace + "/" + item.Tool
+		}
+		// Absent arguments hide which resource the call affected; an explicit {} is fine.
+		if len(strings.TrimSpace(string(item.Arguments))) == 0 || strings.TrimSpace(string(item.Arguments)) == "null" {
+			stats.unsupported++
+			return nil
 		}
 		dynCall := "tool: " + dynName + " " + string(item.Arguments)
 		if callExceedsBudget(dynCall) {
@@ -727,6 +737,10 @@ func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, 
 	// that complete after it was taken. Only a terminal failed Turn is rebuilt.
 	for _, turn := range turns {
 		if failedTurnID != "" && turn.ID == failedTurnID && turn.Status != "failed" {
+			return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
+		}
+		// An earlier Turn that is still running may complete effects after the snapshot.
+		if turn.ID != failedTurnID && strings.EqualFold(turn.Status, "inProgress") {
 			return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
 		}
 	}

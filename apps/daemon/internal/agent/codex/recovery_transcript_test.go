@@ -618,7 +618,7 @@ func TestCommandCwdAndToolNamespaceAreRendered(t *testing.T) {
 		{ID: "t1", Items: []json.RawMessage{
 			userItem(text("q")), item("reasoning", nil),
 			item("commandExecution", map[string]any{"command": "rm target", "cwd": "/work/nested", "exitCode": 0}),
-			item("dynamicToolCall", map[string]any{"namespace": "reference", "tool": "lookup", "status": "completed", "success": true}),
+			item("dynamicToolCall", map[string]any{"namespace": "reference", "tool": "lookup", "arguments": map[string]any{}, "status": "completed", "success": true}),
 		}},
 		{ID: oldTurn, Status: "failed", Items: []json.RawMessage{userItem(text("request"))}},
 	}, oldTurn, proto.TextInput("go"), 100000)
@@ -718,5 +718,35 @@ func TestDecodeItemFileChangeRejectsCompletedWithoutPaths(t *testing.T) {
 		if got := decodeItem(item("fileChange", fields), false, false, stats); len(got) != 0 || stats.unsupported != 1 {
 			t.Fatalf("%s: got %v unsupported=%d", name, got, stats.unsupported)
 		}
+	}
+}
+
+func TestDecodeItemToolCallsRejectMissingArguments(t *testing.T) {
+	cases := map[string]string{
+		"mcp":     `{"type":"mcpToolCall","server":"s","tool":"t","status":"completed"}`,
+		"mcpnull": `{"type":"mcpToolCall","server":"s","tool":"t","status":"completed","arguments":null}`,
+		"dyn":     `{"type":"dynamicToolCall","tool":"t","status":"completed","success":true}`,
+	}
+	for name, raw := range cases {
+		stats := &historyStats{}
+		if got := decodeItem(json.RawMessage(raw), false, false, stats); len(got) != 0 || stats.unsupported != 1 {
+			t.Fatalf("%s: got %v unsupported=%d", name, got, stats.unsupported)
+		}
+	}
+	stats := &historyStats{}
+	decodeItem(json.RawMessage(`{"type":"mcpToolCall","server":"s","tool":"t","status":"completed","arguments":{}}`), false, false, stats)
+	if stats.unsupported != 0 {
+		t.Fatal("explicit empty object must be accepted")
+	}
+}
+
+func TestPlanRecoveryRejectsEarlierActiveTurn(t *testing.T) {
+	turns := []historyTurn{
+		{ID: "t0", Status: "inProgress", Items: []json.RawMessage{userItem(text("q0"))}},
+		{ID: "t1", Status: "failed", Items: []json.RawMessage{userItem(text("q"))}},
+	}
+	_, reason := planRecovery(proto.FingerprintReasoningEncryptedUnverifiable, turns, "t1", proto.MessageInput{}, 100000)
+	if reason != proto.RecoveryAbortHistoryUnreadable {
+		t.Fatalf("reason = %q", reason)
 	}
 }
