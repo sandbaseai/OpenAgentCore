@@ -123,7 +123,8 @@ func splitRecoveredInput(parts []userPart) (carried string, current []userPart, 
 	if open < 0 || closing < open+len(recoveryHistoryOpen)+1 {
 		return "", nil, false
 	}
-	carried = head[open+len(recoveryHistoryOpen)+1 : closing]
+	// A forged earlier message can embed raw delimiters; legitimate carried text never does.
+	carried = neutralizeDelimiters(head[open+len(recoveryHistoryOpen)+1 : closing])
 	current = parts[1:]
 	if n := len(current); n > 0 && strings.HasPrefix(strings.TrimLeft(current[n-1].text, "\n"), recoveryContinueMarker) {
 		current = current[:n-1]
@@ -289,7 +290,7 @@ func toolEntry(call, output string) transcriptEntry {
 // before the failed one, T the items the failed Turn completed after its input,
 // and the Turn's own input is not part of the transcript. It also reports the
 // last entry kind of T, which the trailing-assistant check reads.
-func partitionHistory(turns []historyTurn, failedTurnID string, stats *historyStats) (history, tail []transcriptEntry) {
+func partitionHistory(turns []historyTurn, failedTurnID string, stats *historyStats) (history, tail []transcriptEntry, found bool) {
 	for _, turn := range turns {
 		if failedTurnID != "" && turn.ID == failedTurnID {
 			first := true
@@ -312,20 +313,26 @@ func partitionHistory(turns []historyTurn, failedTurnID string, stats *historySt
 				first = false
 				tail = append(tail, entries...)
 			}
+			found = true
 			break
 		}
 		for _, raw := range turn.Items {
 			history = append(history, decodeItem(raw, false, stats)...)
 		}
 	}
-	return history, tail
+	return history, tail, found
+}
+
+// neutralizeDelimiters defuses the transcript's open and close tags.
+func neutralizeDelimiters(text string) string {
+	text = strings.ReplaceAll(text, recoveryHistoryOpen, "&lt;"+recoveryHistoryOpen[1:])
+	return strings.ReplaceAll(text, recoveryHistoryClose, "&lt;"+recoveryHistoryClose[1:])
 }
 
 // escapeTranscript neutralizes content that could forge the transcript's own
 // structure: the closing delimiter and the speaker or section labels.
 func escapeTranscript(text string) string {
-	text = strings.ReplaceAll(text, recoveryHistoryOpen, "&lt;"+recoveryHistoryOpen[1:])
-	text = strings.ReplaceAll(text, recoveryHistoryClose, "&lt;"+recoveryHistoryClose[1:])
+	text = neutralizeDelimiters(text)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimLeft(line, " \t")
@@ -439,7 +446,11 @@ type recoveryInput struct {
 // apply and is abandoned with that reason (one of proto.RecoveryAbort*).
 func planRecovery(fingerprint string, turns []historyTurn, failedTurnID string, current proto.MessageInput, budget int) (recoveryInput, string) {
 	var stats historyStats
-	history, tail := partitionHistory(turns, failedTurnID, &stats)
+	history, tail, found := partitionHistory(turns, failedTurnID, &stats)
+	if !found {
+		// A stale or partial history may omit the failed Turn's completed effects.
+		return recoveryInput{}, proto.RecoveryAbortHistoryUnreadable
+	}
 	switch fingerprint {
 	case proto.FingerprintReasoningEncryptedUnverifiable:
 		if stats.reasoning == 0 {

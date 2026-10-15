@@ -131,7 +131,15 @@ func (r *fixtureReader) ReadHistory(ctx context.Context, threadID string) ([]his
 			return nil, ctx.Err()
 		}
 	}
-	return r.turns, r.err
+	turns := r.turns
+	// A rebuilt thread's history also lists the Turn that later failed on it.
+	switch threadID {
+	case newThread:
+		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: newTurn})
+	case secondThread:
+		turns = append(append([]historyTurn{}, turns...), historyTurn{ID: secondTurn})
+	}
+	return turns, r.err
 }
 
 // fakeNative answers the daemon's requests like a codex app-server.
