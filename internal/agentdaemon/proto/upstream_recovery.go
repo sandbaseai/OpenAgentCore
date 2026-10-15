@@ -172,6 +172,22 @@ type UpstreamRecovery struct {
 	NewNativeSessionID string          `json:"new_native_session_id,omitempty"`
 }
 
+// wireUpstreamRecovery mirrors UpstreamRecovery with pointers on the fields
+// whose zero value is meaningful, so a missing field is distinguishable.
+type wireUpstreamRecovery struct {
+	Fingerprint string `json:"fingerprint"`
+	Action      string `json:"action"`
+	Attempt     *int   `json:"attempt"`
+	Outcome     string `json:"outcome"`
+	Reason      string `json:"reason,omitempty"`
+	Dropped     *struct {
+		ReasoningItems *int `json:"reasoning_items"`
+		Images         *int `json:"images"`
+	} `json:"dropped"`
+	OldNativeSessionID string `json:"old_native_session_id,omitempty"`
+	NewNativeSessionID string `json:"new_native_session_id,omitempty"`
+}
+
 // ParseUpstreamRecoveries validates Done.metadata.upstream_recoveries. It
 // accepts at most two entries with known fields only; any malformed entry
 // rejects the whole value, because a partial record could misstate what ran.
@@ -182,9 +198,22 @@ func ParseUpstreamRecoveries(value any) ([]UpstreamRecovery, bool) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	var entries []UpstreamRecovery
-	if decoder.Decode(&entries) != nil || decoder.Decode(new(any)) != io.EOF {
+	var wire []wireUpstreamRecovery
+	if decoder.Decode(&wire) != nil || decoder.Decode(new(any)) != io.EOF {
 		return nil, false
+	}
+	entries := make([]UpstreamRecovery, 0, len(wire))
+	for _, w := range wire {
+		// Zero is a meaningful value for these counters, so absence must be
+		// rejected rather than read as zero.
+		if w.Attempt == nil || w.Dropped == nil || w.Dropped.ReasoningItems == nil || w.Dropped.Images == nil {
+			return nil, false
+		}
+		entries = append(entries, UpstreamRecovery{
+			Fingerprint: w.Fingerprint, Action: w.Action, Attempt: *w.Attempt, Outcome: w.Outcome, Reason: w.Reason,
+			Dropped:            RecoveryDropped{ReasoningItems: *w.Dropped.ReasoningItems, Images: *w.Dropped.Images},
+			OldNativeSessionID: w.OldNativeSessionID, NewNativeSessionID: w.NewNativeSessionID,
+		})
 	}
 	if len(entries) == 0 || len(entries) > MaxUpstreamRecoveries {
 		return nil, false

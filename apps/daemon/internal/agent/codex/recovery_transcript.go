@@ -516,7 +516,13 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 				if item.Query == "" && a.Query != nil {
 					call = "web search: " + escapeTranscript(*a.Query)
 				} else if item.Query == "" && len(a.Queries) > 0 {
-					call = "web search: " + escapeTranscript(strings.Join(a.Queries, "; "))
+					var named []string
+					for _, q := range a.Queries {
+						if strings.TrimSpace(q) != "" {
+							named = append(named, q)
+						}
+					}
+					call = "web search: " + escapeTranscript(strings.Join(named, "; "))
 				}
 			case "other", "":
 			default:
