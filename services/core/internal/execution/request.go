@@ -70,6 +70,9 @@ func (d *Dispatcher) executionRequest(ctx context.Context, session sessions.Sess
 	return request, nil
 }
 
+// upstreamRecoveryAgentKind is the only Harness that supports upstream recovery.
+const upstreamRecoveryAgentKind = "codex"
+
 // applyUpstreamRecovery attaches Core's recovery policy to a request. A Runtime
 // that did not select the extension never receives the block, so its request and
 // behavior stay exactly what they were; a disabled policy is not sent either.
@@ -78,7 +81,9 @@ func (d *Dispatcher) applyUpstreamRecovery(req *proto.PromptRequestPayload, peer
 }
 
 func withUpstreamRecovery(req *proto.PromptRequestPayload, policy proto.UpstreamRecoveryControls, selected bool) {
-	if !policy.Enabled || !selected || req.ExecutionControls == nil {
+	// Only the codex Harness applies recovery; the daemon rejects the block for
+	// every other Harness, so it must not be offered on a shared Runtime.
+	if !policy.Enabled || !selected || req.ExecutionControls == nil || req.AgentKind != upstreamRecoveryAgentKind {
 		return
 	}
 	normalized := policy.Normalized()

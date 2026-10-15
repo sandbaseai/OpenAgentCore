@@ -243,7 +243,7 @@ func TestTurnCompletionAndRecoveryLogsCarryOnlyEnumerationsAndCounts(t *testing.
 func TestUpstreamRecoveryControlsReachOnlyASelectingPeer(t *testing.T) {
 	policy := proto.UpstreamRecoveryControls{Enabled: true, MaxAttempts: 2, Classes: []string{proto.RecoveryClassImageInput}, TranscriptMaxChars: 50000}
 	newRequest := func() *proto.PromptRequestPayload {
-		return &proto.PromptRequestPayload{ExecutionControls: &proto.ExecutionControls{WebSearch: "disabled", TextVerbosity: "medium"}}
+		return &proto.PromptRequestPayload{AgentKind: "codex", ExecutionControls: &proto.ExecutionControls{WebSearch: "disabled", TextVerbosity: "medium"}}
 	}
 	for name, test := range map[string]struct {
 		policy   proto.UpstreamRecoveryControls
@@ -276,6 +276,13 @@ func TestUpstreamRecoveryControlsReachOnlyASelectingPeer(t *testing.T) {
 	req.ExecutionControls.UpstreamRecovery.Classes[0] = "mutated"
 	if policy.Classes[0] != proto.RecoveryClassImageInput {
 		t.Fatal("request shares the class slice with Core's policy")
+	}
+	// A non-codex Harness on a selecting Runtime never receives the block.
+	other := newRequest()
+	other.AgentKind = "claude-sdk"
+	withUpstreamRecovery(other, policy, true)
+	if other.ExecutionControls.UpstreamRecovery != nil {
+		t.Fatal("non-codex harness received the block")
 	}
 	// A request without controls is left alone.
 	bare := &proto.PromptRequestPayload{}
