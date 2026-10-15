@@ -13,7 +13,7 @@ import {
 export type { DiagnosticFailureCode, ItemDiagnosticTiming };
 export type UpstreamFingerprint = "provider_messages_required" | "reasoning_encrypted_unverifiable" | "model_no_image_input" | "tool_result_input_image_rejected" | "trailing_model_turn";
 const upstreamFingerprints: readonly UpstreamFingerprint[] = ["provider_messages_required", "reasoning_encrypted_unverifiable", "model_no_image_input", "tool_result_input_image_rejected", "trailing_model_turn"];
-// Mirrors Core's closed fingerprint to code and fixed summary tables (proto.FingerprintCode, EngineFailureSummary).
+// Mirrors Core's closed fingerprint tables (proto.FingerprintCode, EngineFailureSummary); fixtures/upstream-fingerprints.json is checked by both Go and TS tests.
 export const upstreamFingerprintTuples: Record<UpstreamFingerprint, { code: DiagnosticFailureCode; summary: string }> = {
   provider_messages_required: { code: "model_provider_format_rejected", summary: "upstream provider rejected the Responses request body (messages field required)" },
   reasoning_encrypted_unverifiable: { code: "model_reasoning_state_invalid", summary: "upstream could not verify encrypted reasoning content carried in thread history" },

@@ -541,6 +541,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		if item.Status != "" {
 			call += " (status: " + escapeTranscript(item.Status) + ")"
 		}
+		if callExceedsBudget(call) {
+			// A truncated query or URL could hide what the search actually ran.
+			stats.unsupported++
+			return nil
+		}
 		return []transcriptEntry{toolEntry(call, "")}
 	case "imageView", "imageGeneration":
 		var item struct {

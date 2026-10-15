@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { AdminClient } from "./admin-client";
 import { projectSessionDiagnostics, projectTurnDiagnostics, upstreamFingerprintTuples, type UpstreamRejectionParams } from "./session-diagnostics";
+import fingerprintFixture from "./fixtures/upstream-fingerprints.json";
 
 const id = "a113b7db-c689-4dfc-af9a-04bd0e466f11";
 const turn = "729dab72-a9ea-4d0a-a38c-1b45e46233a9";
@@ -200,4 +201,7 @@ it("UpstreamRejectionParams rejects a partial recovery group at compile time", (
   // @ts-expect-error recovery fields are all-or-nothing
   const partial: UpstreamRejectionParams = { fingerprint: "model_no_image_input", summary: "selected model does not accept image input", recovery_count: 1 };
   expect(partial).toBeDefined();
+});
+it("keeps the fingerprint table identical to the fixture Core is tested against", () => {
+  expect(upstreamFingerprintTuples).toEqual(fingerprintFixture);
 });

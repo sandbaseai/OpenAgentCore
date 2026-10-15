@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -101,3 +102,24 @@ func fingerprintWithOtherCode(code string) string {
 }
 
 func intPointer(value int) *int { return &value }
+// The TypeScript client keeps a projection of the fingerprint tables; both
+// languages are checked against this one shared fixture so they cannot drift.
+func TestUpstreamFingerprintTablesMatchSharedClientFixture(t *testing.T) {
+	data, err := os.ReadFile("../../../../packages/agents-client/src/fixtures/upstream-fingerprints.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture map[string]struct{ Code, Summary string }
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture) != len(upstreamFingerprints) {
+		t.Fatalf("fixture has %d fingerprints, Core has %d", len(fixture), len(upstreamFingerprints))
+	}
+	for _, fingerprint := range upstreamFingerprints {
+		code, _ := proto.FingerprintCode(fingerprint)
+		if got := fixture[fingerprint]; got.Code != code || got.Summary != EngineFailureSummary(fingerprint, nil) {
+			t.Fatalf("%s: fixture %+v, Core %q %q", fingerprint, got, code, EngineFailureSummary(fingerprint, nil))
+		}
+	}
+}

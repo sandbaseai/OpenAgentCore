@@ -801,3 +801,11 @@ func TestDecodeItemRejectsActiveImageGeneration(t *testing.T) {
 		}
 	}
 }
+func TestDecodeItemWebSearchOverBudgetIsUnsupported(t *testing.T) {
+	var stats historyStats
+	long := strings.Repeat("q", maxToolCallChars+1)
+	entries := decodeItem(item("webSearch", map[string]any{"query": long, "status": "completed"}), false, false, &stats)
+	if len(entries) != 0 || stats.unsupported != 1 {
+		t.Fatalf("truncated web search accepted: %+v unsupported=%d", entries, stats.unsupported)
+	}
+}
