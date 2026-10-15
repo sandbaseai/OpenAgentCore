@@ -91,7 +91,7 @@ func fixtureHistory(kind string) []historyTurn {
 	}}
 	failed := historyTurn{ID: oldTurn, Status: "failed", Items: []json.RawMessage{
 		userItem(text("please continue")),
-		item("commandExecution", map[string]any{"command": "ls", "aggregatedOutput": "a.txt\nb.txt", "exitCode": 0}),
+		item("commandExecution", map[string]any{"cwd": "/work", "command": "ls", "aggregatedOutput": "a.txt\nb.txt", "exitCode": 0}),
 	}}
 	switch kind {
 	case "reasoning":

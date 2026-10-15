@@ -303,11 +303,14 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			// command finished, so it is not repeated or assumed complete.
 			outcome = " (status: " + escapeTranscript(item.Status) + ")"
 		}
-		call := "command" + outcome
-		if item.Cwd != "" {
-			// The working directory decides which filesystem object a relative command touched.
-			call += " (cwd: " + escapeTranscript(item.Cwd) + ")"
+		// The working directory decides which filesystem object a relative
+		// command touched; without it the history is unreadable.
+		if strings.TrimSpace(item.Cwd) == "" {
+			stats.unsupported++
+			return nil
 		}
+		call := "command" + outcome
+		call += " (cwd: " + escapeTranscript(item.Cwd) + ")"
 		call += ": " + item.Command
 		if callExceedsBudget(call) {
 			// A truncated command could hide the resource a completed side effect touched.
@@ -541,9 +544,16 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		return []transcriptEntry{toolEntry(call, "")}
 	case "imageView", "imageGeneration":
 		var item struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			Status string `json:"status"`
 		}
 		_ = json.Unmarshal(raw, &item)
+		// A generation still running may finish after the snapshot; replaying
+		// it would repeat the work.
+		if head.Type == "imageGeneration" && item.Status != "" && nonterminalStatus(item.Status) {
+			stats.unsupported++
+			return nil
+		}
 		stats.images++
 		stats.toolImages++
 		output := "[image omitted: tool_image]"
