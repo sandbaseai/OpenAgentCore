@@ -205,3 +205,7 @@ it("UpstreamRejectionParams rejects a partial recovery group at compile time", (
 it("keeps the fingerprint table identical to the fixture Core is tested against", () => {
   expect(upstreamFingerprintTuples).toEqual(fingerprintFixture);
 });
+it("rejects recovery parameters on environment-input session failures", () => {
+  const f = { source: "environment_input", code: "model_provider_required", params: recoveryParams, failed_at: time };
+  expect(() => projectSessionDiagnostics({ ...session, failure: f }, id)).toThrow();
+});

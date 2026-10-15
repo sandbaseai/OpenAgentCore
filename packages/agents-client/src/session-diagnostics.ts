@@ -62,7 +62,8 @@ function failure(value: unknown, codes: readonly DiagnosticFailureCode[], sessio
   // Core adds the all-or-nothing recovery_* group to a failed Turn of any category; split it off and validate it independently.
   const all = value.params, withRecovery = all.recovery_count !== undefined;
   const base: Record<string, unknown> = withRecovery ? Object.fromEntries(Object.entries(all).filter(([key]) => !recoveryParamKeys.includes(key))) : all;
-  if (withRecovery && (value.code === "environment_provisioning_failed" || (isOneOf(upstreamRejectionCodes, value.code) && Object.keys(base).length === 0))) return invalidAdminResponse();
+  // Recovery records exist only for failed Turns, never for environment or input failures.
+  if (withRecovery && ((session && value.source !== "turn") || value.code === "environment_provisioning_failed" || (isOneOf(upstreamRejectionCodes, value.code) && Object.keys(base).length === 0))) return invalidAdminResponse();
   if (value.code === "environment_provisioning_failed") {
     const p = base;
     if (!exactFields(p, fields("step", "index", "exit_code")) || (p.step !== null && (typeof p.step !== "string" || !["setup", "python", "npm", "system", "file", "skill"].includes(p.step))) ||

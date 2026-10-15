@@ -85,3 +85,10 @@ func TestNativeTurnBytesChargesTurnOverhead(t *testing.T) {
 		t.Fatalf("nativeTurnBytes = %d, want >= %d", got, historyTurnOverhead)
 	}
 }
+func TestDynamicToolCallWithBlankToolIsUnsupported(t *testing.T) {
+	raw := json.RawMessage(`{"type":"dynamicToolCall","tool":"  ","arguments":{},"status":"completed","success":true}`)
+	var stats historyStats
+	if got := decodeItem(raw, false, false, &stats); got != nil || stats.unsupported != 1 {
+		t.Fatalf("got %v unsupported=%d, want rejected", got, stats.unsupported)
+	}
+}

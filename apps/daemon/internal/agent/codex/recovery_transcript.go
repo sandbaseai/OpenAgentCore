@@ -432,7 +432,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			return nil
 		}
 		// Without a tool name the model cannot tell which operation completed.
-		if item.Tool == "" {
+		if strings.TrimSpace(item.Tool) == "" {
 			stats.unsupported++
 			return nil
 		}
