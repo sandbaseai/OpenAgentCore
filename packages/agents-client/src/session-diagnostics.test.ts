@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { AdminClient } from "./admin-client";
-import { projectSessionDiagnostics, projectTurnDiagnostics } from "./session-diagnostics";
+import { projectSessionDiagnostics, projectTurnDiagnostics, upstreamFingerprintTuples } from "./session-diagnostics";
 
 const id = "a113b7db-c689-4dfc-af9a-04bd0e466f11";
 const turn = "729dab72-a9ea-4d0a-a38c-1b45e46233a9";
@@ -68,6 +68,10 @@ it.each(["authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", 
 });
 const upstreamCodes = ["model_input_unsupported_image", "model_provider_format_rejected", "model_reasoning_state_invalid", "model_input_ends_with_assistant"];
 const upstreamParams = { fingerprint: "model_no_image_input", summary: "selected model does not accept image input", upstream_request_id: "88a8d808-59c1-4bf3-8950-b34ce57e028b" };
+// Mirrors the Go test TestUpstream400CodesAreInEveryEnumAndMatchTheProtoMapping: the table must produce exactly these four codes.
+it("keeps the fingerprint table's code set equal to the four contract literals", () => {
+  expect([...new Set(Object.values(upstreamFingerprintTuples).map((tuple) => tuple.code))].sort()).toEqual([...upstreamCodes].sort());
+});
 it.each(upstreamCodes)("projects upstream 400 category %s with and without params", (code) => {
   const tuple = { model_input_unsupported_image: upstreamParams, model_provider_format_rejected: { ...upstreamParams, fingerprint: "provider_messages_required", summary: "upstream provider rejected the Responses request body (messages field required)" },
     model_reasoning_state_invalid: { ...upstreamParams, fingerprint: "reasoning_encrypted_unverifiable", summary: "upstream could not verify encrypted reasoning content carried in thread history" },
