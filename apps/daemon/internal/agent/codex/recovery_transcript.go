@@ -213,6 +213,7 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 			Command  string `json:"command"`
 			Output   string `json:"aggregatedOutput"`
 			ExitCode *int   `json:"exitCode"`
+			Status   string `json:"status"`
 		}
 		if json.Unmarshal(raw, &item) != nil {
 			stats.unsupported++
@@ -221,6 +222,11 @@ func decodeItem(raw json.RawMessage, turnFirst, firstOfFailedTurn bool, stats *h
 		call := "command: " + item.Command
 		if item.ExitCode != nil {
 			call += fmt.Sprintf(" (exit %d)", *item.ExitCode)
+		}
+		// Without an exit code, the native status tells the model whether the
+		// command finished, so it is not repeated or assumed complete.
+		if item.ExitCode == nil && item.Status != "" {
+			call += " (status: " + escapeTranscript(item.Status) + ")"
 		}
 		return []transcriptEntry{toolEntry(call, escapeTranscript(truncateRunes(item.Output, maxToolOutputChars)))}
 	case "fileChange":

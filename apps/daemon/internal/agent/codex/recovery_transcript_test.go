@@ -462,3 +462,11 @@ func TestDecodeItemDynamicToolCallKeepsOutcome(t *testing.T) {
 		t.Fatalf("unsupported = %d", stats.unsupported)
 	}
 }
+
+func TestDecodeItemCommandWithoutExitCodeKeepsStatus(t *testing.T) {
+	var stats historyStats
+	entries := decodeItem(item("commandExecution", map[string]any{"command": "make", "status": "interrupted"}), false, false, &stats)
+	if len(entries) != 1 || !strings.Contains(entries[0].call, "command: make (status: interrupted)") {
+		t.Fatalf("status lost: %+v", entries)
+	}
+}
