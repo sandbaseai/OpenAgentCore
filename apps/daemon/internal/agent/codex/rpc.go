@@ -330,6 +330,15 @@ func (c *JSONRPCClient) readStdoutLoop() {
 		c.mu.Unlock()
 		if alive {
 			c.cfg.Logger.Warn("codex rpc stdout scan err", "tag", c.cfg.LogTag, "err", err)
+			// A failed scan (e.g. a frame above rpcStdoutBufferMax) leaves no reader
+			// for later responses: fail pending requests now and retire the client
+			// so it cannot be reused. Close runs apart from this reader goroutine
+			// because it waits for the child, which the reader group gates.
+			c.mu.Lock()
+			c.alive = false
+			c.mu.Unlock()
+			_ = c.drainPending(fmt.Errorf("codex rpc: stdout unreadable: %w", err))
+			go func() { _ = c.Close() }()
 		}
 	}
 }

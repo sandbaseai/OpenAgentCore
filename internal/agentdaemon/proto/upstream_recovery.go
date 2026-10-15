@@ -232,7 +232,7 @@ func (r UpstreamRecovery) valid() bool {
 	switch r.Outcome {
 	case RecoveryOutcomeAborted:
 		// Abandoned before the switch: no new thread exists.
-		return r.Attempt == 0 && r.NewNativeSessionID == "" && slices.Contains(recoveryAbortReasons, r.Reason)
+		return r.Attempt == 0 && r.OldNativeSessionID != "" && r.NewNativeSessionID == "" && slices.Contains(recoveryAbortReasons, r.Reason)
 	case RecoveryOutcomeRecovered, RecoveryOutcomeExhausted:
 		return r.Attempt >= 1 && r.Reason == "" && r.OldNativeSessionID != "" && r.NewNativeSessionID != "" && r.OldNativeSessionID != r.NewNativeSessionID
 	}

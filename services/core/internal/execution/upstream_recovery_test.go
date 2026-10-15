@@ -305,3 +305,11 @@ func TestUpstreamRecoveryControlsReachOnlyASelectingPeer(t *testing.T) {
 		t.Fatal("nil peer received the block")
 	}
 }
+
+func TestParseUpstreamRecoveriesRejectsAbortedWithoutOldSession(t *testing.T) {
+	record := abortedRecord(proto.RecoveryAbortCancelled)
+	delete(record, "old_native_session_id")
+	if _, ok := proto.ParseUpstreamRecoveries([]any{record}); ok {
+		t.Fatal("aborted record without old_native_session_id accepted")
+	}
+}
