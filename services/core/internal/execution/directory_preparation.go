@@ -99,7 +99,9 @@ func (p *preparedStart) releaseDirectory() error {
 			if err != nil || status.RunID != "" {
 				return ErrExecutionUnavailable
 			}
-			if status.State == "released" && status.ErrorCode == "" {
+			// A read-only preparation can expire after a confirmed export. Both
+			// terminal receipts confirm cleanup without reviving its authority.
+			if (status.State == "released" || status.State == "expired") && status.ErrorCode == "" {
 				return nil
 			}
 			if status.State != "preparing" && status.State != "ready" {

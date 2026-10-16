@@ -15,7 +15,7 @@ func (d *Dispatcher) captureCompletedArtifacts(ctx context.Context, peer *runtim
 	if status != sessions.TurnCompleted || !LocalWorkspaceConfiguration(environment.Configuration) {
 		return result, status
 	}
-	owner, cancel := context.WithTimeout(ctx, 180*time.Second)
+	owner, cancel := context.WithTimeout(ctx, proto.WorkspaceExportTimeout)
 	defer cancel()
 	err := d.sessionExecution.BeginTurnArtifactCapture(owner, session.TenantID, session.ID, turnID, result.AppliedThrough)
 	if err == nil {

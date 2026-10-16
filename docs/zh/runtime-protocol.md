@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 2daf6711170282ee521509c9305c25f3286ab6de48f84f589ad33f95768eabc3
+source_hash: b9b440304f718eb5c0fa1efc3663aad7012c84342987138e96f56933af7a7312
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
@@ -198,6 +198,8 @@ Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engin
 Core 在 Worker 的 Session 调度预约上运行空闲目录读取，活动执行时针对精确 Run。它在有限时 read 与 release 期间保留预约，仅在确认 close 后返回数据（不完整读取或不确定清理返回 unavailable，不包含数据），在交付结果前释放预约，并在完成或失败后撤销限定作用域的读取凭据。Runtime 保留不确定清理的所有权和容量。[Environment Files 契约](../../contracts/agents-api/zh/environment-files.md)负责公开授权、路径和分页。
 
 `workspace_write` 在原生 writer 运行前，通过已确认的 64 KiB frame 传输完整且有界的 body，验证声明的 digest，不运行模型。私有 transfer 限制为 50 MiB，与公开 API 在任何 Runtime 工作前检查的 5 MiB decoded inline 限制独立。Runtime 在接收或应用写入时排除执行；格式错误、不完整或到期的 transfer 不会到达 installer。精确的 commit 或拒绝回执释放 mutation owner。缺失或有歧义的回执保留不确定性：observer 取消和本地进程退出不能证明没有改变任何内容。公开准入前，Core 在 Session lock 下持久预约写入，跨重启阻止后继 mutation，直到精确结算；请求不重放。各平台都使用 daemon 的 Go 实现进行有界读取、目录列举、文件创建与输出导出，不使用外部 helper 或 staging directory。
+
+`workspace_export` 从已授权的 preparation 拉取一条有界归档流。daemon 将 exporter 的短写聚合为 64 KiB 分块，最后一块可以不足 64 KiB；只有源端正常 EOF 才允许完成。gateway 在消费者存储当前分块时最多请求下一块，只保留当前数据和一个有界回执。消费者失败、取消或断连会停止传输；即使归档内容完整，发布前仍必须收到 exporter 的完成回执。Core 采集（包括准备和存储）、gateway 导出与 daemon 导出共用十分钟预算；更早的父级取消或期限仍优先。导出获准后，其拥有的 preparation 暂停空闲过期计时，避免空闲准备上限截断传输；已开始过期的 preparation 不允许发起导出。导出结算后恢复原空闲期限，不续期 handle。随后的只读 release 将通过身份校验、无 Run 且无错误的 `expired` 回执视为已确认清理，仍保留导出自身的失败；显式 release 与 daemon shutdown 仍会取消活跃导出。整个传输仍受归档大小上限约束。
 
 ## MCP 连接权限 {#mcp-connection-authority}
 

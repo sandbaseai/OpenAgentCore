@@ -1,6 +1,10 @@
 package proto
 
+import "time"
+
 const (
+	// WorkspaceExportTimeout bounds capture and export, including preparation and storage.
+	WorkspaceExportTimeout       = 10 * time.Minute
 	TypeWorkspaceExport          = "workspace_export"
 	TypeWorkspaceExportResult    = "workspace_export_result"
 	WorkspaceExportChunkBytes    = 64 << 10

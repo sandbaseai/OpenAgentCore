@@ -4,10 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
@@ -114,6 +118,7 @@ func TestWorkspaceExportUsesExactReadPreparationAndPullsBoundedBytes(t *testing.
 	sendExport(t, r, id, request)
 	var offset int64
 	var archive bytes.Buffer
+	chunks := 0
 	for {
 		p := readExport(t, s)
 		if p.Offset != offset {
@@ -126,6 +131,7 @@ func TestWorkspaceExportUsesExactReadPreparationAndPullsBoundedBytes(t *testing.
 			t.Fatal("invalid chunk")
 		}
 		archive.Write(p.Data)
+		chunks++
 		offset += int64(len(p.Data))
 		select {
 		case <-s.replies:
@@ -133,6 +139,9 @@ func TestWorkspaceExportUsesExactReadPreparationAndPullsBoundedBytes(t *testing.
 		default:
 		}
 		sendExport(t, r, id, proto.WorkspaceExportPayload{Step: "next", Offset: offset})
+	}
+	if want := (archive.Len() + proto.WorkspaceExportChunkBytes - 1) / proto.WorkspaceExportChunkBytes; chunks != want {
+		t.Fatalf("archive used %d chunks, want %d", chunks, want)
 	}
 	reader := tar.NewReader(&archive)
 	header, err := reader.Next()
@@ -145,6 +154,61 @@ func TestWorkspaceExportUsesExactReadPreparationAndPullsBoundedBytes(t *testing.
 	}
 	if _, err = reader.Next(); err != io.EOF {
 		t.Fatal("unexpected extra artifact", err)
+	}
+}
+
+type exportErrorReader struct {
+	data []byte
+	err  error
+}
+
+func (r exportErrorReader) Read(p []byte) (int, error) { return copy(p, r.data), r.err }
+
+func TestWorkspaceExportCoalescesShortReadsAndPreservesBytes(t *testing.T) {
+	for _, size := range []int{0, 1, proto.WorkspaceExportChunkBytes, 2*proto.WorkspaceExportChunkBytes + 17, 8<<20 + 17} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			body := make([]byte, size)
+			for i := range body {
+				body[i] = byte(i * 37)
+			}
+			reader := iotest.HalfReader(bytes.NewReader(body))
+			buffer := make([]byte, proto.WorkspaceExportChunkBytes)
+			var got bytes.Buffer
+			chunks := 0
+			for {
+				result := readWorkspaceExportChunk(reader, buffer, int64(got.Len()))
+				if result.Outcome == "completed" {
+					break
+				}
+				if result.Outcome != "chunk" || result.Offset != int64(got.Len()) {
+					t.Fatal("invalid chunk", result.Outcome, result.Offset)
+				}
+				got.Write(result.Data)
+				chunks++
+			}
+			if sha256.Sum256(got.Bytes()) != sha256.Sum256(body) || chunks != (size+len(buffer)-1)/len(buffer) {
+				t.Fatalf("bytes or chunk count differ: %d bytes, %d chunks", got.Len(), chunks)
+			}
+		})
+	}
+}
+
+func TestWorkspaceExportChunkRejectsPartialFailureAndOverflow(t *testing.T) {
+	for _, err := range []error{errors.New("export failed"), io.ErrUnexpectedEOF, context.Canceled} {
+		result := readWorkspaceExportChunk(exportErrorReader{[]byte("partial"), err}, make([]byte, proto.WorkspaceExportChunkBytes), 0)
+		if result.Outcome != "failed" || len(result.Data) != 0 || result.ErrorCode != "export_failed" {
+			t.Fatal("partial source failure escaped", result.Outcome, err)
+		}
+	}
+	for _, offset := range []int64{proto.WorkspaceExportMaxBytes - 1, proto.WorkspaceExportMaxBytes} {
+		result := readWorkspaceExportChunk(bytes.NewReader([]byte("xx")), make([]byte, proto.WorkspaceExportChunkBytes), offset)
+		if result.Outcome != "failed" || len(result.Data) != 0 {
+			t.Fatal("oversize source accepted")
+		}
+	}
+	result := readWorkspaceExportChunk(bytes.NewReader(nil), make([]byte, proto.WorkspaceExportChunkBytes), proto.WorkspaceExportMaxBytes)
+	if result.Outcome != "completed" {
+		t.Fatal("exact bound completion rejected")
 	}
 }
 

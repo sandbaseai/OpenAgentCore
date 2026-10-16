@@ -30,7 +30,7 @@ func (s *Session) ExportWorkspaceOutputs(ctx context.Context, request proto.Work
 	s.workspaceExports = map[string]chan proto.Envelope{id: replies}
 	s.workspaceExportMu.Unlock()
 	defer func() { s.workspaceExportMu.Lock(); delete(s.workspaceExports, id); s.workspaceExportMu.Unlock() }()
-	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, proto.WorkspaceExportTimeout)
 	defer cancel()
 	r := &workspaceExportReader{ctx: ctx, peer: s, id: id, replies: replies, request: request}
 	defer func() {
@@ -57,12 +57,16 @@ type workspaceExportReader struct {
 	request   proto.WorkspaceExportPayload
 	data      []byte
 	offset    int64
+	pending   bool
 	completed bool
 }
 
 func (r *workspaceExportReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
+	}
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
 	}
 	if len(r.data) > 0 {
 		n := copy(p, r.data)
@@ -72,20 +76,19 @@ func (r *workspaceExportReader) Read(p []byte) (int, error) {
 	if r.completed {
 		return 0, io.EOF
 	}
-	env, err := proto.NewEnvelope(proto.TypeWorkspaceExport, r.id, r.request)
-	if err != nil {
-		return 0, err
-	}
-	if err = r.peer.Send(r.ctx, env); err != nil {
-		return 0, err
+	if !r.pending {
+		if err := r.pull(); err != nil {
+			return 0, err
+		}
 	}
 	select {
 	case env, ok := <-r.replies:
 		if !ok {
 			return 0, ErrSessionClosed
 		}
+		r.pending = false
 		var result proto.WorkspaceExportResultPayload
-		if len(env.Payload) > proto.WorkspaceExportMaxFrameBytes || env.DecodePayload(&result) != nil || result.Offset != r.offset {
+		if env.ID != r.id || env.Type != proto.TypeWorkspaceExportResult || len(env.Payload) > proto.WorkspaceExportMaxFrameBytes || env.DecodePayload(&result) != nil || result.Offset != r.offset {
 			return 0, errors.New("agentdaemon gateway: invalid export receipt")
 		}
 		if result.Outcome == "completed" && len(result.Data) == 0 && result.ErrorCode == "" {
@@ -98,12 +101,29 @@ func (r *workspaceExportReader) Read(p []byte) (int, error) {
 		r.data = result.Data
 		r.offset += int64(len(result.Data))
 		r.request = proto.WorkspaceExportPayload{Step: "next", Offset: r.offset}
+		// Allow one reply to arrive while the consumer stores this chunk. No
+		// further pull is sent until the current bytes have been consumed.
+		if err := r.pull(); err != nil {
+			return 0, err
+		}
 		return r.Read(p)
 	case <-r.ctx.Done():
 		return 0, r.ctx.Err()
 	case <-r.peer.closed:
 		return 0, ErrSessionClosed
 	}
+}
+
+func (r *workspaceExportReader) pull() error {
+	env, err := proto.NewEnvelope(proto.TypeWorkspaceExport, r.id, r.request)
+	if err != nil {
+		return err
+	}
+	if err = r.peer.Send(r.ctx, env); err != nil {
+		return err
+	}
+	r.pending = true
+	return nil
 }
 
 func (s *Session) dispatchWorkspaceExport(env proto.Envelope) {

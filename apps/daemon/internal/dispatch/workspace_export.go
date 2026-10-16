@@ -10,9 +10,10 @@ import (
 )
 
 type workspaceExport struct {
-	id       string
-	requests chan proto.WorkspaceExportPayload
-	cancel   context.CancelFunc
+	id          string
+	requests    chan proto.WorkspaceExportPayload
+	cancel      context.CancelFunc
+	preparation *preparationState
 }
 
 func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) error {
@@ -52,9 +53,15 @@ func (r *Router) handleWorkspaceExport(ctx context.Context, env proto.Envelope) 
 		r.mu.Unlock()
 		return r.sendWorkspaceExport(ctx, env.ID, proto.WorkspaceExportResultPayload{Outcome: "rejected", ErrorCode: "resource_unavailable"})
 	}
+	// A live export owns its preparation until it settles. An expired timer
+	// cannot be reclaimed: its callback may already be waiting for this lock.
+	if p.timer != nil && !p.timer.Stop() {
+		r.mu.Unlock()
+		return r.sendWorkspaceExport(ctx, env.ID, proto.WorkspaceExportResultPayload{Outcome: "rejected", ErrorCode: "resource_unavailable"})
+	}
 	owner, stop := r.shutdownContext(p.ctx)
-	owner, cancel := context.WithTimeout(owner, 180*time.Second)
-	u = &workspaceExport{id: env.ID, requests: make(chan proto.WorkspaceExportPayload, 1), cancel: func() { cancel(); stop() }}
+	owner, cancel := context.WithTimeout(owner, proto.WorkspaceExportTimeout)
+	u = &workspaceExport{id: env.ID, preparation: p, requests: make(chan proto.WorkspaceExportPayload, 1), cancel: func() { cancel(); stop() }}
 	u.requests <- request
 	r.workspaceExport = u
 	r.shutdownWG.Add(1)
@@ -80,6 +87,11 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 		if r.workspaceExport == u {
 			r.workspaceExport = nil
 		}
+		p := u.preparation
+		if p != nil && p.timer != nil && p.ctx.Err() == nil && p.owns && p.status.State == "ready" {
+			// Resume the original idle deadline; export never renews an idle handle.
+			p.timer.Reset(max(0, time.Until(p.deadline)))
+		}
 		r.mu.Unlock()
 	}()
 	// Closing the reader unblocks a pending pipe read on cancellation or shutdown.
@@ -97,17 +109,8 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 		case <-ctx.Done():
 			return
 		}
-		n, err := reader.Read(buffer)
-		result := proto.WorkspaceExportResultPayload{Offset: offset}
-		switch {
-		case err == io.EOF:
-			result.Outcome = "completed"
-		case err != nil || n == 0 || int64(n) > proto.WorkspaceExportMaxBytes-offset:
-			result.Outcome, result.ErrorCode = "failed", "export_failed"
-		default:
-			result.Outcome, result.Data = "chunk", buffer[:n]
-			offset += int64(n)
-		}
+		result := readWorkspaceExportChunk(reader, buffer, offset)
+		offset += int64(len(result.Data))
 		if result.Outcome == "completed" {
 			// The next owner may start immediately after receiving completion.
 			<-done
@@ -121,6 +124,30 @@ func (r *Router) runWorkspaceExport(ctx context.Context, u *workspaceExport) {
 			return
 		}
 	}
+}
+
+func readWorkspaceExportChunk(reader io.Reader, buffer []byte, offset int64) proto.WorkspaceExportResultPayload {
+	result := proto.WorkspaceExportResultPayload{Offset: offset}
+	var size int
+	for size < len(buffer) {
+		n, err := reader.Read(buffer[size:])
+		size += n
+		// Preserve the source error: io.ReadFull cannot distinguish a clean tail
+		// from an exporter that itself fails with io.ErrUnexpectedEOF.
+		if (err != nil && err != io.EOF) || (n == 0 && err == nil) || int64(size) > proto.WorkspaceExportMaxBytes-offset {
+			result.Outcome, result.ErrorCode = "failed", "export_failed"
+			return result
+		}
+		if err == io.EOF {
+			if size == 0 {
+				result.Outcome = "completed"
+				return result
+			}
+			break
+		}
+	}
+	result.Outcome, result.Data = "chunk", buffer[:size]
+	return result
 }
 
 func (r *Router) sendWorkspaceExport(ctx context.Context, id string, result proto.WorkspaceExportResultPayload) error {
