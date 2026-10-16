@@ -83,7 +83,7 @@ describe("Incremental history reads", () => {
     const history = await loadSessionHistory(client, "session", previous, { incremental: true });
     expect(history.session?.status).toBe("idle");
     expect(history.items).toBe(previous.items);
-    expect(history.itemsError).toBe("Items unavailable");
+    expect(history.itemsError).toBeInstanceOf(AgentCoreError);
     expect(history.turns.map((value) => value.status)).toEqual(["completed"]);
     expect(history.sessionError).toBeNull();
   });
@@ -120,16 +120,17 @@ describe("Session deletion and runtime answers", () => {
   it("tells a busy Session, a missing one, a refusal and an unconfirmed deletion apart", () => {
     expect(classifyDeleteError(new AgentCoreError("busy", 409, "conflict_error"))).toEqual({ kind: "not-idle" });
     expect(classifyDeleteError(new AgentCoreError("missing", 404))).toEqual({ kind: "missing" });
-    expect(classifyDeleteError(new AgentCoreError("nope", 403))).toEqual({ kind: "rejected", reason: "nope" });
+    const refusal = new AgentCoreError("nope", 403);
+    expect(classifyDeleteError(refusal)).toEqual({ kind: "rejected", cause: refusal });
     expect(classifyDeleteError(new AgentCoreError("down", 503))).toEqual({ kind: "uncertain" });
     expect(classifyDeleteError(new TypeError("Failed to fetch"))).toEqual({ kind: "uncertain" });
   });
 
   it("treats a Session without retained runtime history as no history, not an error", async () => {
     const client = { retrieveRuntimeHistory: async () => { throw new AgentCoreError("No hosted runtime.", 404); } };
-    await expect(loadSessionRuntimeHistory(client, session, 3_600_000)).resolves.toBeNull();
+    await expect(loadSessionRuntimeHistory(client, session, "1h")).resolves.toBeNull();
     const failing = { retrieveRuntimeHistory: async () => { throw new AgentCoreError("down", 503); } };
-    await expect(loadSessionRuntimeHistory(failing, session, 3_600_000)).rejects.toThrow("down");
+    await expect(loadSessionRuntimeHistory(failing, session, "1h")).rejects.toThrow("down");
   });
 });
 

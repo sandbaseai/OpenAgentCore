@@ -5,21 +5,17 @@ import { useTranslation } from "react-i18next";
 
 import { useFailureToast } from "../../components/Toast";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { EmptyState, HelpTip, PageBody, PageHeader, RefreshButton, Section } from "../../components/console-ui";
+import { ApiEmptyState, EmptyState, HelpTip, PageBody, PageHeader, RefreshButton, Section } from "../../components/console-ui";
 import { CopyableId, ListToolbar, listSummary, NameCell, RowActions, SearchField } from "../../components/list-ui";
 import { useConsoleNavigation } from "../../lib/console-navigation";
+import { coreError } from "../../lib/core-error";
 import { useDeleteFlow } from "../../lib/delete-flow";
 import { formatDateTime } from "../../lib/format";
 import { CreatorCell, CreatorHeading, forgetCreators, ProjectFilter, ProjectName, projectClient, readAllPages, useCreators, useProjectCollection, useProjects, type Owned } from "../../lib/projects";
-import { vaultName } from "./vault-catalog";
 import "./vaults.css";
 import { collections } from "../../lib/queries";
 import { DetailSkeleton, TableSkeleton } from "../../components/Skeleton";
 import { useVaultDetail } from "../resources/detail-queries";
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * Resources › Vault: every project's Vaults and their Credential metadata.
@@ -61,20 +57,23 @@ function VaultsList() {
   // Projects that could not be read are reported in a toast; the list shows the rest.
   const failedNames = collection.failures.map((failure) => failure.project.name).join(", ");
   useFailureToast(collection.items.length > 0 && collection.failures.length > 0, tCommon("project.partial", { names: failedNames }), "vaults-partial");
+  // A selected project keeps its filter in view, even when it holds nothing.
+  const toolbar = collection.items.length || filter ? (
+    <ListToolbar label={t("list.filterLabel")} summary={collection.items.length ? listSummary(tCommon, rows.length, collection.items.length, { locale }) : undefined}>
+      <ProjectFilter value={filter} onChange={setFilter} />
+      <SearchField value={query} onChange={setQuery} placeholder={t("list.filterPlaceholder")} label={t("list.filterLabel")} />
+    </ListToolbar>
+  ) : null;
   let body;
   if (collection.status === "loading" && !collection.items.length) {
     body = <TableSkeleton label={t("loading")} columns={6} />;
   } else if (!collection.items.length && !collection.failures.length) {
-    body = <EmptyState icon={VaultIcon} title={t("noVaults")} />;
+    body = <ApiEmptyState icon={VaultIcon} title={t("noVaults")} section="vaults" />;
   } else if (!collection.items.length) {
     body = <EmptyState title={tCommon("project.failed", { names: failedNames })} description={collection.failures[0]?.message} action={<button className="button outline" type="button" onClick={collection.refresh}>{tCommon("actions.retry")}</button>} />;
   } else {
     body = (
       <>
-        <ListToolbar label={t("list.filterLabel")} summary={listSummary(tCommon, rows.length, collection.items.length, { locale })}>
-          <ProjectFilter value={filter} onChange={setFilter} />
-          <SearchField value={query} onChange={setQuery} placeholder={t("list.filterPlaceholder")} label={t("list.filterLabel")} />
-        </ListToolbar>
         {rows.length ? (
           <div className="table-frame">
             <table className="data-table" aria-label={t("list.label")}>
@@ -90,7 +89,7 @@ function VaultsList() {
               <tbody>
                 {rows.map((row) => {
                   const vault = row.value;
-                  const name = vaultName(vault);
+                  const name = vault.name ?? t("unnamed");
                   const open = () => navigate("vaults", { project: row.project.id, id: vault.id });
                   return (
                     <tr key={`${row.project.id}:${vault.id}`} className="clickable-row" onClick={open}>
@@ -127,7 +126,7 @@ function VaultsList() {
         help={<>{tPages("vaults.subtitle")} {t("securityNote")}</>}
         actions={<RefreshButton onClick={refresh} refreshing={collection.status === "loading"} label={tPages("vaults.refresh")} />}
       />
-      <PageBody>{body}</PageBody>
+      <PageBody>{toolbar}{body}</PageBody>
       <ConfirmDialog
         open={remove.target !== null}
         title={t("deleteVaultTitle")}
@@ -138,7 +137,7 @@ function VaultsList() {
         onConfirm={() => void remove.confirm()}
         onClose={remove.cancel}
       >
-        <p>{remove.target ? t("deleteVaultPrompt", { name: vaultName(remove.target.value) }) : null}</p>
+        <p>{remove.target ? t("deleteVaultPrompt", { name: remove.target.value.name ?? t("unnamed") }) : null}</p>
       </ConfirmDialog>
     </section>
   );
@@ -175,12 +174,12 @@ function VaultDetail({ projectId, vaultId }: { projectId: string; vaultId: strin
   );
 
   const vault = read.data ?? null;
-  const failure = read.isError ? errorText(read.error) : null;
-  const credentialsFailure = credentialsRead.isError ? errorText(credentialsRead.error) : null;
+  const failure = read.isError ? coreError(read.error, tCommon) : null;
+  const credentialsFailure = credentialsRead.isError ? coreError(credentialsRead.error, tCommon) : null;
   // Detail reads are not polled: each failed read was asked for and is reported.
   useFailureToast(vault !== null ? failure : null, t("refreshFailed"), "vault-refresh", read.errorUpdatedAt);
   useFailureToast(credentialsRead.data ? credentialsFailure : null, t("refreshFailed"), "vault-credentials-refresh", credentialsRead.errorUpdatedAt);
-  const name = vault ? vaultName(vault) : vaultId;
+  const name = vault ? vault.name ?? t("unnamed") : vaultId;
   return (
     <section className="page-section console-page vaults-page" aria-labelledby="vault-detail-heading">
       <PageHeader

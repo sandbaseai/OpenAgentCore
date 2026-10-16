@@ -105,13 +105,30 @@
   overflow-wrap: anywhere;
 }
 
-.settings-row-content { min-width: 0; flex: 1; }
+.settings-row-content { min-width: 0; flex: 1 1 auto; }
 .settings-row-action { display: flex; flex: none; gap: 8px; margin-left: auto; }
 
 .settings-row pre {
   margin: 0;
   padding: 7px 0;
   white-space: pre-wrap;
+}
+
+/* Values few tasks need, such as internal IDs and raw adapter parameters, close the card behind a disclosure. */
+.settings-details > summary {
+  padding: 10px 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.settings-details[open] > summary { border-bottom: 1px solid var(--grid-line); }
+
+.settings-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-card);
 }
 
 /* An editable value: a sized field, its local Save, and its error underneath. */
@@ -140,8 +157,8 @@
 }
 
 .settings-table .data-table tbody tr:last-child > * { border-bottom: 0; }
-.settings-table .data-table tbody th { font-weight: 500; text-align: left; }
-.settings-table .data-table .settings-table-action { width: 1%; text-align: right; white-space: nowrap; }
+/* Setting names wrap after an underscore, so they need no minimum width and a phone keeps every column. */
+.settings-table .data-table tbody th { min-width: 0; font-weight: 500; text-align: left; }
 
 /* The irreversible operation closes the page, apart from the settings above it. */
 .settings-danger {
@@ -166,7 +183,7 @@
 .settings-danger .button { flex: none; }
 
 @media (max-width: 640px) {
-  .settings-tabs { gap: 20px; padding: 0 16px; }
+  .settings-tabs { flex-wrap: wrap; gap: 0 12px; padding: 0 16px; }
   .settings-row { grid-template-columns: minmax(0, 1fr); padding: 8px 12px; }
   .settings-row > dt,
   .settings-row > .settings-row-label { min-height: 24px; }

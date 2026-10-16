@@ -15,13 +15,13 @@ function hourly(prefix: string, count: number, overrides: (index: number) => Par
 }
 
 describe("needsSessionRead", () => {
-  it("skips projects without Sessions, or idle since before the window with nothing needing attention", () => {
+  it("skips projects without Sessions or idle since before the window", () => {
     expect(needsSessionRead(undefined, SINCE)).toBe(true);
     expect(needsSessionRead(summary("a"), SINCE)).toBe(false);
     const idle = { total: 4, idle: 4, in_progress: 0, requires_action: 0, failed: 0 };
     expect(needsSessionRead(summary("a", { sessions: idle, last_active_at: SINCE - 1 }), SINCE)).toBe(false);
     expect(needsSessionRead(summary("a", { sessions: idle, last_active_at: SINCE + 1 }), SINCE)).toBe(true);
-    expect(needsSessionRead(summary("a", { sessions: { ...idle, failed: 1 }, last_active_at: SINCE - 1 }), SINCE)).toBe(true);
+    expect(needsSessionRead(summary("a", { sessions: { ...idle, failed: 1 }, last_active_at: SINCE - 1 }), SINCE)).toBe(false);
   });
 });
 
@@ -68,7 +68,7 @@ describe("loadOverview", () => {
     }, NOW, new AbortController().signal);
     expect(data.summary.status).toBe("failed");
     expect(data.sessions.sessions).toHaveLength(30);
-    expect(data.sessions.failures.map((failure) => [failure.project.id, failure.message])).toEqual([["broken", "boom"]]);
+    expect(data.sessions.failures.map((failure) => failure.project.id)).toEqual(["broken"]);
   });
 
   it("propagates an abort", async () => {

@@ -10,11 +10,11 @@ Pass options to the downloaded script:
 ./install.sh --public-url https://core.example
 ```
 
-On Windows, download `install.ps1` and pass the same flags with `& ./install.ps1 --public-url https://core.example`. With the Unix one-line command, append them after `bash -s --`. `--version TAG` selects a published release; otherwise the script selects the latest stable release and verifies the native command and Compose files against their SHA-256 checksums.
+On Windows, `irm … | iex` cannot pass flags and the default execution policy blocks a downloaded `.ps1` file, so run the script as a script block: `& ([scriptblock]::Create((irm https://github.com/MiniMax-AI/OpenAgentCore/releases/latest/download/install.ps1))) --public-url https://core.example`. With the Unix one-line command, append them after `bash -s --`. `--version TAG` selects a published release; otherwise the script selects the latest stable release and verifies the native command and Compose files against their SHA-256 checksums.
 
 ## Docker Compose and hosting platforms
 
-Use the `compose.yaml` from a release on any [supported Core host](./install.md#prerequisites). The release pins its initialization, Core and Web images and source revision in the [Compose template](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml). PostgreSQL uses `postgres:16-alpine`. It starts PostgreSQL, Core and Web. Web forwards `/v1` and `/api/v1` to Core. Data lives in a named Docker volume. The one-time initialization service generates random secrets there and prepares the node installer; Core applies database migrations when it starts. [Compose configuration](../configuration.md#compose-installations) owns the settings and the data directory.
+Use the `compose.yaml` from a release on any [supported Core host](./install.md#prerequisites). The release pins its initialization, Core, Web and PostgreSQL images and source revision. PostgreSQL 16 is the official image, pinned by digest and mirrored to GHCR with the other images. It starts PostgreSQL, Core and Web. Web forwards `/v1` and `/api/v1` to Core. Data lives in a named Docker volume. The one-time initialization service generates random secrets there and prepares the node installer; Core applies database migrations when it starts. [Compose configuration](../configuration.md#compose-installations) owns the settings and the data directory.
 
 For a local trial, download `compose.yaml` from a release into an empty directory, then run:
 
@@ -41,11 +41,11 @@ On either platform, open its server terminal and run `docker compose ls` to find
 
 After signing in, choose the sandbox backend and add nodes using [Nodes](./nodes.md). The Compose stack deploys the control plane; execution machines remain separate.
 
-Stop with `docker compose stop` using the same files and environment. Back up the data volume and configuration together while the services are stopped. Follow the [installation version policy](./operations.md#installation-version-policy): a different release needs a new Compose project and a fresh data volume.
+Stop with `docker compose stop` using the same files and environment. Back up the data volume and configuration together while the services are stopped. To upgrade, back up first, then deploy the new release's `compose.yaml` with the same project, environment and data volume: initialization upgrades the volume and Core migrates the database. [Upgrade](./operations.md#upgrade) describes what is kept and why an older release is refused.
 
 ## Process settings
 
-These flags are written to `.env` once. After installation, edit that file and run `oac apply`. Rerunning the installer does not change an installation that has already started.
+These flags are written to `.env` once. After installation, edit that file and run `oac apply`. Rerunning the installer on an existing installation ignores these flags, names those that differ from the saved settings, and starts it with the saved settings.
 
 | Flag | `.env` variable |
 | --- | --- |
@@ -56,11 +56,12 @@ These flags are written to `.env` once. After installation, edit that file and r
 
 ## Installation actions
 
-`--install-dir` chooses where the installation is created. It is not a process setting.
+`--install-dir` chooses where the installation is created. Neither option is a process setting.
 
 | Option | Purpose |
 | --- | --- |
-| `--install-dir DIR` | Absolute installation directory; defaults to `~/.oac/core`. Use an empty or missing directory for a new installation, or an existing installation directory to [retry](./install.md#install) |
+| `--install-dir DIR` | Absolute installation directory; defaults to `~/.oac/core`. Use an empty or missing directory for a new installation, or an existing installation directory to [retry](./install.md#install) or upgrade |
+| `--upgrade` | Upgrade the existing installation in `--install-dir` to the installer's release; see [Upgrade](./operations.md#upgrade) |
 
 Several installations can share a machine when they use distinct installation directories and ports. Use distinct IP addresses or a shared reverse proxy for more. Each installation has its own database, Core key and nodes.
 
@@ -131,4 +132,6 @@ The address changes whenever `cloudflared` restarts; nodes bound to the old addr
 
 ## Offline hosts
 
-Core installation requires access to GitHub Releases and the container registries to download release files and images.
+The installer downloads release files from GitHub Releases with this shell's network settings, including `HTTPS_PROXY`. Docker pulls the images through its daemon, which does not read the shell's proxy variables. Every image, PostgreSQL included, comes from GHCR (`ghcr.io`); Docker Hub is not needed. When GHCR is reachable only through a proxy or mirror, configure [the daemon's proxy](https://docs.docker.com/engine/daemon/proxy/) or a [registry mirror](https://docs.docker.com/docker-hub/image-library/mirror/), then rerun the installer.
+
+A Linux amd64 host without that access installs from the release asset `oac-<commit>-linux-amd64-offline.tar.gz`, which contains every image and node artifact. Copy it to the host, extract it and run its `install.py` with Python 3.9 or newer; [source installation](../development.md#install-a-checkout-without-publishing-a-release) describes its options.

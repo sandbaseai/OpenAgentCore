@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useFailureToast } from "../../components/Toast";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { EmptyState, PageBody, PageHeader, RefreshButton } from "../../components/console-ui";
+import { ApiEmptyState, EmptyState, PageBody, PageHeader, RefreshButton } from "../../components/console-ui";
 import { ListToolbar, listSummary, NameCell, RowActions, SearchField } from "../../components/list-ui";
 import { useConsoleNavigation } from "../../lib/console-navigation";
 import { useDeleteFlow } from "../../lib/delete-flow";
@@ -70,20 +70,23 @@ function SkillsList() {
   // Projects that could not be read are reported in a toast; the list shows the rest.
   const failedNames = collection.failures.map((failure) => failure.project.name).join(", ");
   useFailureToast(collection.items.length > 0 && collection.failures.length > 0, tCommon("project.partial", { names: failedNames }), "skills-partial");
+  // A selected project keeps its filter in view, even when it holds nothing.
+  const toolbar = collection.items.length || filter ? (
+    <ListToolbar label={t("list.filterLabel")} summary={collection.items.length ? listSummary(tCommon, rows.length, collection.items.length, { locale }) : undefined}>
+      <ProjectFilter value={filter} onChange={setFilter} />
+      <SearchField value={query} onChange={setQuery} placeholder={t("list.filterPlaceholder")} label={t("list.filterLabel")} />
+    </ListToolbar>
+  ) : null;
   let body;
   if (collection.status === "loading" && !collection.items.length) {
     body = <TableSkeleton label={t("list.loading")} columns={6} />;
   } else if (!collection.items.length && !collection.failures.length) {
-    body = <EmptyState icon={Puzzle} title={t("empty.title")} />;
+    body = <ApiEmptyState icon={Puzzle} title={t("empty.title")} section="skills" />;
   } else if (!collection.items.length) {
     body = <EmptyState title={tCommon("project.failed", { names: failedNames })} description={collection.failures[0]?.message} action={<button className="button outline" type="button" onClick={collection.refresh}>{tCommon("actions.retry")}</button>} />;
   } else {
     body = (
       <>
-        <ListToolbar label={t("list.filterLabel")} summary={listSummary(tCommon, rows.length, collection.items.length, { locale })}>
-          <ProjectFilter value={filter} onChange={setFilter} />
-          <SearchField value={query} onChange={setQuery} placeholder={t("list.filterPlaceholder")} label={t("list.filterLabel")} />
-        </ListToolbar>
         {rows.length ? (
           <div className="table-frame">
             <table className="data-table skills-table" aria-label={t("list.label")}>
@@ -143,7 +146,7 @@ function SkillsList() {
         help={t("help")}
         actions={<RefreshButton onClick={refresh} refreshing={collection.status === "loading"} label={t("actions.refresh")} />}
       />
-      <PageBody>{body}</PageBody>
+      <PageBody>{toolbar}{body}</PageBody>
       <ConfirmDialog
         open={remove.target !== null}
         title={remove.target ? t("deleteSkill.title", { name: remove.target.value.name }) : ""}

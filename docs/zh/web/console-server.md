@@ -1,7 +1,7 @@
 ---
 title: "控制台服务器"
 source: docs/web/console-server.md
-source_hash: 2cc4b562301d95640d2b653ec522a5407a70a98e1f4e3c1fe89bd246ffd1199e
+source_hash: 993473f539d1c78c5cfbccb112f3594d570b2898a1e324f8b14010ae6be338be
 ---
 
 控制台服务器（`services/web`、`oac-web` 进程）提供构建后的控制台，使用 Core 密钥认证管理员，并将已登录浏览器的 `/core/v1` 请求携带该密钥转发到 Core。浏览器不持有 Core 密钥或任何 API 密钥。应用、节点和自托管执行器经控制台到达 Core，控制台原样转发 `/v1`、`/api/v1` 和 `/docs`。
@@ -64,7 +64,7 @@ flowchart LR
 
 返回时移除 `Set-Cookie`、`WWW-Authenticate`、`Location`、`Refresh` 和所有 `Access-Control-*` 响应头。Core 的重定向或连接失败转换为 502 `core_unreachable`。
 
-控制台不重试请求。浏览器代码通过 [`packages/agents-client`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/packages/agents-client/README.md) 的类型化客户端调用 `/core/v1`；[控制台 API 使用](console-api-usage.md)列出各页面读写内容。
+控制台服务器不重试请求。浏览器代码通过 [`packages/agents-client`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/packages/agents-client/README.md) 的类型化客户端调用 `/core/v1`；[控制台 API 使用](console-api-usage.md)列出各页面读写内容。
 
 ## 登录 {#sign-in}
 
@@ -91,7 +91,7 @@ flowchart LR
 | 字段 | 含义 |
 | --- | --- |
 | `node_installer` | 控制台是否提供节点安装文件 |
-| `node_installer_sha256` | 文件中 `node-install.pyz` 的 SHA-256；Add node 命令执行安装程序前验证它 |
+| `node_installer_sha256` | 文件中 `node-install.pyz` 的 SHA-256；**添加节点** 命令执行安装程序前验证它 |
 | `node_artifacts` | 文件中包含节点资产的提供商（`docker`、`microsandbox`），资产在本地或通过固定发行下载提供。每次请求都读取，因此重新运行安装程序新增的资产无需重启即可出现 |
 
 ## 节点安装文件 {#node-installation-payload}
@@ -108,7 +108,7 @@ flowchart LR
 
 1. 控制台与 Core 的 `GET /healthz`。各自只证明进程响应。
 2. 登录后在浏览器读取 `GET /core/v1/projects`。这证明浏览器到控制台、控制台到 Core 的路径和控制台 Core 密钥有效。
-3. Project API 密钥在 `/v1` 有效，在 `/core/v1` 失败。Core 密钥在 `/v1` 失败；发给控制台的 `/v1` 返回 404。
+3. 项目 API 密钥在 `/v1` 有效，在 `/core/v1` 失败。Core 密钥在 `/v1` 失败；发给控制台的 `/v1` 返回 404。
 4. 跨来源控制台写入被拒绝，伪造 `X-Core-Console-Actor` 请求头不会改变审计标签。
 5. 登录成功或读取沙箱部署（`GET /core/v1/sandbox/deployment`）均不能证明模型或沙箱就绪。Runtime 观察与历史独立报告执行情况。
 

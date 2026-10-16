@@ -6,11 +6,11 @@ test.afterEach(async ({ request }) => expectManagementBoundary(request));
 
 test("adds a node: host requirements, a root/sudo command, a countdown, the same command after closing, a new one after expiry, then its own node's registration", async ({ page, request }) => {
   await page.clock.install();
-  // Core counts a token's ten minutes on its own clock; the page's clock stands in for it, so fast-forwarding expires a command.
+  // Core counts a token's hour on its own clock; the page's clock stands in for it, so fast-forwarding expires a command.
   await page.route("**/core/v1/sandbox/enrollment-tokens", async (route) => {
     const response = await route.fetch();
     const now = await page.evaluate(() => Date.now());
-    await route.fulfill({ response, json: { ...await response.json(), expires_at: new Date(now + 10 * 60_000).toISOString() } });
+    await route.fulfill({ response, json: { ...await response.json(), expires_at: new Date(now + 60 * 60_000).toISOString() } });
   });
   await openConsole(page, request, "nodes");
   await page.getByRole("button", { name: "Add node" }).click();
@@ -19,7 +19,7 @@ test("adds a node: host requirements, a root/sudo command, a countdown, the same
   await expect(add.getByText("What the sandbox backend needs on the host; the installer checks it and names anything missing")).toBeVisible();
   await expect(add.getByText("SELinux is not enforcing")).toBeVisible();
   await expect(add.getByText("In sudo mode, one Core per host: a host already running a sudo-mode node for another Core is refused.")).toBeVisible();
-  await expect(add.getByText("CPUs and memory for at least one sandbox: 2 CPU · 4 GiB; about 2 GB of disk for the Runtime image")).toBeVisible();
+  await expect(add.getByText("CPUs and memory for at least one sandbox: 2 CPU · 4 GiB; about 3 GB of free disk while the Runtime image installs")).toBeVisible();
   await expect(add.getByText("Reaches https://core.example.com, as do its sandboxes")).toBeVisible();
   // Node installation only offers a system service; there is no user-mode alternative.
   await expect(add.getByText("No sudo on this host?")).toHaveCount(0);
@@ -39,7 +39,7 @@ test("adds a node: host requirements, a root/sudo command, a countdown, the same
   await expect(field).toHaveValue(/curl [^\n]* 'https:\/\/core\.example\.com\/node-install\/node-install\.pyz' /);
   await expect(field).toHaveValue(/ --source-url 'https:\/\/core\.example\.com' --core-url 'https:\/\/core\.example\.com' /);
   await expect(add.getByText("If the command is interrupted or the download stalls, run it again: unfinished downloads restart, and verified files are reused.")).toBeVisible();
-  await expect(add.getByRole("timer")).toHaveText(/^Expires in (10:00|9:\d\d)$/);
+  await expect(add.getByRole("timer")).toHaveText(/^Expires in (1:00:00|59:\d\d)$/);
   const progress = add.getByRole("status", { name: "Registration progress" });
   await expect(progress).toHaveText(/Waiting for registration.*Connect.*Docker check/);
 
@@ -55,7 +55,7 @@ test("adds a node: host requirements, a root/sudo command, a countdown, the same
   await expect(progress).toHaveText(/Waiting for registration.*Connect.*Docker check/);
 
   // Once expired, a new command is issued only on request, for the same limits.
-  await page.clock.fastForward("10:30");
+  await page.clock.fastForward("01:00:30");
   await expect(progress).toContainText("Command expired");
   await expect(field).toBeHidden();
   const reissued = tokenRequest();
@@ -69,7 +69,7 @@ test("adds a node: host requirements, a root/sudo command, a countdown, the same
   await add.getByRole("button", { name: "Close dialog" }).click();
   await expect(add).toBeHidden();
   await setNode(request, { id: "node-new", name: "edge-04" });
-  await page.clock.fastForward("10:30");
+  await page.clock.fastForward("01:00:30");
   // Every render from the reopening on is watched, so even a brief "Command expired" would count.
   await page.evaluate(() => {
     const watch = window as unknown as { expiredShown: boolean; expiredWatch: MutationObserver };
@@ -112,7 +112,7 @@ test("issues no command before the installation is read, for a loopback public U
     await held;
     await route.fulfill({ status: 500, json: { error: { message: "Unavailable.", type: "server_error", code: null, param: null } } });
   });
-  await openConsole(page, request, "settings?id=sandbox", { installation: "local" });
+  await openConsole(page, request, "nodes", { installation: "local" });
   await page.getByRole("button", { name: "Add node" }).click();
   const add = page.getByRole("dialog", { name: "Add node" });
   await expect(add.getByRole("status")).toHaveText("Checking this installation's public URL…");
@@ -161,6 +161,13 @@ test("removes a node after confirmation", async ({ page, request }) => {
   await cleanup.getByRole("button", { name: "Done" }).click();
   await expect(cleanup).toBeHidden();
   await expect(page.getByRole("heading", { name: "Nodes", level: 1 })).toBeFocused();
+});
+
+test("gives a host's uninstall command at any time from Clean up a host", async ({ page, request }) => {
+  await openConsole(page, request, "nodes");
+  await page.getByRole("button", { name: "Clean up a host" }).click();
+  const cleanup = page.getByRole("dialog", { name: "Clean up the host" });
+  await expect(cleanup.getByLabel("Uninstall command", { exact: true })).toHaveValue(/--uninstall --installation-id '7f3c2a90-5b1e-4c2d-9e3f-0a1b2c3d4e5f'\)$/);
 });
 
 test("marks a node on an old Core address in its row, beside each node's limit", async ({ page, request }) => {
@@ -247,7 +254,7 @@ test("saves E2B without opening Add node, as it has no machines", async ({ page,
   await expect(page.getByLabel("E2B provider")).toHaveValue("sandbase");
   await expect(page.getByLabel("Sandbox API URL")).toHaveValue("https://sandbox.sandbase.ai");
   await expect(page.getByLabel("Sandbox data-plane domain")).toHaveValue("sandbox.sandbase.ai");
-  const keyConsole = page.getByRole("link", { name: "Console → API Keys" });
+  const keyConsole = page.getByRole("link", { name: "Console → API keys" });
   await expect(keyConsole.locator("..")).toHaveClass(/field-label-row/);
   await expect(keyConsole).toHaveCSS("font-size", "11px");
   await expect(keyConsole).toHaveAttribute("href", "https://www.sandbase.ai/console/keys");
@@ -272,7 +279,7 @@ test("uses the official E2B preset and clears a selected build when the key chan
   await page.getByLabel("E2B provider").selectOption("official");
   await expect(page.getByLabel("Sandbox API URL")).toHaveValue("https://api.e2b.app");
   await expect(page.getByLabel("Sandbox data-plane domain")).toHaveValue("e2b.app");
-  const keyConsole = page.getByRole("link", { name: "Console → API Keys" });
+  const keyConsole = page.getByRole("link", { name: "Console → API keys" });
   await expect(keyConsole).toHaveAttribute("href", "https://e2b.dev/dashboard?tab=api-keys");
   await page.getByLabel("Sandbox API URL").fill("https://custom.e2b.app");
   await expect(keyConsole).toHaveCount(0);
@@ -351,7 +358,7 @@ test("keeps the page usable when Core refuses a sandbox change, and shows a safe
 
 test("renames a node and sets how many sandboxes run on it at once", async ({ page, request }) => {
   await openConsole(page, request, "nodes");
-  // Nodes links to the sole capacity editor in Settings.
+  // Nodes owns each node's limits and their editor.
   const capacity = page.getByRole("table", { name: "Sandbox nodes" });
   await expect(capacity).toContainText("Active / limit");
   await expect(capacity).toContainText("5 / 8");
@@ -361,23 +368,7 @@ test("renames a node and sets how many sandboxes run on it at once", async ({ pa
   await edit.getByLabel("Sandboxes at once").fill("6");
   await edit.getByRole("button", { name: "Save" }).click();
   await expect(edit).toBeHidden();
-  await expect(page.getByRole("region", { name: "Sandbox nodes", exact: true })).toContainText("core-01-large");
-  await expect(page.getByRole("region", { name: "Sandbox nodes", exact: true })).toContainText("5 / 6");
+  await expect(capacity).toContainText("core-01-large");
+  await expect(capacity).toContainText("5 / 6");
 });
 
-
-test("node settings history follows the selected node URL", async ({ page, request }) => {
-  await openConsole(page, request, "nodes");
-  await page.getByRole("row").filter({ hasText: "core-01" }).getByRole("button", { name: "Edit node", exact: true }).click();
-  const editor = page.getByRole("dialog", { name: "Edit node", exact: true });
-  await expect(editor).toBeVisible();
-  await expect(page).toHaveURL(/#settings\?id=sandbox&node=/);
-  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(editor).toBeHidden();
-  await page.goBack();
-  await expect(editor).toBeVisible();
-  await page.goForward();
-  await expect(page).toHaveURL(/#settings\?id=sandbox$/);
-  await expect(editor).toBeHidden();
-  expect(await writes(request)).toEqual([]);
-});
