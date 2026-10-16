@@ -179,10 +179,20 @@ func TestWorkspaceExportObservationBoundaries(t *testing.T) {
 			if row["session_id"] != "session" || row["turn_id"] != "turn" || row["capture_id"] == "" || row["export_id"] == "" {
 				t.Fatal("missing identity")
 			}
-			if row["round_count"] != float64(requests) {
+			sentRequests := requests
+			if mode == "consume_failure" {
+				// One next request is prefetched before the consumer fails. It
+				// has no consumed receipt, so retain an unknown round rather
+				// than inventing a dispatch timestamp or hiding the request.
+				sentRequests++
+				if row["request_send_to_receipt_dispatch_unknown_count"] != float64(1) {
+					t.Fatal("missing abandoned prefetch round", row)
+				}
+			}
+			if row["round_count"] != float64(sentRequests) {
 				t.Fatal("missing rounds", row)
 			}
-			if row["begin_count"] != float64(1) || row["next_count"] != float64(requests-1) || row["receipt_wait_count"] != float64(requests) {
+			if row["begin_count"] != float64(1) || row["next_count"] != float64(sentRequests-1) || row["receipt_wait_count"] != float64(requests) {
 				t.Fatalf("request counts: %v", row)
 			}
 			if row["completed"] != !failed {

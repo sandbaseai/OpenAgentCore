@@ -20,7 +20,7 @@ func (d *Dispatcher) captureCompletedArtifacts(ctx context.Context, peer *runtim
 		observeArtifactSkip(ctx, session.ID, turnID, "workspace_not_local")
 		return result, status
 	}
-	owner, cancel := context.WithTimeout(ctx, 180*time.Second)
+	owner, cancel := context.WithTimeout(ctx, proto.WorkspaceExportTimeout)
 	defer cancel()
 	owner = withArtifactObservation(owner, session.ID, turnID)
 	captureStarted := time.Now()
