@@ -64,7 +64,7 @@ Restrict the repository’s `production` GitHub Environment to deployments from 
 | `OAC_K8S_INSECURE` | `true` skips API server certificate verification, for an address the certificate does not name. Leave it unset otherwise |
 | `OAC_DEPLOY_RUNNER` | Runner label; `ubuntu-22.04` by default. Set this one at repository level: the job that pins the commit runs before the environment is entered, so an environment-scoped value does not reach it |
 | `OAC_CORE_CPU_REQUEST`, `OAC_CORE_CPU_LIMIT`, `OAC_CORE_MEMORY_REQUEST`, `OAC_CORE_MEMORY_LIMIT` | Core's resources; `500m`, `2`, `1Gi` and `4Gi` by default |
-| `OAC_HARNESSES`, `OAC_DEFAULT_HARNESS`, `OAC_EXECUTION_CONCURRENCY`, `OAC_WRITE_AUDIT_RETENTION`, `OAC_LOG_LEVEL` | The matching [process settings](../../docs/configuration.md#settings), which define their values and defaults |
+| `OAC_HARNESSES`, `OAC_DEFAULT_HARNESS`, `OAC_EXECUTION_CONCURRENCY`, `OAC_TURN_AUTO_RETRIES`, `OAC_WRITE_AUDIT_RETENTION`, `OAC_LOG_LEVEL` | The matching [process settings](../../docs/configuration.md#settings), which define their values and defaults |
 
 A change to any of these takes effect on the next run: a digest of the environment and the secrets enters both Pod templates, so the Pods are replaced even when the images are unchanged.
 

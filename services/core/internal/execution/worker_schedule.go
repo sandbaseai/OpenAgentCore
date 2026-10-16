@@ -113,6 +113,7 @@ func (w *Worker) runEnvironmentInput(ctx context.Context, item scheduledWork) er
 		w.schedulingObservations.finish(ctx, item.observation, outcome)
 	}
 	if err == nil {
+		w.maybeAutoRetry(ctx, item.TenantID, run.Turn)
 		return nil
 	}
 	if errors.Is(err, errPreparationFailed) && run.Reservation.State == sessions.EnvironmentInputPending {

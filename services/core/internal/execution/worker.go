@@ -389,8 +389,12 @@ func (w *Worker) reconcile(ctx context.Context) error {
 }
 
 func (w *Worker) runClaim(ctx context.Context, item sessions.ExecutionWork) error {
-	_, err := w.dispatcher.Run(ctx, item.TenantID, item.SessionID, item.TurnID)
-	if err == nil || errors.Is(err, sessions.ErrTurnConflict) {
+	ran, err := w.dispatcher.Run(ctx, item.TenantID, item.SessionID, item.TurnID)
+	if err == nil {
+		w.maybeAutoRetry(ctx, item.TenantID, ran)
+		return nil
+	}
+	if errors.Is(err, sessions.ErrTurnConflict) {
 		return nil
 	}
 	var rejection *preparationRejection
