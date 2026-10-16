@@ -11,6 +11,9 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
+// DefaultTurnAutoRetries is the OAC_TURN_AUTO_RETRIES value used when it is unset or empty.
+const DefaultTurnAutoRetries = 3
+
 // MaxTurnAutoRetries bounds OAC_TURN_AUTO_RETRIES; zero turns the feature off.
 const MaxTurnAutoRetries = 5
 

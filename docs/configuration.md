@@ -53,7 +53,7 @@ Model providers are not process settings; see [Default models](#default-models).
 | `OAC_EXECUTION_CONCURRENCY` | `4` | Concurrent execution work, from 1 to 1024 |
 | `OAC_SANDBOX_MAX_ACTIVE` | `100` | Active sandbox limit for direct Providers with suspension, from 1 to 100000. Independent of execution concurrency and node capacity |
 | `OAC_SANDBOX_MAX_RETAINED` | `400` | Retained sandbox limit for direct Providers, from 1 to 100000, including active, suspended and unconfirmed cleanup. Must be at least the active limit |
-| `OAC_TURN_AUTO_RETRIES` | `0` | Automatic retries of a Turn that failed on a recoverable model or tool error, from 0 to 5. `0` turns it off |
+| `OAC_TURN_AUTO_RETRIES` | `3` | Automatic retries of a Turn that failed on a recoverable model or tool error, from 0 to 5. `0` turns it off |
 | `OAC_DEFAULT_HARNESS` | `codex` | Harness used when a request does not name one |
 | `OAC_HARNESSES` | Every registered Harness | Comma-separated Harnesses to enable besides the default one. Unknown names stop startup |
 | `OAC_WRITE_AUDIT_RETENTION` | `2160h` | Minimum `1h` |

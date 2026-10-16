@@ -180,7 +180,7 @@ func (c Config) Settings() []api.InstallationSetting {
 		setting("OAC_LOG_FORMAT", format, "auto", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_LOG_ADD_SOURCE", c.Log.AddSource, false, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_EXECUTION_CONCURRENCY", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
-		setting("OAC_TURN_AUTO_RETRIES", c.TurnAutoRetries, 0, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_TURN_AUTO_RETRIES", c.TurnAutoRetries, execution.DefaultTurnAutoRetries, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_HARNESSES", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
 		setting("OAC_DEFAULT_HARNESS", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_WRITE_AUDIT_RETENTION", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
@@ -279,7 +279,7 @@ func executionConcurrency() (int, error) {
 func turnAutoRetries() (int, error) {
 	value := os.Getenv("OAC_TURN_AUTO_RETRIES")
 	if value == "" {
-		return 0, nil
+		return execution.DefaultTurnAutoRetries, nil
 	}
 	limit, err := strconv.Atoi(value)
 	if err != nil || limit < 0 || limit > execution.MaxTurnAutoRetries {
