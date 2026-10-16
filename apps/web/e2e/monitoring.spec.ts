@@ -10,9 +10,13 @@ test.afterEach(async ({ request }) => expectManagementBoundary(request));
 test("shows the deployment's health on Overview and each monitor page", async ({ page, request }) => {
   await openConsole(page, request, "overview");
   await expect(page.getByRole("article").filter({ hasText: "Service status" })).toContainText("Degraded");
+  // A node row opens that node's page on Nodes.
   await page.getByRole("button", { name: /^edge-03, Offline/ }).click();
-  await expect(page.getByRole("dialog", { name: "edge-03" })).toContainText("Available memory");
-  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "edge-03", level: 1 })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Host" })).toContainText("Free disk");
+  // A degraded node names why its provider is not ready.
+  await page.getByRole("button", { name: "Nodes", exact: true }).click();
+  await expect(page.locator(".status-with-help").filter({ hasText: /^Provider not ready/ }).getByRole("button", { name: "Host unsupported", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Core metrics" }).click();
   const core = page.getByLabel("Core summary");
@@ -22,9 +26,8 @@ test("shows the deployment's health on Overview and each monitor page", async ({
   await page.getByRole("button", { name: "Agent metrics" }).click();
   await expect(page.getByLabel("Agent run summary")).toContainText("Requests");
   await page.getByRole("button", { name: "Sandbox metrics" }).click();
-  await expect(page.getByRole("table").first()).toContainText("core-01");
-  // A degraded node names why its provider is not ready.
-  await expect(page.locator(".status-with-help").filter({ hasText: /^Provider not ready/ }).getByRole("button", { name: "Host unsupported", exact: true })).toBeVisible();
+  await page.getByRole("table", { name: "Hosted Runtimes" }).getByRole("button", { name: "Open node core-01" }).first().click();
+  await expect(page.getByRole("heading", { name: "core-01", level: 1 })).toBeVisible();
 });
 
 test("opens a Session's conversation from the Session log, read-only", async ({ page, request }) => {
@@ -69,7 +72,9 @@ test("keeps a failed Session's reason in sight in the Session log and on its pag
   // The reason never widens the table: its last column, Delete, stays in view without scrolling sideways.
   await expect(row.getByRole("button", { name: /^Delete Session / })).toBeInViewport();
   await row.getByRole("button", { name: /^Open Session / }).click();
-  await expect(page.getByLabel("Session facts")).toContainText(reason);
+  // The Status fact stays short; the reason reads under the facts.
+  await expect(page.getByLabel("Session facts")).not.toContainText(reason);
+  await expect(page.getByRole("region", { name: "Failure details" })).toContainText(reason);
   await page.getByRole("button", { name: /^Jump to (the|a) failed Turn/ }).click();
   await expect(page.locator("li.chat-turn:focus")).toContainText("Failed");
 });
@@ -103,11 +108,11 @@ test("shows a self-hosted Session's install command, issues its credential once,
 
   // Web displays Core-provided commands with short-lived installation authority.
   const install = section.getByRole("region", { name: "Connect a host" });
-  await expect(install.getByLabel("Executor install command").locator("pre")).toHaveText("bash fixture-bootstrap --authorization fixture-short-lived");
-  await expect(install.getByRole("link")).toHaveAttribute("href", /docs\/getting-started\/self-hosted.md$/);
+  await expect(install.getByLabel("Executor install command").locator("pre")).toHaveText(" OAC_INSTALL_GRANT=fixture-short-lived bash fixture-bootstrap");
+  await expect(install.getByRole("link")).toHaveAttribute("href", "https://openagentcore.dev/docs/getting-started/self-hosted");
   await install.getByRole("combobox", { name: "Host platform" }).click();
   await page.getByRole("option", { name: "Windows · PowerShell" }).click();
-  await expect(install.locator("pre")).toContainText("fixture-bootstrap.ps1 -Authorization fixture-short-lived");
+  await expect(install.locator("pre")).toContainText("$env:OAC_INSTALL_GRANT='fixture-short-lived'; & fixture-bootstrap.ps1");
   await install.screenshot({ path: test.info().outputPath("native-host.png") });
 
   await section.getByRole("button", { name: "Issue credential" }).click();
@@ -227,16 +232,15 @@ test("issues a new executor credential after the unanswered one was rotated from
   await expect(page.getByRole("dialog", { name: "Executor credential" }).getByLabel("Executor credential file")).toContainText("exec_fixture_");
 });
 
-test("opens a node and a sandbox in dialogs from Sandbox metrics", async ({ page, request }) => {
-  await openConsole(page, request, "sandbox-metrics");
-  await page.getByRole("button", { name: "Show core-01" }).click();
-  const node = page.getByRole("dialog", { name: "core-01" });
-  // The machine's own load, from its heartbeats, beside the sandboxes placed on it.
-  await expect(node.getByLabel("Node figures")).toContainText("35% of 16 cores");
-  await expect(node.getByRole("figure", { name: /^Host CPU/ })).toBeVisible();
-  await expect(node).toContainText("Hosted sandboxes on this node");
-  await node.getByRole("button", { name: "Close dialog" }).click();
+test("shows a node's host on Nodes and opens a sandbox in a dialog from Sandbox metrics", async ({ page, request }) => {
+  await openConsole(page, request, "nodes");
+  await page.getByRole("button", { name: "Open core-01", exact: true }).click();
+  // The machine's own load, from its heartbeats.
+  const host = page.getByRole("region", { name: "Host" });
+  await expect(host).toContainText("35% of 16 CPU");
+  await expect(host.getByRole("figure", { name: /^Host CPU/ })).toBeVisible();
 
+  await page.getByRole("button", { name: "Sandbox metrics", exact: true }).click();
   await page.getByRole("button", { name: /^Show sandbox of / }).first().click();
   const sandbox = page.getByRole("dialog").filter({ has: page.getByRole("button", { name: "Open Session" }) });
   await expect(sandbox.getByLabel("Sandbox")).toContainText("Node");

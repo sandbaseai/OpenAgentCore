@@ -1,7 +1,7 @@
 ---
 title: "模型执行"
 source: contracts/agents-api/model-execution.md
-source_hash: 92f743c0ada60d86a2a107eb6528a9c6d89e7db2e664f522a99ad3711a53f9e8
+source_hash: d26140f4fdaa6d0c68dbeff52a2318ed213799966b224302eb04b9ec718f5fc3
 ---
 
 每个 Session 都运行一个 Harness，并使用一个模型提供商。Core 通过三个固定版本上游协议未定义的 Core 扩展来选择它们：`x_agents_core.harness` 选择 Harness，`x_agents_core.model_provider` 提供端点和密钥，`x_agents_core.harness_config` 携带原生模型参数。Core 没有提供商目录、模型别名解析或产品权限模型；除 Session 和已保存 Agent 配置包外，唯一存储的配置包是每个 Harness 的一个 [deployment default](#deployment-defaults)。本文档定义 Harness—模型提供商协议：[`internal/modelprovider/config.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/modelprovider/config.go) 负责验证冻结的提供商连接，每个 Harness 则通过 [`internal/harnessconfig/harness.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/harnessconfig/harness.go) 声明其协议和原生参数。
@@ -12,7 +12,7 @@ source_hash: 92f743c0ada60d86a2a107eb6528a9c6d89e7db2e664f522a99ad3711a53f9e8
 {"x_agents_core": {"harness": "claude_sdk"}}
 ```
 
-已保存 Agent 在创建、更新和读取时接受 `x_agents_core.harness`，Session 则在内联的 `agent.x_agents_core` 中接受它。标识符来自 [Harness catalog](harness-catalog.md)；未知标识符和未知嵌套字段均会被拒绝，空的内联 Session 扩展也会被拒绝。部署启用哪些 Harness 及其默认值由进程设置 `core.harnesses` 和 `core.default_harness` 决定（[configuration](../../../docs/zh/configuration.md#settings)）。
+已保存 Agent 在创建、更新和读取时接受 `x_agents_core.harness`，Session 则在内联的 `agent.x_agents_core` 中接受它。标识符来自 [Harness catalog](harness-catalog.md)；未知标识符和未知嵌套字段均会被拒绝，空的内联 Session 扩展也会被拒绝。部署启用哪些 Harness 及其默认值由进程设置 `OAC_HARNESSES` 和 `OAC_DEFAULT_HARNESS` 决定（[configuration](../../../docs/zh/configuration.md#settings)）。
 
 - 省略：Session 继承其已保存 Agent 的 Harness；内联 Agent 使用部署默认 Harness。
 - Session 的内联扩展显式为 null：重置为部署默认 Harness，同时保留继承的提供商配置包。对于已保存 Agent，null 扩展会清除其 Harness 和提供商。
@@ -20,11 +20,11 @@ source_hash: 92f743c0ada60d86a2a107eb6528a9c6d89e7db2e664f522a99ad3711a53f9e8
 - 创建 Session 时，Core 在处理已保存 Agent 的覆盖值后解析该选择，验证 Harness 配置文件，并将结果存储为 Session 的引擎。当生效的 Agent 包含该扩展时，Session 读取结果会报告它；其他 Session 保持官方 Agent 结构。读取操作从不查询当前 Agent 或部署默认值。
 - 使用显式选择器重试创建时会保留调用方意图；在已有 Idempotency-Key 下更改选择器会产生冲突。
 
-Session 的 `environment` 和 Environment Templates 用于选择准备流程，而不是 Harness 或提供商。该扩展仅在 `contracts/agents-api/v1` 中定义一次；校验器从目录派生，任何处理程序或 schema 都不会维护自己的名称列表。
+Session 的 `environment` 和 Environment 模板用于选择准备流程，而不是 Harness 或提供商。该扩展仅在 `contracts/agents-api/v1` 中定义一次；校验器从目录派生，任何处理程序或 schema 都不会维护自己的名称列表。
 
 ## 已保存默认值与优先级 {#saved-defaults-and-precedence}
 
-已保存 Agent 是可编辑配置，而不是绑定的运行时。创建或更新时，应提供 `model`、可选的 `x_agents_core.harness` 以及可选但完整的 `x_agents_core.model_provider`。响应仅返回安全的提供商字段和只读输出标志 `api_key_configured`，绝不返回 `api_key`、密文或可复用的凭据引用。Agent JSON 仅存储安全视图；密钥配置包拥有自己加密后的数据库行，使用独立的加密用途绑定到 Project 和 Agent，并与 Agent 在同一事务中写入。仅编辑模型时不需要密钥。
+已保存 Agent 是可编辑配置，而不是绑定的运行时。创建或更新时，应提供 `model`、可选的 `x_agents_core.harness` 以及可选但完整的 `x_agents_core.model_provider`。响应仅返回安全的提供商字段和只读输出标志 `api_key_configured`，绝不返回 `api_key`、密文或可复用的凭据引用。Agent JSON 仅存储安全视图；密钥配置包拥有自己加密后的数据库行，使用独立的加密用途绑定到项目和 Agent，并与 Agent 在同一事务中写入。仅编辑模型时不需要密钥。
 
 创建 Session 时，Core 会先解析每个显式的模型或 Harness 覆盖值，再应用已保存默认值；未选择 Harness 时，应用部署默认值。已保存 Agent 必须指定模型。内联 `openai_hosted` 或 `none` Session 可以省略模型，以使用解析后 Harness 的部署模型；`self_hosted` 绝不会使用部署模型设置。Core 绝不会根据模型名称推断模型。
 
@@ -90,7 +90,7 @@ Core 从同一个数据库快照读取 Agent 配置和加密配置包；显式�
 
 不受支持的协议、Harness 或 Environment 组合会在创建 Session 前被拒绝。提供商可用性在执行期间检查，而不是通过探测检查。
 
-解析后的提供商配置会在 Session 创建事务中被冻结并加密，使用自己的加密用途，并绑定到 Project 和 Session。创建重试会将其纳入请求哈希，因此使用相同 Idempotency-Key 时，更改密钥或端点会产生冲突；密钥进入任何存储哈希时，只会表现为由部署凭据密钥加键控的指纹。任何公开的 Session、Agent、Environment、事件或常规配置均不包含该密钥。顶层扩展仅可写入，无法更新。
+解析后的提供商配置会在 Session 创建事务中被冻结并加密，使用自己的加密用途，并绑定到项目和 Session。创建重试会将其纳入请求哈希，因此使用相同 Idempotency-Key 时，更改密钥或端点会产生冲突；密钥进入任何存储哈希时，只会表现为由部署凭据密钥加键控的指纹。任何公开的 Session、Agent、Environment、事件或常规配置均不包含该密钥。顶层扩展仅可写入，无法更新。
 
 在分派时，Core 会通过绑定到 Session 的 daemon 连接，将快照作为一个机密提供商配置包发送出去；适配器会原生应用该配置并直接连接提供商。快照缺失或无法解密时，Core 绝不会回退到其他凭据。对于 `self_hosted`，接收方 daemon 是为该 Session 自身 Environment 注册的执行器，并持有 Session 创建者主体的当前执行器凭据；凭据轮换或吊销会在继续分派前关闭套接字。执行器主机将该配置包存放在其原生 Harness home 中，与托管 Runtime 的做法相同。原生工具以启动账户的权限运行，并且可以读取该账户有权读取的内容；吊销凭据不会擦除已经交付的配置包。
 
@@ -102,7 +102,7 @@ Core 从同一个数据库快照读取 Agent 配置和加密配置包；显式�
 | --- | --- | --- |
 | Codex | `model_reasoning_effort`：`none`、`minimal`、`low`、`medium`、`high`、`xhigh` | App-server `-c model_reasoning_effort=...` 以及每个 Turn 的 `collaborationMode.settings.reasoning_effort` |
 | Claude SDK | `effort`：`low`、`medium`、`high`、`xhigh`、`max`；`thinking`：SDK 的 `adaptive`、`enabled` 或 `disabled` 对象 | SDK `Options.effort` 和 `Options.thinking` |
-| MiniMax Code | 仅空对象 | 仍必须提供提供商 token 限制 |
+| MiniMax Code | 仅空对象 | 仍必须给出提供商 token 限制 |
 
 对于 `adaptive` 和 `enabled`，Claude `thinking` 接受 `display`（`summarized` 或 `omitted`）；只有 `enabled` 接受正整数 `budgetTokens`；拒绝 `maxThinkingTokens`。这些是原生设置，而不是通用推理词汇表；模型可用性和提供商支持均由 Harness 负责。
 
@@ -125,7 +125,7 @@ PUT 要求提供 `model` 和完整的 `model_provider`；`harness_config` 默认
 
 创建 Session 时，Core 会解密解析后 Harness 的默认值，并像处理其他配置包一样将其冻结在 Session 的加密快照中，因此更改或移除默认值绝不会影响现有 Session。execution-configuration 读取结果会显示冻结的安全视图，其来源为 `deployment`。提供商快照缺失或无效时会安全失败，并且不会回退到其他模型或提供商。
 
-`model_configuration_support` 派生自 Core 和 Runtime 共享的适配器声明：`protocols` 列出可选择的原生协议，并将默认项放在首位；`accepts_harness_config` 表示是否接受原生参数；`token_limits_required` 表示是否必须提供提供商 token 限制。它描述的是构建版本，而不是实时 Runtime 或远程模型。
+`model_configuration_support` 派生自 Core 和 Runtime 共享的适配器声明：`protocols` 列出可选择的原生协议，并将默认项放在首位；`accepts_harness_config` 表示是否接受原生参数；`token_limits_required` 表示是否必须给出提供商 token 限制。它描述的是构建版本，而不是实时 Runtime 或远程模型。
 
 ### 部署默认值观测 {#deployment-default-observations}
 

@@ -6,7 +6,7 @@ Every setting of a Core installation has exactly one home, in one of three categ
 
 | Category | Examples | Home | Change it with | Takes effect |
 | --- | --- | --- | --- | --- |
-| [Process settings](#process-settings) | Public URL, ports, logging, harnesses, execution concurrency, audit retention, OAuth origins, Runtime history | `.env` in the installation directory (default `~/.oac/core`) | Edit `.env`, then run `oac apply` | `oac apply` recreates the services that read the changed settings |
+| [Process settings](#process-settings) | Public URL, ports, logging, Harnesses, execution concurrency, audit retention, OAuth origins, Runtime history | `.env` in the installation directory (default `~/.oac/core`) | Edit `.env`, then run `oac apply` | `oac apply` recreates the services that read the changed settings |
 | [Secrets](#compose-installations) | Database password, credential encryption key, installation ID, Core key and the Core key digest derived from it | `secrets/` in the Compose data volume, one copy each | Initialization generates them once; `oac rotate-core-key` replaces the Core key and its digest | `oac rotate-core-key` restarts Core and Web |
 | [Runtime settings](#runtime-settings-web) | Sandbox backend and size, nodes, Projects and keys, default models, executor credentials | Core's PostgreSQL database | Web, or the Core API (`/core/v1`) with the Core key | Saved without a Core restart; nodes prepare Runtime changes asynchronously |
 
@@ -22,8 +22,9 @@ Installer flags in [installation options](./getting-started/install-options.md) 
 
 ### How oac apply works {#how-oac-apply-works}
 
-1. It runs `oac-core check-config` with the `.env` you edited and changes nothing if a value is invalid.
-2. It runs `docker compose up -d --wait`. Compose recreates only the services whose configuration changed.
+1. It runs the `init` service, which checks that the data volume belongs to the installed release and finishes initializing it if the first start stopped early.
+2. It runs `oac-core check-config` with the `.env` you edited and changes no service if a value is invalid.
+3. It runs `docker compose up -d --wait` with the images already on the host. Compose recreates only the services whose configuration changed and removes containers the release no longer defines. If a service does not become healthy, the message names it and the command that prints its log.
 
 Use `docker compose ps` to check the services. See [stop and restart](./getting-started/operations.md#stop-and-restart) for what a restart interrupts.
 
@@ -43,7 +44,7 @@ Model providers are not process settings; see [Default models](#default-models).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OAC_PUBLIC_URL` | Required; `compose.yaml` sets `http://localhost:8080` | Origin applications, nodes, sandboxes and self-hosted executors use. See [changing the public URL](#changing-the-public-url) |
+| `OAC_PUBLIC_URL` | Required; `compose.yaml` sets `http://localhost:` followed by `OAC_WEB_PORT` | Origin applications, nodes, sandboxes and self-hosted executors use. See [changing the public URL](#changing-the-public-url) |
 | `OAC_HOST` | `127.0.0.1` | Web bind address published by `compose.yaml`. The installer sets `0.0.0.0` |
 | `OAC_WEB_PORT` | `8080` | Host port of Web |
 | `OAC_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
@@ -94,14 +95,14 @@ Runtime settings live in Core's database. Change them in Web; scripts use the sa
 | --- | --- | --- | --- |
 | Sandbox backend: Docker, microsandbox or E2B | **Settings** → **Sandbox and scheduling**: the setup wizard, ending with **Save configuration** | `/core/v1/sandbox/deployment` | One backend per installation, chosen after the first sign-in. Another backend needs **Reset deployment** first; see [change the sandbox configuration](./getting-started/nodes.md#change-the-sandbox-configuration) |
 | Sandbox size, Runtime release, E2B key and template build | **Settings** → **Sandbox and scheduling** → **Change resources** | `/core/v1/sandbox/deployment` | Web proposes the [default size the Provider declares](./sandbox-provider.md#register-the-provider-kind). Existing sandboxes keep their size and release. The E2B key is write-only and encrypted |
-| Nodes and their capacity | **Settings → Sandbox and scheduling**: **Add node**; **Sandbox nodes** → **Edit node**. Removal stays on the node's page | `/core/v1/sandbox/enrollment-tokens`, `/core/v1/sandbox/nodes` | See [Node capacity](#node-capacity) and the [nodes guide](./getting-started/nodes.md) |
-| Idle suspension | **Settings** → **Sandbox and scheduling** → **Capacity and suspension** → **Idle before suspension (seconds)** → **Save** | `PATCH /core/v1/sandbox/deployment` | Deployment-wide; see [suspension policy](../contracts/agents-api/sandbox-deployment.md#suspension-policy) |
+| Nodes and their capacity | **Nodes**: **Add node**, **Edit node** and removal | `/core/v1/sandbox/enrollment-tokens`, `/core/v1/sandbox/nodes` | See [Node capacity](#node-capacity) and the [nodes guide](./getting-started/nodes.md) |
+| Idle suspension | **Settings** → **Sandbox and scheduling** → **Automatic suspension** → **Idle before suspension (seconds)** → **Save** | `PATCH /core/v1/sandbox/deployment` | Deployment-wide; see [suspension policy](../contracts/agents-api/sandbox-deployment.md#suspension-policy) |
 | Independent workspace storage and tenant capacity | **Settings → Workspace storage** | `/core/v1/workspace-storage` | See [independent workspace storage](#independent-workspace-storage); existing workspaces retain their configuration |
 | Projects and API keys | **Projects and keys**: **Create project**, **Rename**, **Issue key**, **Revoke**, **Archive** | `/core/v1/projects` | Keys are shown once; Core stores digests |
-| Default model per harness | **Settings** → **Models and credentials**: **Set** | `/core/v1/harnesses/{harness}/model-configuration` | See [Default models](#default-models) |
+| Default model per Harness | **Settings** → **Models and credentials**: **Set** | `/core/v1/harnesses/{harness}/model-configuration` | See [Default models](#default-models) |
 | Executor credentials of a self-hosted Session | **Session log**, then the **Session** page: **Executor credentials** | `/core/v1/projects/{project_id}/environments/{environment_id}/executor-credentials` | See [self-hosted executors](./getting-started/self-hosted.md) |
 
-Which harnesses are enabled, and the default one, are process settings (`core.harnesses`, `core.default_harness`); **Settings → Models and credentials** shows them read-only. The [Core administration API](../contracts/agents-api/admin-api.md) lists every Core API route, and the [deployment contract](../contracts/agents-api/sandbox-deployment.md) defines the sandbox fields, limits and change rules.
+Which Harnesses are enabled, and the default one, are process settings (`OAC_HARNESSES`, `OAC_DEFAULT_HARNESS`); **Settings → Service and deployment** lists them under **Startup settings**. **Settings → Models and credentials** marks each Harness **Ready** once it is enabled and has a default model, and otherwise names the missing step: **Model provider not set** or **Disabled**. The [Core administration API](../contracts/agents-api/admin-api.md) lists every Core API route, and the [deployment contract](../contracts/agents-api/sandbox-deployment.md) defines the sandbox fields, limits and change rules.
 
 ### Independent workspace storage
 
@@ -144,7 +145,7 @@ Then create or update the microsandbox deployment through the [sandbox deploymen
 
 The storage form accepts the adapter identifier, its parameters as a JSON object and an optional write-only credential JSON object. Core validates these adapter-owned values; Web does not define provider-specific storage fields. **Edit tenant capacity** keeps the selected immutable configuration. Selecting another configuration requires a new ID and does not migrate existing workspaces.
 
-After the filesystem and deployment are selected, use **Settings → Sandbox and scheduling → Add node** to enroll the prepared hosts. Connected, ready compute alone does not qualify an external filesystem; validate actual Session creation and access through each participating node before admitting application traffic. Include the independent namespace in the [stopped-write backup and restore procedure](./getting-started/operations.md#back-up).
+After the filesystem and deployment are selected, use **Nodes → Add node** to enroll the prepared hosts. Connected, ready compute alone does not qualify an external filesystem; validate actual Session creation and access through each participating node before admitting application traffic. Include the independent namespace in the [stopped-write backup and restore procedure](./getting-started/operations.md#back-up).
 
 #### Quota mode storage server
 
@@ -196,9 +197,9 @@ The policy bounds what each tenant can commit, not the filesystem. Size the XFS 
 
 ### Node capacity
 
-Core approves a node's capacity when you generate its Add node command: **Sandboxes at once** (`max_active`, default 2) and, for microsandbox only, **Retained sandboxes** (`max_retained`, default 8), with `max_retained >= max_active >= 1`. Docker never suspends sandboxes, so Web doesn't ask for it and Core keeps `max_retained` equal to `max_active`. Change them later in **Settings → Sandbox and scheduling → Sandbox nodes** with **Edit node**. Reservations and cleanup that is not confirmed count against capacity; lowering a limit stops no running sandbox. A node's own files can't change its capacity, size or Runtime.
+Core approves a node's capacity when you generate its Add node command: **Sandboxes at once** (`max_active`, default 2) and, for microsandbox only, **Retained sandboxes** (`max_retained`, default 8), with `max_retained >= max_active >= 1`. Docker never suspends sandboxes, so Web doesn't ask for it and Core keeps `max_retained` equal to `max_active`. Change them later on **Nodes** with **Edit node**. Reservations and cleanup that is not confirmed count against capacity; lowering a limit stops no running sandbox. A node's own files can't change its capacity, size or Runtime.
 
-`core.execution_concurrency` is unrelated: it limits concurrent execution work in Core.
+`OAC_EXECUTION_CONCURRENCY` is unrelated: it limits concurrent execution work in Core.
 
 ### Default models
 
@@ -244,7 +245,8 @@ The installer creates `~/.oac/core` by default (`$HOME/.oac/core` on Windows). I
 | Path | Content | Changed by |
 | --- | --- | --- |
 | `.env` | Process settings and the stable Compose project name | You, then `oac apply` |
-| `compose.yaml`, `compose-sha256sums.txt` | Verified release service definition | The release |
+| `compose.yaml` | Verified release service definition | The installer, when it installs or [upgrades](./getting-started/operations.md#upgrade) |
+| `compose.override.yaml` | Optional local Compose entries. For a source bundle it is JSON and also holds the four service images and Web's `/node-payload` bind | You. `install.py` replaces only its own entries and requires JSON |
 | `oac` (`oac.exe` on Windows) | Native management command | The installer |
 
 The sibling `<install-dir>.lock` directory remains for synchronization; `<install-dir>.staging` holds unpublished installation files. Neither contains service data. On Unix the installer creates private directories with mode `0700` and configuration files with mode `0600`.
@@ -258,7 +260,7 @@ Core reads its process environment. Compose interpolates `.env` into it and moun
 | Variable | Set from |
 | --- | --- |
 | `OAC_PUBLIC_URL` | Required. The [public URL](#settings). Core validates it once and derives the Agents API base, the daemon WebSocket URL, the self-hosted `remote_url`, the installer downloads, the hosted sandbox address and the deployment's read-only `core_url` from it, never from request headers |
-| `OAC_ADDR` | The image sets `:8091`. Independently started Core defaults to `127.0.0.1:8091` when unset or empty |
+| `OAC_ADDR` | The image sets `:8091`. Independently started Core defaults to `127.0.0.1:8091` when unset or empty. `oac-core healthcheck` probes its `/healthz` on `127.0.0.1` when its host is empty or unspecified |
 | `OAC_DATABASE_URL` | Required. PostgreSQL without a password |
 | `OAC_DATABASE_PASSWORD_FILE` | `/run/database/password`. The URL must then carry no password |
 | `OAC_CREDENTIAL_KEY_FILE` | Required. `/run/oac/credential.key`: a base64-encoded random 32-byte key. Core seals stored credentials with it |
@@ -277,9 +279,9 @@ Compose sets these for Web. Set them yourself only when you run the console with
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OAC_WEB_ADDR` | `:8080` | Listener address. The healthcheck probes it on `127.0.0.1` when its host is empty or unspecified |
+| `OAC_WEB_ADDR` | `:8080` | Listener address. `oac-web healthcheck` probes its `/healthz` on `127.0.0.1` when its host is empty or unspecified |
 | `OAC_PUBLIC_URL` | Required | The [public URL](#settings): the exact browser-facing origin, HTTP or HTTPS, without a path. Host and origin checks use it; HTTPS makes the session cookie `Secure` |
-| `OAC_WEB_UPSTREAM` | `http://core:8091` | Core's origin, HTTP or HTTPS, without credentials, query or path. The healthcheck probes its `/healthz` |
+| `OAC_WEB_UPSTREAM` | `http://core:8091` | Core's origin, HTTP or HTTPS, without credentials, query or path |
 | `OAC_WEB_CORE_KEY_FILE` | Required | Absolute path of a regular file with no group or other permissions, holding the Core key: at least 32 characters, no whitespace, at most 4 KiB |
 | `OAC_WEB_DIST` | `/www` | Absolute directory of the built console; must contain `index.html` |
 | `OAC_WEB_NODE_PAYLOAD_DIR` | unset | Absolute path of the matched distribution's node payload (the installer's `node-payload/`). Unset, `/node-install/*` is not served and Add node is unavailable |

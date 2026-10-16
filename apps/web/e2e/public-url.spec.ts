@@ -46,13 +46,17 @@ test("lists the startup settings on System", async ({ page, request }) => {
   await openConsole(page, request, "settings?id=service");
   const installation = page.getByRole("region", { name: "Installation" });
   await expect(installation).toContainText("https://core.example.com/v1");
+  // The installation ID and source commit wait behind a closed disclosure.
+  await expect(installation.getByText("Installation ID")).toBeHidden();
+  await installation.getByText("Installation details").click();
+  await expect(installation.getByText("Installation ID")).toBeVisible();
   const startup = page.getByRole("region", { name: "Startup settings" });
   const settings = startup.getByRole("table", { name: "Startup settings" });
-  await expect(settings.getByRole("row", { name: /^log_level/ })).toContainText("debug");
-  await expect(settings.getByRole("row", { name: /^listen_address/ })).toContainText("Default");
-  await expect(settings.getByRole("row", { name: /^data_dir/ })).toContainText("Fixed after install");
-  await expect(settings.getByRole("row", { name: /^core_key/ })).toContainText("Configured");
-  await expect(settings.getByRole("row", { name: /^public_url/ })).toHaveCount(0);
+  // Each setting reads as the variable that sets it; a sensitive one shows only that it is set.
+  await expect(settings.getByRole("row", { name: /^OAC_LOG_LEVEL/ })).toContainText("debug");
+  await expect(settings.getByRole("row", { name: /^OAC_HARNESSES/ })).toContainText("claude_sdk, codex");
+  await expect(settings.getByRole("row", { name: /^OAC_HISTORY_SETTINGS_FILE/ })).toContainText("Configured");
+  await expect(settings).not.toContainText("OAC_PUBLIC_URL");
 });
 
 test("warns on Nodes about a node bound to an old Core address until it is removed", async ({ page, request }) => {

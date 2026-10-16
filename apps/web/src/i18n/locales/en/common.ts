@@ -7,7 +7,18 @@ export const common = {
     title: "Could not read the data",
     partial: "Some reads failed. Any figures and rows shown cover only data already read; they may be incomplete or out of date.",
     request: "Core request failed ({{status}}).",
+    /** Core's own English message for a code the console has no copy for. */
+    code: "{{message}}",
     unknown: "Could not read from Core. Retry to update the data.",
+  },
+  apiEmpty: {
+    agents: "Applications create Agents through the Agents API.",
+    sessions: "Applications start Sessions through the Agents API.",
+    "environment-templates": "Applications create Environment templates through the Agents API.",
+    skills: "Applications upload Skills through the Agents API.",
+    "source-files": "Applications upload files through the Agents API.",
+    vaults: "Applications create Vaults through the Agents API.",
+    guide: "Read the API guide",
   },
   installationNotice: {
     title: "Public address needs attention",
@@ -44,6 +55,7 @@ export const common = {
     partial: "Could not load {{names}}. Other projects are shown.",
     failed: "Could not load {{names}}.",
   },
+  untitledSession: "Untitled Session",
   creator: {
     column: "Creator",
     help: "The API key that created this asset, as recorded by Core for every write.",
@@ -61,6 +73,5 @@ export const common = {
     loadedMore: "{{n}} loaded · more available",
     noMatches: "No matches",
     deleteUncertain: "The deletion was not confirmed; Core may or may not have removed it. The view was re-read, so check it before trying again.",
-    noMatchesDescription: "Nothing matches the current search or filters.",
   },
 } as const;

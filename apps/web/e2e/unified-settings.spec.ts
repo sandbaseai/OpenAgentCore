@@ -18,6 +18,10 @@ test("storage capacity has one settings home and preserves immutable configurati
   });
   await openConsole(page, request, "settings?id=storage");
   await expect(page.getByRole("navigation").getByRole("button", { name: "Workspace storage", exact: true })).toHaveAttribute("aria-current", "page");
+  // The configuration's identity and raw parameters wait behind Configuration details.
+  await expect(page.getByText(initial.id)).toBeHidden();
+  await page.getByText("Configuration details").click();
+  await expect(page.getByText(initial.id)).toBeVisible();
   await page.getByRole("button", { name: "Edit tenant capacity", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Edit tenant capacity" });
   await expect(dialog.getByLabel("Credential", { exact: false })).toHaveCount(0);
@@ -25,9 +29,9 @@ test("storage capacity has one settings home and preserves immutable configurati
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   expect(saves).toEqual([{ ...initial, tenant_capacity_mib: 8192 }]);
-  await expect(page.getByText("8,192", { exact: true })).toBeVisible();
+  await expect(page.getByText("8 GiB", { exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByText("8,192", { exact: true })).toBeVisible();
+  await expect(page.getByText("8 GiB", { exact: true })).toBeVisible();
 });
 
 test("new storage selection validates objects, retains retry identity, and never redisplays server secrets", async ({ page, request }) => {
@@ -98,22 +102,16 @@ test("capacity editor refuses to select an old configuration after observing a r
   expect(saves[1].id).toBe(selected.id);
 });
 
-test("settings content width does not constrain reset and node dialog backdrops", async ({ page, request }) => {
+test("settings content width does not constrain the reset dialog backdrop", async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openConsole(page, request, "settings?id=sandbox");
-  for (const action of ["Reset deployment", "Edit node"]) {
-    await page.getByRole("button", { name: action, exact: true }).first().click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    const backdrop = page.locator(".modal-backdrop").filter({ has: dialog });
-    const bounds = await backdrop.boundingBox();
-    expect(bounds?.x).toBe(0);
-    expect(bounds?.y).toBe(0);
-    expect(bounds?.width).toBe(1440);
-    expect(bounds?.height).toBe(1000);
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden();
-  }
+  await page.getByRole("button", { name: "Reset deployment", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const bounds = await page.locator(".modal-backdrop").boundingBox();
+  expect(bounds).toEqual({ x: 0, y: 0, width: 1440, height: 1000 });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });
 
 
@@ -136,4 +134,20 @@ test("reset progress actions stay inside settings on narrow screens", async ({ p
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
   }
+});
+
+test("a phone scrolls wide tables inside their frames and keeps every Settings tab and column on screen", async ({ page, request }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const pageScrollsSideways = () => page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  await openConsole(page, request, "sessions");
+  const log = page.getByRole("table", { name: "Session log" });
+  await expect(log.getByRole("columnheader", { name: "Status", exact: true })).toBeInViewport({ ratio: 1 });
+  expect(await page.locator(".table-frame").filter({ has: log }).evaluate((frame) => { frame.scrollLeft = 100; return frame.scrollLeft > 0; })).toBe(true);
+  expect(await pageScrollsSideways()).toBe(false);
+  await page.goto("/#settings?id=service");
+  const tabs = page.getByRole("navigation", { name: "Settings" }).getByRole("button");
+  await expect(tabs).toHaveCount(4);
+  for (const tab of await tabs.all()) await expect(tab).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("table", { name: "Startup settings" }).getByRole("columnheader", { name: "Restarts", exact: true })).toBeInViewport({ ratio: 1 });
+  expect(await pageScrollsSideways()).toBe(false);
 });

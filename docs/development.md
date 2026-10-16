@@ -70,7 +70,7 @@ python3 "$bundle/install.py" \
   --public-url http://YOUR_CORE_HOST:8080
 ```
 
-Replace `YOUR_CORE_HOST` with an address reachable by your browser and sandbox nodes. Use your HTTPS origin behind a reverse proxy when needed; [installation options](./getting-started/install-options.md) owns ingress configuration. The installer prints the Core key for signing in. It creates the standard Compose installation plus a read-only `node-payload` directory containing the bundle's public node artifacts. Allow disk space for both the extracted bundle and this installed copy. No Docker socket is passed to Core or Web.
+Replace `YOUR_CORE_HOST` with an address reachable by your browser and sandbox nodes. Use your HTTPS origin behind a reverse proxy when needed; [installation options](./getting-started/install-options.md) owns ingress configuration. A new installation prints the Core key for signing in; a rerun prints the command that shows it. It creates the standard Compose installation plus a read-only `node-payload` directory containing the bundle's public node artifacts. Allow disk space for both the extracted bundle and this installed copy. No Docker socket is passed to Core or Web.
 
 The build also creates `oac-<commit>-linux-amd64-offline.tar.gz`. Copy and extract that archive on another Linux amd64 Docker host, then run its `install.py`; no checkout, Go, Node or pnpm is needed on that host, only Python 3.9+ and Docker. Keep the extracted bundle until installation completes. The installed services and node downloads do not depend on its original location afterward.
 
@@ -86,7 +86,7 @@ docker compose up -d --wait --pull never
 ./oac core-key --show
 ```
 
-`install.py` requires an empty installation directory. Configuration preparation failures before `compose.yaml`, `.env` and `oac` exist require removing that incomplete directory and retrying. After those files exist, use Compose to retry. Use the [operator commands](./getting-started/operations.md) for configuration, keys and stopping services. A different source commit is a fresh installation, not an in-place upgrade: delete managed resources and uninstall nodes first, then remove the old Compose containers and data volume with `docker compose down --volumes`, and remove its installation directory. This permanently deletes that test installation's data. Alternatively choose another installation directory and Web port.
+Rerunning the same bundle's `install.py` on its installation directory resumes the installation with the saved settings; `--public-url` is required only for a new directory. A bundle from another commit refuses an existing installation unless you pass `--upgrade`, which [upgrades it in place](./getting-started/operations.md#upgrade). If a new installation fails before it starts the services, it leaves the installation directory as it found it; fix the cause and rerun the same command. Use the [operator commands](./getting-started/operations.md) for configuration, keys and stopping services.
 
 ## Build and run components
 
@@ -111,11 +111,11 @@ For frontend development, run `pnpm dev:web` using the fixture or Core connectio
 | `services/core/internal/persistence`, `services/core/internal/db` and `services/core/migrations` | Core's PostgreSQL adapters, transactions, queries and migrations | [Service guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md#database) |
 | `services/core/tests/integration` | Tests that drive the HTTP boundaries, the execution Worker and the PostgreSQL adapters together | [Service guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/README.md#tests) |
 | `services/core/internal/execution` | Durable Turn dispatch and scheduling | [Runtime protocol](./runtime-protocol.md) |
-| `services/core/internal/engine` | Pure qualification of harness operations and placements | [Harness onboarding](../contracts/agents-api/harness-onboarding.md) |
+| `services/core/internal/engine` | Pure qualification of Harness operations and placements | [Harness onboarding](../contracts/agents-api/harness-onboarding.md) |
 | `internal/agentdaemon/proto` | Core–Runtime wire types and validators | [Runtime protocol](./runtime-protocol.md) |
 | `internal/runtimebootstrap` | Provider-to-Runtime startup input | [Runtime bootstrap](./runtime-bootstrap.md) |
 | `apps/daemon/internal/dispatch` | Runtime preparation, Executor reuse, Turn and cleanup ownership | [Harness lifecycle](../contracts/agents-api/harness-onboarding.md#required-adapter-interfaces) |
-| `apps/daemon/internal/agent` | Native harness adapters | [Native references](../contracts/agents-api/harness-onboarding.md#native-references) |
+| `apps/daemon/internal/agent` | Native Harness adapters | [Native references](../contracts/agents-api/harness-onboarding.md#native-references) |
 | `services/core/internal/sandbox` | Provider interfaces and managed compute lifecycle | [Provider onboarding](./sandbox-provider.md) |
 | `services/web` | Console login and the server-side management proxy | [Console server](./web/console-server.md) |
 | `apps/web` and `packages/agents-client` | Console UI and typed clients | [Web guide](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/apps/web/README.md) |

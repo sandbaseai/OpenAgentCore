@@ -1,7 +1,7 @@
 ---
 title: "安装选项"
 source: docs/getting-started/install-options.md
-source_hash: 23c43bed7e7368fe9e106572cd0061d6fea306e418e34340cafed34a47398bc5
+source_hash: a27a6f3c7c819690fa81d5ede14c80b93446ffea33781764272dc9bec58ea942
 ---
 
 [默认安装](install.md)无需任何选项。本页介绍安装选项、Compose 部署和反向代理配置。
@@ -12,11 +12,11 @@ source_hash: 23c43bed7e7368fe9e106572cd0061d6fea306e418e34340cafed34a47398bc5
 ./install.sh --public-url https://core.example
 ```
 
-Windows 可下载 `install.ps1`，然后使用相同参数，例如 `& ./install.ps1 --public-url https://core.example`。Unix 单行命令的参数追加在 `bash -s --` 后。`--version TAG` 选择已发布的版本；默认选择最新稳定版，并校验原生命令和 Compose 文件的 SHA-256。
+Windows 上 `irm … | iex` 无法传参，默认执行策略也会拦截下载的 `.ps1` 文件，因此以脚本块运行：`& ([scriptblock]::Create((irm https://github.com/MiniMax-AI/OpenAgentCore/releases/latest/download/install.ps1))) --public-url https://core.example`。Unix 单行命令的参数追加在 `bash -s --` 后。`--version TAG` 选择已发布的版本；默认选择最新稳定版，并校验原生命令和 Compose 文件的 SHA-256。
 
 ## Docker Compose 与托管平台 {#docker-compose-and-hosting-platforms}
 
-在任一[支持的 Core 主机](install.md#prerequisites)上使用发行版中的 `compose.yaml`。发行流程会在 [Compose 模板](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/compose.yaml)中固定初始化、Core 和 Web 镜像及源码版本。PostgreSQL 使用 `postgres:16-alpine`。它会启动 PostgreSQL、Core 和 Web。Web 把 `/v1` 和 `/api/v1` 转发到 Core。数据保存在 Docker 命名卷中。一次性初始化服务会在该目录中生成随机机密信息并准备节点安装程序；Core 启动时执行数据库迁移。[Compose 配置](../configuration.md#compose-installations)负责管理各项设置和数据目录。
+在任一[支持的 Core 主机](install.md#prerequisites)上使用发行版中的 `compose.yaml`。发行流程会固定初始化、Core、Web 和 PostgreSQL 镜像及源码版本。PostgreSQL 16 使用官方镜像，按摘要固定，并与其他镜像一起镜像到 GHCR。它会启动 PostgreSQL、Core 和 Web。Web 把 `/v1` 和 `/api/v1` 转发到 Core。数据保存在 Docker 命名卷中。一次性初始化服务会在该目录中生成随机机密信息并准备节点安装程序；Core 启动时执行数据库迁移。[Compose 配置](../configuration.md#compose-installations)负责管理各项设置和数据目录。
 
 进行本地试用时，请将发行版的 `compose.yaml` 下载到一个空目录，然后运行：
 
@@ -33,7 +33,7 @@ docker compose exec web oac-web core-key
 
 ### Dokploy {#dokploy}
 
-创建一个 Docker Compose 应用并粘贴 `compose.yaml`。将 `OAC_PUBLIC_URL` 设置为公共 HTTPS 源地址，启用隔离部署，并为 `web` 服务添加域名和端口 `8080`。部署前，为此域名启用 **HTTPS**，并选择 **Let's Encrypt** 等证书提供程序。部署前移除 `web` 服务的 `ports` 块，让 Dokploy 路由到容器端口，而不发布宿主机端口。将此 Compose 文件打包到 Dokploy 模板目录时，[模板元数据](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/dokploy.toml)会提供生成的域名和环境；导入后仍需启用 HTTPS 及其证书提供程序。
+创建一个 Docker Compose 应用并粘贴 `compose.yaml`。将 `OAC_PUBLIC_URL` 设置为公共 HTTPS 源地址，启用隔离部署，并为 `web` 服务添加域名和端口 `8080`。部署前，为此域名启用 **HTTPS**，并选择 **Let's Encrypt** 等证书提供程序。部署前移除 `web` 服务的 `ports` 块，让 Dokploy 路由到容器端口，而不发布主机端口。将此 Compose 文件打包到 Dokploy 模板目录时，[模板元数据](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/compose/dokploy.toml)会提供生成的域名和环境；导入后仍需启用 HTTPS 及其证书提供程序。
 
 ### Coolify {#coolify}
 
@@ -41,13 +41,13 @@ docker compose exec web oac-web core-key
 
 在这两个平台上，打开服务器终端并运行 `docker compose ls`，查找已部署的项目名称和 Compose 文件。使用这些完全一致的值以及该部署的 `OAC_PUBLIC_URL`，运行 `docker compose -p <project-name> -f <compose-file> exec web oac-web core-key`，然后在已配置的源地址登录。[Dokploy 域名指南](https://docs.dokploy.com/docs/core/docker-compose/domains)和[Coolify Compose 指南](https://coolify.io/docs/services/configuration/docker-compose)介绍了各自的域和服务控制项。这些都是可导入的部署文件；本仓库不发布托管市场条目。
 
-登录后，使用 [Nodes](nodes.md)选择沙箱后端并添加节点。Compose 堆栈部署控制平面；执行机器仍需单独部署。
+登录后，使用 [Nodes](nodes.md)选择沙箱提供商并添加节点。Compose 堆栈部署控制平面；执行机器仍需单独部署。
 
-使用相同的文件和环境运行 `docker compose stop` 以停止服务。停止服务后，备份数据卷。请遵循[安装版本策略](operations.md#installation-version-policy)：使用不同发布版本时，需要创建新的 Compose 项目并使用全新的数据卷。
+使用相同的文件和环境运行 `docker compose stop` 以停止服务。停止服务后，一并备份数据卷和配置。升级时先备份，再使用相同的项目、环境和数据卷部署新版本的 `compose.yaml`：初始化会升级数据卷，Core 会迁移数据库。[升级](operations.md#upgrade)说明会保留哪些内容，以及为何拒绝较旧的版本。
 
 ## 进程设置 {#process-settings}
 
-这些标志只会一次性写入 `.env`。安装完成后，编辑该文件并运行 `oac apply`。安装程序不会更改已经启动的安装。
+这些标志只会一次性写入 `.env`。安装完成后，编辑该文件并运行 `oac apply`。对已有安装重新运行安装程序时，这些标志会被忽略，安装程序会指出与已保存设置不同的标志，并以已保存的设置启动。
 
 以下表格是由脚本自动生成的参考信息，因此保留为英文原文：
 | Flag | `.env` variable |
@@ -58,17 +58,18 @@ docker compose exec web oac-web core-key
 
 ## 安装操作 {#installation-actions}
 
-`--install-dir` 选择安装目录。它不是进程设置。
+`--install-dir` 选择安装目录。这两个选项都不是进程设置。
 
 | 选项 | 用途 |
 | --- | --- |
-| `--install-dir DIR` | 绝对安装目录；默认为 `~/.oac/core`。新安装使用空目录或不存在的目录；[重试](install.md#install)使用已有安装目录 |
+| `--install-dir DIR` | 绝对安装目录；默认为 `~/.oac/core`。新安装使用空目录或不存在的目录；[重试](install.md#install)或升级时使用已有安装目录 |
+| `--upgrade` | 将 `--install-dir` 中的已有安装升级到安装程序所属的版本；参见[升级](operations.md#upgrade) |
 
 只要使用不同的安装目录和端口，多个安装就可以共用一台机器。需要更多安装时，请使用不同的 IP 地址或共享反向代理。每个安装都有自己的数据库、Core 密钥和节点。
 
-## 沙箱后端 {#sandbox-backend}
+## 沙箱提供商 {#sandbox-backend}
 
-安装程序不保存沙箱后端。登录后，打开 **Settings** → **Sandbox and scheduling**，选择 Docker、microsandbox 或 E2B；Web 会把 [Provider 声明的默认大小](../sandbox-provider.md#register-the-provider-kind)推荐为 Standard 尺寸。该选择保存在 Core 的数据库中。以后要更改，请[重置部署](nodes.md#change-the-sandbox-configuration)。Docker 沙箱与每个节点共用该节点的内核，其节点服务账户[等效于 root](nodes.md#what-the-installer-sets-up)。E2B 需要一个非回环的公共 HTTPS URL，因为 E2B 沙箱会从 E2B 云端调用 Core。按照 [E2B 指南](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md)准备模板。
+安装程序不保存沙箱提供商。登录后，打开 **设置** → **沙箱与调度**，选择 Docker、microsandbox 或 E2B；Web 会把 [提供商声明的默认大小](../sandbox-provider.md#register-the-provider-kind)推荐为 Standard 尺寸。该选择保存在 Core 的数据库中。以后要更改，请[重置部署](nodes.md#change-the-sandbox-configuration)。Docker 沙箱与每个节点共用该节点的内核，其节点服务账户[等效于 root](nodes.md#what-the-installer-sets-up)。E2B 需要一个非回环的公共 HTTPS URL，因为 E2B 沙箱会从 E2B 云端调用 Core。按照 [E2B 指南](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md)准备模板。
 
 ## 监听器与访问 {#listeners-and-access}
 
@@ -135,4 +136,6 @@ http://:8443 {
 
 ## 离线主机 {#offline-hosts}
 
-Core 安装需要访问 GitHub Releases 和容器注册表，以下载发行文件和镜像。
+安装程序使用当前 shell 的网络设置（包括 `HTTPS_PROXY`）从 GitHub Releases 下载发行文件。Docker 通过其守护进程拉取镜像，守护进程不读取 shell 的代理变量。所有镜像（包括 PostgreSQL）都来自 GHCR（`ghcr.io`），不需要 Docker Hub。如果只能经代理或镜像加速器访问 GHCR，请配置[守护进程代理](https://docs.docker.com/engine/daemon/proxy/)或[镜像加速器](https://docs.docker.com/docker-hub/image-library/mirror/)，然后重新运行安装程序。
+
+无法访问这些地址的 Linux amd64 主机可使用发行资产 `oac-<commit>-linux-amd64-offline.tar.gz` 安装，其中包含所有镜像和节点制品。将其复制到该主机并解压，然后用 Python 3.9 或更高版本运行其中的 `install.py`；[源码安装](../development.md#install-a-checkout-without-publishing-a-release)介绍其选项。

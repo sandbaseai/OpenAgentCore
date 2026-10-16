@@ -32,6 +32,8 @@ func classifyTurnError(failure *TurnError) proto.ErrorPayload {
 			code = "invalid_request"
 		case "cyberPolicy":
 			code = "cyber_policy"
+		case "other":
+			code = providerRejectionCode(failure.Message)
 		}
 		return proto.ErrorPayload{Code: code}
 	}
@@ -57,4 +59,30 @@ func classifyTurnError(failure *TurnError) proto.ErrorPayload {
 		}
 	}
 	return proto.ErrorPayload{}
+}
+
+// Codex 0.153.4 reports a provider HTTP 400 as "other" and forwards the
+// response body verbatim; its own "other" failures are prose. A JSON object with
+// an object "error" member is the provider's rejection: a declared code in its
+// own error.code or error.type wins, otherwise it is invalid_request. Prose, such
+// as a plain-text 400 body, stays unclassified.
+func providerRejectionCode(message string) string {
+	var body struct {
+		Error *struct {
+			Code json.RawMessage `json:"code"`
+			Type json.RawMessage `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(message), &body) != nil || body.Error == nil {
+		return ""
+	}
+	for _, raw := range []json.RawMessage{body.Error.Code, body.Error.Type} {
+		var name string
+		if json.Unmarshal(raw, &name) == nil {
+			if code, _ := proto.NormalizeEngineFailure(name, nil); code != "" {
+				return code
+			}
+		}
+	}
+	return "invalid_request"
 }

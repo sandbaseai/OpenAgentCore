@@ -1,10 +1,10 @@
-import type { AgentSession } from "@oac/agents-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useFailureToast } from "../../components/Toast";
+import { coreError } from "../../lib/core-error";
 import { DetailSkeleton } from "../../components/Skeleton";
 import { EmptyState, Kpi, KpiStrip, PageBody, PageHeader, RefreshButton, revealInPageBody, Section, SegmentedControl } from "../../components/console-ui";
 import { CopyableId } from "../../components/list-ui";
@@ -12,10 +12,11 @@ import { useConsoleNavigation } from "../../lib/console-navigation";
 import { formatClock, formatDateTime, formatInteger, MISSING } from "../../lib/format";
 import { CreatorCell, ProjectName, useCreators, useProjects } from "../../lib/projects";
 import { collectionQuery, collections } from "../../lib/queries";
+import { sessionTitle } from "../../lib/session-title";
 import { forgetDeleted } from "../resources/detail-queries";
 import { ExecutorCredentialsSection } from "./ExecutorCredentialsSection";
 import { SessionDeleteDialog, type SessionDeleteTarget } from "./SessionDeleteDialog";
-import { DiagnosticScope } from "./session-diagnostics";
+import { DiagnosticScope, SessionFailureDetails } from "./session-diagnostics";
 import { sessionKey } from "./session-queries";
 import { isSessionActive, turnAnchorId } from "./session-history";
 import { environmentKind, isDeletable } from "./session-log";
@@ -30,14 +31,6 @@ import "./sessions.css";
 
 type HistoryView = "conversation" | "trace" | "turns";
 
-function sessionTitle(session: AgentSession, fallback: string): string {
-  return session.metadata.title?.trim() || session.agent.name?.trim() || fallback;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error ?? "");
-}
-
 /**
  * Monitor › Session log › one Session: its facts, usage, conversation, trace,
  * Turns and (for hosted sandboxes) runtime, read-only; a self-hosted Session's
@@ -46,6 +39,7 @@ function errorText(error: unknown): string {
  */
 export function SessionPage() {
   const { t, i18n } = useTranslation("sessions");
+  const { t: tCommon } = useTranslation("common");
   const locale = i18n.resolvedLanguage;
   const { params, navigate, back: goBack } = useConsoleNavigation();
   const projectId = params.project;
@@ -89,10 +83,10 @@ export function SessionPage() {
     if (projectId && sessionId) void queryClient.invalidateQueries({ queryKey: [...sessionKey(projectId, sessionId), "executor-credentials"] });
   };
   const time = loadedAt ? formatClock(loadedAt, locale) : MISSING;
-  const itemsError = session ? history.history?.itemsError ?? null : null;
-  const turnsError = session ? history.history?.turnsError ?? null : null;
+  const itemsError = session && history.history?.itemsError ? coreError(history.history.itemsError, tCommon) : null;
+  const turnsError = session && history.history?.turnsError ? coreError(history.history.turnsError, tCommon) : null;
   // Failed reads that leave the last history on screen are reported in toasts.
-  useFailureToast(session !== null && !history.gone && history.error ? errorText(history.error) : null, t("detail.stale"), "session-refresh");
+  useFailureToast(session !== null && !history.gone && history.error ? coreError(history.error, tCommon) : null, t("detail.stale"), "session-refresh");
   useFailureToast(Boolean(itemsError), t("history.itemsFailed", { reason: itemsError ?? "" }), "session-items");
   useFailureToast(Boolean(turnsError), t("history.turnsFailed", { reason: turnsError ?? "" }), "session-turns");
 
@@ -104,7 +98,7 @@ export function SessionPage() {
   } else if (!session) {
     if (history.phase === "loading") body = <DetailSkeleton label={t("detail.loading")} />;
     else if (isNotFound(history.error)) body = <EmptyState title={t("detail.notFound")} hint={t("detail.notFoundDescription")} action={<button className="button outline" type="button" onClick={back}>{t("detail.back")}</button>} />;
-    else body = <EmptyState title={t("detail.loadFailed")} description={errorText(history.error)} action={<button className="button outline" type="button" onClick={refresh}>{t("detail.retry")}</button>} />;
+    else body = <EmptyState title={t("detail.loadFailed")} description={coreError(history.error, tCommon)} action={<button className="button outline" type="button" onClick={refresh}>{t("detail.retry")}</button>} />;
   } else {
     const items = history.history?.items ?? [];
     const turns = history.history?.turns ?? [];
@@ -164,6 +158,7 @@ export function SessionPage() {
             </div>
           ) : null}
         </dl>
+        {session.status === "failed" ? <SessionFailureDetails projectId={projectId} session={session} /> : null}
         <KpiStrip label={t("kpi.label")}>
           <Kpi label={t("kpi.turns")} value={history.history?.turnsError && !turns.length ? MISSING : formatInteger(turns.length, locale)} />
           <Kpi label={t("kpi.input")} value={formatInteger(usage?.input_tokens, locale)} help={t("kpi.help")} />
@@ -232,7 +227,7 @@ export function SessionPage() {
     );
   }
 
-  const title = session ? sessionTitle(session, t("common.untitledAgent")) : t("common.session");
+  const title = session ? sessionTitle(session) ?? tCommon("untitledSession") : t("common.session");
   return (
     <section className="page-section console-page session-detail-page" aria-labelledby="session-detail-heading">
       <PageHeader
