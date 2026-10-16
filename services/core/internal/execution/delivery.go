@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
@@ -37,7 +38,11 @@ func requestCancellation(ctx context.Context, peer *runtimegateway.Session, runI
 }
 
 func send(ctx context.Context, peer *runtimegateway.Session, kind, runID string, payload any) error {
-	env, err := proto.NewEnvelope(kind, runID, payload)
+	trace := ""
+	if carrier, ok := obslog.TraceFromContext(ctx); ok {
+		trace = carrier.String()
+	}
+	env, err := proto.NewEnvelopeWithTrace(kind, runID, payload, trace)
 	if err != nil {
 		return err
 	}
@@ -62,23 +67,45 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 	}
 	upstream := subscription.Events
 	defer peer.Unsubscribe(runID)
+	defer subscription.Stop()
 	defer func() {
 		if status == sessions.TurnFailed {
 			abort(peer, runID)
 		}
 	}()
-	journal := &journal{writer: d.sessionExecution, tenant: tenantID, session: sessionID, turn: runID, next: 1,
+	var doneReceived time.Time
+	journal := &journal{ctx: ctx, writer: d.sessionExecution, tenant: tenantID, session: sessionID, turn: runID, next: 1,
 		observeSubagents: request.ObserveSubagentIdentities}
 	defer func() {
 		finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := journal.drain(upstream, &result); err != nil {
+		cleanupStarted := time.Now()
+		drainErr := journal.drain(upstream, &result)
+		observeExecutionStage(ctx, "delivery_final_drain", cleanupStarted, drainErr, "session_id", sessionID, "turn_id", runID)
+		if drainErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
 		}
-		if err := journal.flush(finishCtx); err != nil {
+		flushStarted := time.Now()
+		pendingCount := len(journal.batch)
+		flushErr := journal.flushObserved(finishCtx, "deferred_final")
+		confirmation := "unconfirmed"
+		if flushErr == nil {
+			confirmation = "confirmed"
+			if pendingCount == 0 {
+				confirmation = "no_pending"
+			}
+		}
+		var doneToCleanup any
+		if !doneReceived.IsZero() {
+			doneToCleanup = float64(cleanupStarted.Sub(doneReceived).Microseconds()) / 1000
+		}
+		observeExecutionStage(ctx, "delivery_final_flush", flushStarted, flushErr, "session_id", sessionID, "turn_id", runID, "pending_count", pendingCount, "confirmation", confirmation, "done_to_cleanup_ms", doneToCleanup)
+		if flushErr != nil {
 			result.ErrorCode, status = "event_persistence_failed", sessions.TurnFailed
 		}
 		if subscription.Err() != nil {
+			result.EventStreamError = subscription.FailureReason()
+			obslog.Ctx(ctx).Warn("execution event stream incomplete", "session_id", sessionID, "turn_id", runID, "device_id", peer.DeviceID, "reason", subscription.FailureReason())
 			result.ErrorCode, status = "event_stream_incomplete", sessions.TurnFailed
 		}
 	}()
@@ -163,7 +190,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				return
 			}
 		case <-flushTicker.C:
-			if journal.flush(ctx) != nil {
+			if journal.flushObserved(ctx, "timer") != nil {
 				result.ErrorCode = "event_persistence_failed"
 				return
 			}
@@ -193,6 +220,10 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				return
 			}
 			nativeObserved = true
+			if env.Type == proto.TypeDone && doneReceived.IsZero() {
+				doneReceived = time.Now()
+				obslog.Ctx(ctx).Info("executor done received", "session_id", sessionID, "turn_id", runID)
+			}
 			if !firstTextObserved && hasText(env) {
 				firstTextObserved = true
 				recordFirstText(ctx, sessionID, runID, inputStarted)
@@ -204,6 +235,12 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 			}
 			if writeErr != nil {
 				result.ErrorCode = "event_persistence_failed"
+				return
+			}
+			if err := subscription.Consumed(ctx, env); err != nil {
+				result.EventStreamError = "credit_delivery_failed"
+				obslog.Ctx(ctx).Warn("execution event credit delivery failed", "session_id", sessionID, "turn_id", runID, "device_id", peer.DeviceID)
+				result.ErrorCode = "event_stream_incomplete"
 				return
 			}
 			switch env.Type {
@@ -218,7 +255,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 				// Done closes the event subscription; application receipts have a separate waiter.
 				done, upstream = true, nil
 			case proto.TypeFunctionCall:
-				if err := journal.flush(ctx); err != nil {
+				if err := journal.flushObserved(ctx, "function_call"); err != nil {
 					result.ErrorCode = "event_persistence_failed"
 					return
 				}
@@ -351,6 +388,7 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 		if code, status := proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus); code != "" {
 			r.EngineErrorCode, r.EngineHTTPStatus = code, status
 		}
+		r.EngineRequestID = proto.NormalizeProviderRequestID(failure.UpstreamRequestID)
 	case proto.TypeUsage:
 		return env.DecodePayload(&r.Done.Usage)
 	case proto.TypeDone:

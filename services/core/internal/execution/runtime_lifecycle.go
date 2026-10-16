@@ -107,12 +107,9 @@ func validatedRuntimeProvider(config *RuntimeProvider, registry *runtimegateway.
 	if copied.ProviderKind == "" || (copied.Mode != string(sandbox.DeploymentNodes) && copied.Mode != string(sandbox.DeploymentDirect)) {
 		return RuntimeProvider{}, sandbox.ErrInvalid
 	}
-	if copied.Mode == string(sandbox.DeploymentDirect) && copied.Suspension != nil {
-		return RuntimeProvider{}, sandbox.ErrInvalid
-	}
 	if config.Suspension != nil {
 		policy := *config.Suspension
-		if !sandbox.SupportsCheckpoint(config.Provider) || policy.Retention < time.Second {
+		if !sandbox.SupportsSuspension(config.Provider) || policy.Retention < time.Second || (copied.Mode == string(sandbox.DeploymentDirect) && (policy.MaxActive < 1 || policy.MaxRetained < policy.MaxActive)) {
 			return RuntimeProvider{}, sandbox.ErrInvalid
 		}
 		copied.Suspension = &policy
@@ -120,7 +117,9 @@ func validatedRuntimeProvider(config *RuntimeProvider, registry *runtimegateway.
 	return copied, nil
 }
 
-func (r *runtimeLifecycle) lock(ctx context.Context) error {
+func (r *runtimeLifecycle) lock(ctx context.Context) (err error) {
+	started := time.Now()
+	defer func() { observeExecutionStage(ctx, "runtime_gate_wait", started, err, "node_id", r.nodeID) }()
 	select {
 	case r.gate <- struct{}{}:
 		if err := r.ctx.Err(); err != nil {
@@ -186,6 +185,10 @@ func (w *Worker) ProvisionEnvironment(ctx context.Context, tenant, environment, 
 // provision runs under the lifecycle gate and uses the durable one-shot receipt.
 func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, providerKey string) (result deployment.Allocation, resultErr error) {
 	provider := r.config.Provider
+	// The lifecycle lane, not provider configuration, owns node identity.
+	if (r.nodeID == "") != (r.config.Mode == string(sandbox.DeploymentDirect)) {
+		return deployment.Allocation{}, sandbox.ErrOwnership
+	}
 	if providerKey != r.config.InstallationID {
 		return deployment.Allocation{}, sandbox.ErrInvalid
 	}
@@ -222,6 +225,27 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	if err != nil || placement.Type != "openai_hosted" {
 		return deployment.Allocation{}, sandbox.ErrInvalid
 	}
+	key := deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}
+	existing, lookupErr := r.reader.EnvironmentAllocation(ctx, key)
+	if errors.Is(lookupErr, deployment.ErrNotFound) || (lookupErr == nil && existing.State == "released") {
+		if r.config.Generation == 0 {
+			return deployment.Allocation{}, ErrExecutionUnavailable
+		}
+		if err := r.computeFreshCapacity(ctx, providerKey); err != nil {
+			return deployment.Allocation{}, err
+		}
+		if policy := r.config.Suspension; policy != nil && (r.config.ProviderKind == "" || r.config.Mode == "direct") {
+			count, err := r.reader.CountRetainedAllocations(ctx, providerKey)
+			if err != nil {
+				return deployment.Allocation{}, err
+			}
+			if count >= int64(policy.MaxRetained) {
+				return deployment.Allocation{}, ErrExecutionUnavailable
+			}
+		}
+	} else if lookupErr != nil {
+		return deployment.Allocation{}, lookupErr
+	}
 	spec, err := r.workspaceSpecification(ctx, deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}, "")
 	if err != nil {
 		return deployment.Allocation{}, err
@@ -255,7 +279,6 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 			return existing, sandbox.ErrOwnership
 		}
 	}
-	key := deployment.AllocationKey{TenantID: tenant, EnvironmentID: environment}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return deployment.Allocation{}, err
@@ -274,11 +297,17 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	if err := r.lease.CheckOwnership(ctx); err != nil {
 		return owner, err
 	}
+	session, err := r.sessions.GetSession(ctx, tenant, environmentValue.SessionID)
+	if err != nil {
+		return deployment.Allocation{}, err
+	}
 	started := time.Now()
 	info, err := provider.Create(ctx, sandbox.Bootstrap{
 		Reference: runtimeReference(owner), SessionID: owner.SessionID, DeviceID: owner.DeviceID,
-		Workspace: workspace, CoreURL: r.config.CoreURL, Credential: token, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
+		Workspace: workspace, Harness: session.Engine, CoreURL: r.config.CoreURL, Credential: token, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
 	})
+	observeExecutionStage(ctx, "provider_create", started, err, "allocation_id", owner.ID,
+		"session_id", owner.SessionID, "environment_id", environment, "device_id", owner.DeviceID, "node_id", r.nodeID)
 	logComputeStep(ctx, owner, "create", started, err)
 	if info.Reference == runtimeReference(owner) && info.CreateSettled && info.State == "absent" {
 		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -329,13 +358,20 @@ func (w *Worker) ReconcileManagedRuntimes(ctx context.Context) error {
 	return w.runtimes.reconcile(ctx)
 }
 
-func (r *runtimeLifecycle) reconcile(ctx context.Context) error {
-	ctx, finish, err := r.beginReconcile(ctx)
+func (r *runtimeLifecycle) reconcile(ctx context.Context) (scanErr error) {
+	ctx = lifecycleTrace(ctx)
+	started := time.Now()
+	log.Ctx(ctx).Info("runtime reconciliation started", "node_id", r.nodeID)
+	defer func() { observeExecutionStage(ctx, "runtime_reconcile_total", started, scanErr, "node_id", r.nodeID) }()
+	operation, finish, err := r.beginReconcile(ctx)
 	if err != nil {
 		return err
 	}
+	ctx = operation
 	defer finish()
+	inventoryAt := time.Now()
 	rows, err := r.reader.LifecycleAllocations(ctx, r.nodeID, r.cursor)
+	observeRuntimeInventory(ctx, inventoryAt, err, r.nodeID, false, len(rows))
 	if err != nil {
 		return err
 	}
@@ -345,16 +381,28 @@ func (r *runtimeLifecycle) reconcile(ctx context.Context) error {
 		if wrapped {
 			// Service the next page now instead of spending a ticker interval on EOF.
 			// Refill only once so an empty store still returns without spinning.
+			inventoryAt = time.Now()
 			rows, err = r.reader.LifecycleAllocations(ctx, r.nodeID, "")
+			observeRuntimeInventory(ctx, inventoryAt, err, r.nodeID, true, len(rows))
 			if err != nil {
 				return err
 			}
 		}
 	}
+	scanAt := time.Now()
+	observed := 0
+	defer func() {
+		if len(rows) > 0 {
+			observeExecutionStage(ctx, "runtime_reconcile", scanAt, scanErr, "node_id", r.nodeID, "allocation_count", len(rows), "observed_count", observed)
+		}
+	}()
 	for _, owner := range rows {
+		observed++
 		r.cursor = owner.ID
 		operation, stop := context.WithTimeout(ctx, 30*time.Second)
+		observeAt := time.Now()
 		err := r.observe(operation, owner)
+		observeExecutionStage(ctx, "runtime_observe", observeAt, err, "allocation_id", owner.ID, "session_id", owner.SessionID, "node_id", r.nodeID)
 		r.recordObservation(ctx, owner, err)
 		stop()
 		if err != nil {
@@ -490,6 +538,14 @@ func runtimeReference(owner deployment.Allocation) sandbox.Reference {
 
 func (w *Worker) runManagedRuntimes(ctx context.Context) error {
 	return w.runtimes.run(ctx)
+}
+
+// Manager deployments reserve capacity with Session placement before provisioning.
+func (r *runtimeLifecycle) computeFreshCapacity(ctx context.Context, key string) error {
+	if r.config.ProviderKind != "" && r.config.Mode != "direct" {
+		return nil
+	}
+	return r.computeCapacity(ctx, key)
 }
 
 // workspaceSpecification reads the immutable generation selected for this

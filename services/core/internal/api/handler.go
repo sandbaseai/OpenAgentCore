@@ -41,6 +41,7 @@ type Sessions interface {
 
 // SessionsReader reads Sessions.
 type SessionsReader interface {
+	GetInputReceipts(context.Context, string, string, string) (v1.SessionInputReceipts, error)
 	GetSession(context.Context, string, string) (sessions.Session, error)
 	ListSessions(context.Context, string, string, int, bool, *string) (sessions.Page, error)
 }
@@ -102,9 +103,12 @@ func (h *Handler) routes() *chi.Mux {
 		r.Post("/agents/sessions", h.createSession)
 		r.Get("/agents/sessions", h.listSessions)
 		r.Get("/agents/sessions/{session_id}", h.getSession)
+		r.Get("/agents/sessions/{session_id}/diagnostics", h.getProjectSessionDiagnostics)
+		r.Get("/agents/sessions/{session_id}/turns/{turn_id}/diagnostics", h.getProjectTurnDiagnostics)
 		r.Post("/agents/sessions/{session_id}", h.updateSession)
 		r.Delete("/agents/sessions/{session_id}", h.deleteSession)
 		r.Post("/agents/sessions/{session_id}/events", h.createEvents)
+		r.Get("/agents/sessions/{session_id}/input-receipts", h.getInputReceipts)
 		r.Get("/agents/sessions/{session_id}/events", h.streamEvents)
 		r.Head("/agents/sessions/{session_id}/events", methodNotAllowed)
 		r.Get("/agents/sessions/{session_id}/items", h.listItems)

@@ -470,6 +470,12 @@ export interface ErrorResponse2 {
   error: ErrorBodyResource;
 }
 export const errorResponse2Fields = ["error"] as const;
+export interface ExecutionDiagnostic {
+  code: "unknown" | "harness_error" | "model_provider_required" | "runtime_unavailable" | "runtime_disconnected" | "runtime_preparation_failed" | "execution_interrupted" | "delivery_unconfirmed" | "input_rejected" | "executor_protocol_error" | "core_storage_failed" | "environment_connection_timeout" | "environment_unavailable" | "environment_provisioning_failed" | "authentication_error" | "rate_limit_exceeded" | "usage_limit_exceeded" | "provider_billing_unavailable" | "server_overloaded" | "server_error" | "invalid_request" | "resource_not_found" | "request_timeout" | "context_length_exceeded" | "cyber_policy" | "connection_failed";
+  failed_at: string | null;
+  source: "turn" | "environment" | "environment_input";
+}
+export const executionDiagnosticFields = ["code", "failed_at", "source"] as const;
 export interface FileExpirationAfter {
   anchor: "created_at";
   seconds: number;
@@ -635,6 +641,8 @@ export interface InputMessageParam {
 }
 export const inputMessageParamFields = ["type", "role", "content"] as const;
 export const inputMessageParamRequired = ["role", "content"] as const;
+export const inputReceiptStatusValues = ["admitted", "pending", "failed", "absent"] as const;
+export type InputReceiptStatus = (typeof inputReceiptStatusValues)[number];
 export interface InputTokensDetailsResource {
   cached_tokens: number;
 }
@@ -1109,6 +1117,17 @@ export interface SessionCore {
 }
 export const sessionCoreFields = ["installation"] as const;
 export const sessionCoreRequired = [] as const;
+export interface SessionDiagnostics {
+  diagnostic: ExecutionDiagnostic | null;
+  input_available?: boolean;
+  input_unavailable_reason?: "busy" | "requires_action" | "environment_unavailable" | "configuration_required";
+  object: "agent.session_diagnostics";
+  session_id: string;
+  status: "idle" | "in_progress" | "requires_action" | "failed";
+  turn_id?: string;
+}
+export const sessionDiagnosticsFields = ["diagnostic", "input_available", "input_unavailable_reason", "object", "session_id", "status", "turn_id"] as const;
+export const sessionDiagnosticsRequired = ["diagnostic", "object", "session_id", "status"] as const;
 export interface SessionEnvironmentErrorResource {
   type: string;
   code: string;
@@ -1414,6 +1433,20 @@ export interface SessionInputParamAgentSessionInputToolResult {
 }
 export const sessionInputParamAgentSessionInputToolResultFields = ["type", "turn_id", "call_id", "success", "output", "error"] as const;
 export const sessionInputParamAgentSessionInputToolResultRequired = ["type", "turn_id", "call_id", "success"] as const;
+export interface SessionInputReceipt {
+  input_index: number;
+  item_ids: string[];
+  sequence: number;
+  turn_id: string | null;
+}
+export const sessionInputReceiptFields = ["input_index", "item_ids", "sequence", "turn_id"] as const;
+export interface SessionInputReceipts {
+  object: "agent.session.input_receipts";
+  receipts: SessionInputReceipt[];
+  session_id: string;
+  status: InputReceiptStatus;
+}
+export const sessionInputReceiptsFields = ["object", "receipts", "session_id", "status"] as const;
 export interface SessionItemListResource {
   object: "list";
   data: SessionTurnItemResource[];
@@ -1587,6 +1620,14 @@ export interface TokenUsageResource {
   total_tokens: number;
 }
 export const tokenUsageResourceFields = ["input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens"] as const;
+export interface TurnDiagnostics {
+  diagnostic: ExecutionDiagnostic | null;
+  object: "agent.turn_diagnostics";
+  session_id: string;
+  status: "queued" | "in_progress" | "waiting" | "completed" | "failed" | "cancelled";
+  turn_id: string;
+}
+export const turnDiagnosticsFields = ["diagnostic", "object", "session_id", "status", "turn_id"] as const;
 export const turnObjectResourceValues = ["agent.session.turn"] as const;
 export type TurnObjectResource = (typeof turnObjectResourceValues)[number];
 export interface TurnResource {

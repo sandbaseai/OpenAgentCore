@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -40,7 +42,7 @@ var (
 	// ReadLimit caps a single inbound frame at 4 MiB. tool_call
 	// results can be large but anything past this is almost certainly
 	// a misbehaving daemon (or hostile input).
-	ReadLimit int64 = 4 * 1024 * 1024
+	ReadLimit int64 = proto.MaxFrameBytes
 
 	// CloseRuntimeDeleted is a custom WS close code (4001) sent when
 	// a heartbeat discovers the runtime has been deleted. The daemon
@@ -75,6 +77,7 @@ type Session struct {
 	DeviceID      string
 	WorkspaceID   string
 	DaemonVersion string
+	eventCredit   bool // Immutable per authenticated WebSocket upgrade.
 	ConnectedAt   time.Time
 
 	conn WSConn
@@ -88,6 +91,7 @@ type Session struct {
 	owner *ownerLease
 
 	// heartbeat persists daemon-advertised capability snapshots.
+	firstHeartbeat heartbeatObservation
 	heartbeat      HeartbeatTouch
 	credentialHash string
 	// archivedCancellations reads the receipt an archived Session's
@@ -100,9 +104,10 @@ type Session struct {
 	// supportedKinds is the latest daemon-advertised agent_kind snapshot,
 	// updated from heartbeat frames and read by the connector before
 	// sending execution_prepare so unsupported engines fail on the server.
-	kindsMu        sync.RWMutex
-	kindsSeen      bool
-	supportedKinds []runtimedevice.SupportedAgentKind
+	kindsMu                      sync.RWMutex
+	kindsSeen                    bool
+	supportedKinds               []runtimedevice.SupportedAgentKind
+	capabilityObservationPending bool
 
 	// Subscribers keyed by runID. The read loop only sends on these
 	// channels; Unsubscribe is the only place that closes them.
@@ -119,7 +124,7 @@ type Session struct {
 	workspaceReadMu   sync.Mutex
 	workspaceReads    map[string]chan proto.Envelope
 	workspaceExportMu sync.Mutex
-	workspaceExports  map[string]chan proto.Envelope
+	workspaceExports  map[string]chan workspaceExportReceipt
 
 	ackMu      sync.Mutex
 	ackWaiters map[string]chan proto.InteractionDecisionAckPayload
@@ -127,7 +132,11 @@ type Session struct {
 	// sendCh feeds the WS write loop. Capacity is bounded so a slow
 	// peer can't queue unbounded outbound frames; once full, Send
 	// blocks up to WriteTimeout then returns an error.
-	sendCh chan proto.Envelope
+	sendCh              chan *outboundFrame
+	artifactMu          sync.Mutex
+	artifactCaptures    map[string]*artifactTransport
+	artifactIDs         map[string]*artifactTransport
+	transportConnection string
 
 	// closeOnce guards the shutdown path so concurrent Close calls
 	// collapse into one.
@@ -148,20 +157,21 @@ type Session struct {
 func NewSessionWithOwner(conn WSConn, deviceID, workspaceID, daemonVersion string, reg *Registry, log SessionLogger, owner *ownerLease) *Session {
 	now := time.Now()
 	return &Session{
-		DeviceID:      deviceID,
-		WorkspaceID:   workspaceID,
-		DaemonVersion: daemonVersion,
-		ConnectedAt:   now,
-		conn:          conn,
-		log:           log,
-		reg:           reg,
-		owner:         owner,
-		lastSeenAt:    now,
-		subs:          map[string]*Subscription{},
-		preparations:  map[string]*preparationSubscription{},
-		ackWaiters:    map[string]chan proto.InteractionDecisionAckPayload{},
-		sendCh:        make(chan proto.Envelope, 64),
-		closed:        make(chan struct{}),
+		DeviceID:            deviceID,
+		WorkspaceID:         workspaceID,
+		DaemonVersion:       daemonVersion,
+		ConnectedAt:         now,
+		transportConnection: uuid.NewString(),
+		conn:                conn,
+		log:                 log,
+		reg:                 reg,
+		owner:               owner,
+		lastSeenAt:          now,
+		subs:                map[string]*Subscription{},
+		preparations:        map[string]*preparationSubscription{},
+		ackWaiters:          map[string]chan proto.InteractionDecisionAckPayload{},
+		sendCh:              make(chan *outboundFrame, 64),
+		closed:              make(chan struct{}),
 	}
 }
 
@@ -222,15 +232,30 @@ func (s *Session) setSupportedAgentKinds(kinds []runtimedevice.SupportedAgentKin
 	copyKinds := make([]runtimedevice.SupportedAgentKind, len(kinds))
 	copy(copyKinds, kinds)
 	s.kindsMu.Lock()
+	changed := !s.kindsSeen || !reflect.DeepEqual(s.supportedKinds, copyKinds)
 	s.kindsSeen = true
 	s.supportedKinds = copyKinds
+	if changed {
+		s.capabilityObservationPending = true
+	}
 	s.kindsMu.Unlock()
+}
+
+// A failed authorization or persistence check retains the diagnostic change
+// for the next confirmed heartbeat without changing capability publication.
+func (s *Session) observeConfirmedCapabilities(kinds []runtimedevice.SupportedAgentKind) {
+	s.kindsMu.Lock()
+	defer s.kindsMu.Unlock()
+	if s.capabilityObservationPending && s.reg.observeCapabilitySnapshot(s, kinds) {
+		s.capabilityObservationPending = false
+	}
 }
 
 // Close closes the transport and subscriptions with ErrSessionClosed, then
 // releases connection ownership. It establishes no execution outcome. Idempotent.
 func (s *Session) Close(reason string) {
 	s.closeOnce.Do(func() {
+		obslog.Bg().Info("runtime connection closed", "device_id", s.DeviceID, "reason", connectionCloseReason(reason))
 		s.stopReceiptTimer()
 		close(s.closed)
 		_ = s.conn.Close()
@@ -252,6 +277,7 @@ func (s *Session) Close(reason string) {
 		s.closeWorkspaceExports()
 		s.releaseOwnerLease()
 	})
+	s.firstHeartbeat.finish(s, "unknown")
 }
 
 // CloseWithCode sends a WS close frame with a custom status code so
@@ -279,12 +305,17 @@ func (s *Session) Send(ctx context.Context, env proto.Envelope) error {
 			env.Trace = carrier.String()
 		}
 	}
+	frame := &outboundFrame{Envelope: env, observation: s.artifactFor(env)}
+	frame.observation.frame(1)
 	select {
-	case s.sendCh <- env:
+	case s.sendCh <- frame:
+		frame.queued.Store(int64(time.Since(artifactClock)))
 		return nil
 	case <-s.closed:
+		frame.observation.frame(-1)
 		return ErrSessionClosed
 	case <-ctx.Done():
+		frame.observation.frame(-1)
 		return ctx.Err()
 	}
 }
@@ -340,20 +371,32 @@ func (s *Session) SendAndWaitInteractionAck(ctx context.Context, env proto.Envel
 func (s *Session) writeLoop() {
 	for {
 		select {
-		case env, ok := <-s.sendCh:
+		case frame, ok := <-s.sendCh:
 			if !ok {
 				return
 			}
+			dequeued := int64(time.Since(artifactClock))
+			env := frame.Envelope
+			o := frame.observation
+			o.queue(frame.queued.Load(), dequeued)
 			if !s.allowsReceiptFrame(env, true) {
+				o.frame(-1)
 				continue
 			}
+			encodeStarted := o.begin(artifactEncode)
 			raw, err := json.Marshal(env)
+			o.end(artifactEncode, encodeStarted, err)
 			if err != nil {
 				s.log("agentdaemon gateway: marshal outbound envelope: %v", err)
+				o.frame(-1)
 				continue
 			}
 			_ = s.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
-			if err := s.conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+			writeStarted := o.begin(artifactWrite)
+			writeErr := s.conn.WriteMessage(websocket.TextMessage, raw)
+			o.end(artifactWrite, writeStarted, writeErr)
+			o.frame(-1)
+			if err := writeErr; err != nil {
 				s.log("agentdaemon gateway: write %s frame: %v", env.Type, err)
 				s.Close("write error: " + err.Error())
 				return
@@ -378,6 +421,7 @@ func (s *Session) readLoop() {
 			s.log("agentdaemon gateway: read frame: %v", err)
 			return
 		}
+		readReturned := time.Now()
 		if !s.receiptDraining() {
 			s.markSeen()
 			if !s.renewOwnerLease() {
@@ -385,12 +429,25 @@ func (s *Session) readLoop() {
 			}
 		}
 
+		decodeStarted := time.Now()
 		var env proto.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			s.log("agentdaemon gateway: unmarshal inbound frame: %v", err)
 			continue
 		}
+		decodeElapsed := time.Since(decodeStarted)
+		o := s.artifactFor(env)
+		if o != nil {
+			o.mu.Lock()
+			if !o.closed {
+				o.stages[artifactDecode].add(decodeElapsed, false)
+				o.stages[artifactPredecode].add(decodeStarted.Sub(readReturned), false)
+			}
+			o.mu.Unlock()
+		}
+		dispatchStarted := o.begin(artifactDispatch)
 		s.dispatch(env)
+		o.end(artifactDispatch, dispatchStarted, nil)
 	}
 }
 
@@ -443,21 +500,45 @@ func (s *Session) releaseOwnerLease() {
 }
 
 func (s *Session) handleHeartbeat(env proto.Envelope) {
+	observing := s.firstHeartbeat.begin()
+	defer func() {
+		if observing {
+			s.firstHeartbeat.finish(s, "ok")
+		}
+	}()
+	started := time.Now()
 	var p proto.HeartbeatPayload
 	if err := env.DecodePayload(&p); err != nil {
+		if observing {
+			s.firstHeartbeat.record("heartbeat_decode_ms", started)
+			s.firstHeartbeat.finish(s, "error")
+		}
 		s.log("agentdaemon gateway: invalid heartbeat declaration device=%s", s.DeviceID)
 		s.setSupportedAgentKinds(nil)
 		s.Close("invalid heartbeat declaration")
 		return
 	}
+	if observing {
+		s.firstHeartbeat.record("heartbeat_decode_ms", started)
+	}
+	started = time.Now()
 	kinds := deviceKindsFromHeartbeat(p)
 	s.setSupportedAgentKinds(kinds)
+	if observing {
+		s.firstHeartbeat.record("capability_set_ms", started)
+	}
 	if s.heartbeat == nil {
+		started = time.Now()
+		s.observeConfirmedCapabilities(kinds)
+		if observing {
+			s.firstHeartbeat.record("capability_hint_ms", started)
+		}
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	started = time.Now()
 	status, err := s.heartbeat.TouchAgentDaemonHeartbeat(ctx, runtimedevice.Heartbeat{
 		RuntimeID:           s.DeviceID,
 		CredentialHash:      s.credentialHash,
@@ -466,11 +547,24 @@ func (s *Session) handleHeartbeat(env proto.Envelope) {
 		HeartbeatTimestamp:  p.Timestamp,
 		SupportedAgentKinds: kinds,
 	})
+	if observing {
+		s.firstHeartbeat.record("heartbeat_store_ms", started)
+	}
 	if err != nil {
+		if observing {
+			outcome := "error"
+			if errors.Is(err, context.Canceled) {
+				outcome = "cancelled"
+			}
+			s.firstHeartbeat.finish(s, outcome)
+		}
 		s.log("agentdaemon gateway: persist heartbeat device=%s: %v", s.DeviceID, err)
 		return
 	}
 	if status.Deleted {
+		if observing {
+			s.firstHeartbeat.finish(s, "deleted")
+		}
 		draining, drainErr := s.DrainArchivedCancellation(ctx)
 		if drainErr == nil && draining {
 			return
@@ -481,6 +575,12 @@ func (s *Session) handleHeartbeat(env proto.Envelope) {
 		// actual admin action; the daemon only sees it's no longer
 		// the current owner.
 		s.CloseWithCode(CloseRuntimeDeleted, "runtime retired")
+		return
+	}
+	started = time.Now()
+	s.observeConfirmedCapabilities(kinds)
+	if observing {
+		s.firstHeartbeat.record("capability_hint_ms", started)
 	}
 }
 
@@ -572,8 +672,9 @@ func (s *Session) dispatch(env proto.Envelope) {
 		return
 	}
 
-	// All run-correlated frames fan to the matching subscriber.
-	if env.ID == "" {
+	// Only execution events consume the Run window. Control traffic has its
+	// own waiters above and unknown frames cannot consume event credit.
+	if env.ID == "" || !proto.IsExecutionEvent(env.Type) {
 		return
 	}
 	s.dispatchToSubscriber(env)
@@ -583,4 +684,24 @@ func (s *Session) dispatch(env proto.Envelope) {
 // The digest is never accepted from a daemon frame.
 func (s *Session) AuthenticatedWith(digest string) bool {
 	return s.credentialHash != "" && subtle.ConstantTimeCompare([]byte(s.credentialHash), []byte(digest)) == 1
+}
+
+// Never log caller or peer-provided close prose.
+func connectionCloseReason(reason string) string {
+	switch reason {
+	case "read loop exit":
+		return "read_ended"
+	case "owner lease renew failed":
+		return "owner_renewal_failed"
+	case "owner lease lost to a newer connection":
+		return "owner_lost"
+	case "invalid heartbeat declaration":
+		return "invalid_heartbeat"
+	case "execution service shutting down":
+		return "service_shutdown"
+	}
+	if strings.HasPrefix(reason, "write error:") {
+		return "write_failed"
+	}
+	return "closed"
 }

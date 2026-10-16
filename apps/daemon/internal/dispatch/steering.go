@@ -17,7 +17,6 @@ import (
 const (
 	maxSteeringInputs   = 256
 	steeringCallTimeout = 10 * time.Second
-	steeringSendTimeout = 5 * time.Second
 )
 
 type steeringReceipt struct {
@@ -43,7 +42,31 @@ func (r *Router) handlePromptSteer(ctx context.Context, env proto.Envelope) erro
 			ack = *pending
 		}
 	}
-	return r.sendSteeringAck(ctx, env, ack)
+	// A receipt may wait for Run credit. Never hold the shared control loop
+	// across that wait, including duplicate and rejected input receipts.
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return ErrRouterClosed
+	}
+	select {
+	case r.steeringReplySlots <- struct{}{}:
+	default:
+		r.mu.Unlock()
+		return errors.New("steering receipt capacity exceeded")
+	}
+	r.shutdownWG.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer r.shutdownWG.Done()
+		defer func() { <-r.steeringReplySlots }()
+		sendCtx, stop := r.shutdownContext(ctx)
+		defer stop()
+		if err := r.sendSteeringAck(sendCtx, env, ack); err != nil {
+			r.log.WarnContext(sendCtx, "steering receipt delivery incomplete", "run_id", env.ID)
+		}
+	}()
+	return nil
 }
 
 func (r *Router) sendSteeringAck(ctx context.Context, env proto.Envelope, ack proto.PromptSteerAckPayload) error {

@@ -1,5 +1,6 @@
 [
   {"status": "completed", "observed": true},
+  {"status": "failed", "error_code": "engine_failed", "engine_error_code": "provider_billing_unavailable", "observed": false},
   {"status": "failed", "error_code": "engine_failed", "engine_error_code": "authentication_error", "observed": true},
   {"status": "failed", "error_code": "engine_failed", "engine_error_code": "connection_failed", "observed": true},
   {"status": "failed", "error_code": "engine_failed", "engine_error_code": "rate_limit_exceeded", "observed": true},

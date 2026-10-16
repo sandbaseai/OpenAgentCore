@@ -1,7 +1,7 @@
 ---
 title: "Session、事件和历史"
 source: contracts/agents-api/sessions-events.md
-source_hash: d78ffc4d163049f10a8915b98621bb8a94a2f19724efe1d0fd70cf4b92ac298e
+source_hash: ec4793c064dfe73020c3cade63a2b17d3ac08e72f1528cd33110630bbbcf623c
 ---
 
 本契约涵盖 Session 内部发生的事情：发送输入、实时事件流，以及读取 Turn、Item 和使用量的持久化历史。Session 资源本身（创建配置、重试标识、更新、列出和删除）见 [Core 线协议行为](wire-semantics.md)。消息和函数结果内容见[消息内容](message-content.md)。[Agents API 指南](../../../docs/zh/api/public-agent-api.md)展示了使用 SDK 和 HTTP 的调用方式。
@@ -43,7 +43,28 @@ Turn 失败后 Session 仍可使用：新输入会启动一个新 Turn。后来�
 - **排队。** 当一个已连接且支持该 Session Harness 和配置的 Runtime 接入，并且 Core 的 [`OAC_EXECUTION_CONCURRENCY`](../../../docs/zh/configuration.md#settings) 工作槽位有一个空闲时，排队的 Turn 才会启动。Session 始终绑定到首次运行它的 Runtime。
 - **执行可用性。** Core 关闭期间，或其 Worker 失去执行所有权后，请求返回 503 `execution_unavailable`。
 
-### 包含 Environment 的 Session {#sessions-with-an-environment}
+### 输入回执 {#input-receipts}
+
+`GET /v1/agents/sessions/{session_id}/input-receipts` 是 Core 扩展，使用相同的 Project key 和 `OpenAI-Beta: agents=v1` 头。传入原 events 请求的准确 `Idempotency-Key`，要求非空白、最多 128 字节。先验证 Session 权限，再校验 key；缺失、格式错误、已删除或属于其他 Project 的 Session 均返回 404。响应使用 `Cache-Control: no-store`。
+
+```json
+{"object":"agent.session.input_receipts","session_id":"<session-id>","status":"admitted","receipts":[{"input_index":0,"sequence":1,"turn_id":"<turn-id>","item_ids":["<item-id>"]}]}
+```
+
+| 状态 | HTTP | 含义 |
+| --- | --- | --- |
+| `admitted` | 200 | 准确的有序批次已经提交；`receipts` 按输入事件一一返回，最多 64 项 |
+| `pending` | 202 | Environment 已预留该 key，但批次尚未受理；`receipts` 为 `[]` |
+| `failed` | 200 | 预留失败、过期或取消，未受理；`receipts` 为 `[]` |
+| `absent` | 200 | 当前快照中没有该 key 的受理批次或预留；`receipts` 为 `[]` |
+
+`input_index` 是事件在提交批次内从零开始的位置；`sequence` 是持久的 Session 输入标识。空闲取消的 `turn_id` 为 null。`item_ids` 始终为数组：消息事件按消息顺序列出准确的用户 Item ID，包括单事件中的多条消息；取消与函数结果事件返回空数组。此回执不跟踪函数结果 Item 的应用。追加到同一 Turn 的不同批次保留各自输入标识和 Item ID。
+
+查询在一个数据库快照内完成，复用受理时相同的确定性输入投影并验证实际存储的用户 Item；不按文本、最新 Turn 或最新历史记录匹配。消息输入和对应 Item 在 Runtime 执行前原子提交，Core 重启或实时事件缓冲过期后仍可读取。只返回标识和受理状态，不返回正文、模型配置或凭据。
+
+已授权 Session 的类型化 `absent` 响应也证明部署支持本扩展，但它不能证明此前超时或并发请求最终不会提交。响应丢失后，轮询相同 key，或显式使用相同 key 和完全相同批次重试；不通过更换 key 恢复结果未知的发送。官方 POST 仍返回空 202，空 events 批次不产生回执。此接口不写入、不唤醒 Runtime，也不保证执行完成或原生操作恰好一次。
+
+### 包含 Environment 的会话 {#sessions-with-an-environment}
 
 在 `openai_hosted` 和 `self_hosted` Session 中，Turn 运行期间发送的消息会立即加入该 Turn。发送给空闲 Session 的消息会为 Environment 预留该批次：请求等待 Turn 开始，从预留时起最多等待五分钟。预留等待 `self_hosted` 机器连接时，Session 显示为 `requires_action`，并带有 `environment_connection` 操作。在这些部署方式下，携带消息的批次只能包含消息。仅取消和仅结果的批次会立即被接纳，并且不会创建 Turn。
 

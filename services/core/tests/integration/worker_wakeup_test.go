@@ -76,6 +76,12 @@ func TestWorkerSchedulerCommittedAdmissionWakesBeforeMaintenance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Fixture connection/capability hints precede this admission operation.
+			// Remove them so a rejected admission is tested independently.
+			select {
+			case <-h.registry.CapabilityHints():
+			default:
+			}
 			trace.armed.Store(true)
 			started = true
 			go func() { done <- worker.Run(ctx) }()

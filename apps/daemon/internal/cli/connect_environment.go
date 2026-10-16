@@ -128,6 +128,7 @@ func environmentBootstrap(ctx context.Context, prof auth.Profile, remote string)
 // ends the process with the message as its error. Otherwise the process that
 // owns the connection parks (see parkEnvironment).
 func runEnvironmentConnect(parent context.Context, rc *runContext, profile string, background, exitOnRejection bool, remote, environment, credentialFile string) error {
+	initializeRuntimeObservations(rc)
 	base, err := environmentBase(remote)
 	if err != nil {
 		return err
@@ -171,13 +172,8 @@ func runEnvironmentConnect(parent context.Context, rc *runContext, profile strin
 	if background && !daemonize.IsBackgroundChild() {
 		return spawnBackground(parent, rc, profile, os.Args)
 	}
-	// Discovery consumes the immutable Runtime binding; it must follow enrollment.
-	discovery, err := preflightAgentCLIs(parent, rc, profile)
-	if err != nil {
-		return err
-	}
 	prof := auth.Profile{ServerURL: base, RuntimeID: bound.DeviceID, RunnerCredential: credential}
-	return rejected(mainLoopRemote(parent, rc, profile, prof, discovery, remote))
+	return rejected(mainLoopRemote(parent, rc, profile, prof, remote))
 }
 
 var (

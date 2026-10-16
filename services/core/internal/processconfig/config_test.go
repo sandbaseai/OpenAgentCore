@@ -223,11 +223,31 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 		if setting.Key == "OAC_WRITE_AUDIT_RETENTION" && setting.Default != "2160h" {
 			t.Fatal(setting.Default)
 		}
+		if setting.Key == "OAC_TURN_AUTO_RETRIES" && setting.Default != 3 {
+			t.Fatal(setting.Default)
+		}
 		if setting.Key == "OAC_HISTORY_SETTINGS_FILE" && (setting.Configured == nil || !*setting.Configured) {
 			t.Fatal("history file was not reported as configured")
 		}
 	}
 	if found["OAC_PUBLIC_URL"] != "https://core.example" || found["OAC_EXECUTION_CONCURRENCY"] != 8 || found["OAC_LOG_LEVEL"] != "warn" || found["OAC_LOG_FORMAT"] != "auto" || found["OAC_WRITE_AUDIT_RETENTION"] != "24h" {
 		t.Fatal(found)
+	}
+}
+
+func TestTurnAutoRetries(t *testing.T) {
+	required(t)
+	if c, err := Load(); err != nil || c.TurnAutoRetries != 3 {
+		t.Fatal(c.TurnAutoRetries, err)
+	}
+	for value, want := range map[string]int{"": 3, "0": 0, "3": 3, "5": 5} {
+		t.Setenv("OAC_TURN_AUTO_RETRIES", value)
+		if c, err := Load(); err != nil || c.TurnAutoRetries != want {
+			t.Fatal(value, c.TurnAutoRetries, err)
+		}
+	}
+	for _, value := range []string{"-1", "6", "1.5", "synthetic-secret"} {
+		t.Setenv("OAC_TURN_AUTO_RETRIES", value)
+		rejects(t, "OAC_TURN_AUTO_RETRIES", "synthetic-secret")
 	}
 }

@@ -1,7 +1,7 @@
 ---
 title: "Agents API 指南"
 source: docs/api/public-agent-api.md
-source_hash: 1648667dbd1c35f043f6e93e5fdb9dbe45c1d28e4634de08fc3fa9e69d3e3f0d
+source_hash: de6019074f5fd4e6a4c6eabd23be5cbe02c2e617d3d84be2ba2f91591106eb10
 ---
 
 Core 在 `/v1` 提供 [OpenAI Agents API](https://platform.openai.com/docs/api-reference)。可以使用官方 OpenAI SDK 或普通 HTTP。本指南针对每项常见操作同时展示这两种方式，并说明 Core 与 OpenAI 存在差异的地方。
@@ -58,7 +58,7 @@ oac /agents
 | [Vaults](#vaults) | `/vaults` | MCP 服务器的只写凭据 |
 | Subagents | `/agents/sessions/{id}/subagents` | 只读的子任务；请参阅 [subagents](../../../contracts/agents-api/zh/subagents.md) |
 
-Core 的路由与固定版本 SDK 中的路由完全一致，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。Core 不添加任何路由；其扩展内容位于 [`x_agents_core`](#core-extensions-x-agents-core)。
+Core 保留固定版本 SDK 的全部路由，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。配置扩展位于 [`x_agents_core`](#core-extensions-x-agents-core)。使用 Project key 的[输入回执扩展](../../../contracts/agents-api/zh/sessions-events.md#input-receipts)可准确识别批次受理产生的用户 Item，不改变官方 events 响应。
 
 ## 常见任务 {#common-tasks}
 
@@ -536,9 +536,9 @@ HTTP 路径为 `/vaults`，需要 Beta 请求头。Session 从其 `vault_ids` �
 ## 诊断故障 {#diagnose-a-failure}
 
 1. 读取 Session 的 `status` 和 `error`，以及最新 Turn 的 `error`。失败的 Turn 只会报告通用的 `internal_error`。
-2. 检查 Environment 是否已连接，以及其 Harness 是否可用。
-3. 在 [Harness capabilities](../../../contracts/agents-api/zh/harness-capabilities.md) 中检查 Harness、模型和工具的组合。
-4. 向管理员索取 Session 的[诊断信息](../../../contracts/agents-api/zh/session-diagnostics.md)，其中会指出故障类别；同时请查看[故障排除](../getting-started/operations.md#troubleshooting)，了解服务日志、凭据和节点就绪状态。
+2. 检查 Environment 是否已连接，以及其 harness 是否可用。
+3. 在 [Harness capabilities](../../../contracts/agents-api/zh/harness-capabilities.md) 中检查 harness、模型和工具的组合。
+4. 读取 Session 的 [Project 诊断扩展](../../../contracts/agents-api/zh/session-diagnostics.md#project-diagnostics-extension) 获取安全故障分类，再请管理员查看[故障排除](../getting-started/operations.md#troubleshooting)，了解服务日志、凭据和节点就绪状态。
 
 401 通常表示使用了其他命名空间中的密钥；请参阅 [API 命名空间与凭据](index.md)。
 

@@ -145,3 +145,59 @@ func TestArchivedReceiptDeadlineDoesNotRenew(t *testing.T) {
 		t.Fatal("receipt retries renewed deadline")
 	}
 }
+
+func TestArchivedCancellationDrainsEventCredit(t *testing.T) {
+	peer := NewSession(newFakeConn(), "device", "", proto.Version, NewRegistry(), nil)
+	peer.eventCredit = true
+	defer peer.Close("test complete")
+	peer.credentialHash = "original-hash"
+	peer.archivedCancellations = &receiptStore{receipt: runtimedevice.ArchivedCancellationReceipt{RunID: "run", Deadline: time.Now().Add(time.Minute)}}
+	release, err := peer.TrackExecutionDelivery("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	sub, err := peer.SubscribeDurable("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range proto.ExecutionEventWindow {
+		peer.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDelta, ID: "run"})
+	}
+	if ok, err := peer.DrainArchivedCancellation(t.Context()); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for _, kind := range []string{proto.TypeExecutionEventsAck, proto.TypeExecutionEventsStop} {
+		for _, id := range []string{"other", ""} {
+			if err := peer.Send(t.Context(), proto.Envelope{Type: kind, ID: id}); err == nil {
+				t.Fatal("credit escaped archived Run", kind, id)
+			}
+		}
+	}
+	for range proto.ExecutionEventWindow {
+		env := <-sub.Events
+		if err := sub.Consumed(t.Context(), env); err != nil {
+			t.Fatal("archive blocked event credit", err)
+		}
+		if frame := <-peer.sendCh; frame.Type != proto.TypeExecutionEventsAck || frame.ID != "run" {
+			t.Fatal("invalid drain credit", frame.Type)
+		}
+	}
+	done, _ := proto.NewEnvelope(proto.TypeDone, "run", proto.DonePayload{})
+	peer.dispatchToSubscriber(done)
+	if event := <-sub.Events; event.Type != proto.TypeDone || sub.Err() != nil {
+		t.Fatal("drain lost terminal")
+	}
+	sub.Stop()
+	if frame := <-peer.sendCh; frame.Type != proto.TypeExecutionEventsStop || frame.ID != "run" {
+		t.Fatal("drain blocked stop")
+	}
+	ack, _ := proto.NewEnvelope(proto.TypeInteractionDecisionAck, "run", proto.InteractionDecisionAckPayload{DeliveryID: "cancel:run", Applied: true})
+	if !peer.allowsReceiptFrame(ack, false) {
+		t.Fatal("drain blocked cancellation receipt")
+	}
+	release()
+	if !peer.IsClosed() {
+		t.Fatal("settled archive retained connection")
+	}
+}

@@ -114,6 +114,7 @@ The [Session and Turn diagnostics reads](./session-diagnostics.md) return these 
 | `authentication_error` | Native provider authentication rejected |
 | `rate_limit_exceeded` | Native rate limit classification |
 | `usage_limit_exceeded` | Native billing or usage limit classification |
+| `provider_billing_unavailable` | Model endpoint HTTP 402; billing correction is required, not automatic retry; params contain `http_status` 402 or null |
 | `server_overloaded` | Native overload classification |
 | `server_error` | Native server failure classification |
 | `invalid_request` | Native request rejection |
@@ -138,4 +139,4 @@ The [Session and Turn diagnostics reads](./session-diagnostics.md) return these 
 
 A database failure is an error, never an empty or healthy snapshot. Provisioning reasons and native messages are never parsed for categories or parameters.
 
-Native categories apply only to a failed Turn whose outcome has `error_code: engine_failed`. Core accepts only the listed `engine_error_code` values; an unknown, malformed or absent value stays `harness_error`. Only `connection_failed` uses `engine_http_status`. Nested metadata and provider text never classify a failure. Core storage, incomplete-stream and cancellation failures take precedence, and cancelled or completed Turns have no failure. [Native error classification](../../docs/runtime-protocol.md#native-failure-classification) lists which adapters report each category.
+Native categories apply only to a failed Turn whose outcome has `error_code: engine_failed`. Core accepts only the listed `engine_error_code` values; an unknown, malformed or absent value stays `harness_error`. `connection_failed` and `provider_billing_unavailable` use their validated `engine_http_status`. Nested metadata and provider text never classify a failure. Core storage, incomplete-stream and cancellation failures take precedence, and cancelled or completed Turns have no failure. [Native error classification](../../docs/runtime-protocol.md#native-failure-classification) lists which adapters report each category.

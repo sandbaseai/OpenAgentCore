@@ -25,6 +25,7 @@ func (c *JSONRPCClient) requestWithResult(ctx context.Context, method string, pa
 }
 
 func (c *JSONRPCClient) requestWithTimeout(ctx context.Context, method string, params any, write func(any) error, timeout time.Duration, onResult func(json.RawMessage) error) (json.RawMessage, error) {
+	started := time.Now()
 	if !c.Alive() {
 		return nil, errors.New("codex rpc: client not alive")
 	}
@@ -37,12 +38,47 @@ func (c *JSONRPCClient) requestWithTimeout(ctx context.Context, method string, p
 		resp:     make(chan rpcResponse, 1),
 		onResult: onResult,
 	}
+	if method == "initialize" {
+		type responseObservation struct {
+			at       time.Time
+			accepted bool
+		}
+		observed := make(chan responseObservation, 1)
+		pending.onResponse = func(success bool) {
+			// Only capture on the reader: logging must not delay response delivery.
+			observed <- responseObservation{at: time.Now(), accepted: success}
+		}
+		defer func() {
+			select {
+			case response := <-observed:
+				var responseErr error
+				if !response.accepted {
+					responseErr = errors.New("native initialize rejection")
+				}
+				observePreparationInterval(ctx, "rpc_initialize_response", started, response.at, responseErr)
+			default:
+			}
+		}()
+	}
+	boundary := nativeBoundaryFrom(ctx)
+	if method == "turn/start" && boundary != nil {
+		pending.onResponse = func(bool) { boundary.ack(time.Now()) }
+	}
 	c.pendingMu.Lock()
 	c.pending[id] = pending
 	c.pendingMu.Unlock()
 
 	frame := JsonRpcRequest{JsonRpc: JsonRpcVersion, ID: id, Method: method, Params: params}
-	if err := write(frame); err != nil {
+	writeStarted := time.Now()
+	err = write(frame)
+	if method == "turn/start" && boundary != nil {
+		boundary.write(writeStarted, time.Now())
+	}
+	if method == "initialize" {
+		ended, writeErr := time.Now(), err
+		defer func() { observePreparationInterval(ctx, "rpc_initialize_write", started, ended, writeErr) }()
+	}
+	if err != nil {
 		c.pendingMu.Lock()
 		delete(c.pending, id)
 		c.pendingMu.Unlock()

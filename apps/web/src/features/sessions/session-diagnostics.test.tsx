@@ -99,3 +99,12 @@ describe("Core diagnostics in the console", () => {
     client.clear();
   });
 });
+
+it.each(["en", "zh-CN"])("renders billing failure rather than internal error in %s", async (language) => {
+  await i18n.changeLanguage(language);
+  const billing: DiagnosticFailure = { code: "provider_billing_unavailable", params: { http_status: 402 }, failed_at: null };
+  for (const html of [render("session", { ...sessionData, failure: { ...billing, source: "turn", turn_id: turn.id } }), render("turn", { ...turnData, failure: billing })]) {
+    expect(html).toContain(language === "en" ? "billing or usage-limit issue" : "账单或使用额度问题");
+    expect(html).not.toContain(i18n.getFixedT(language, "diagnostics")("failure.internal_error"));
+  }
+});

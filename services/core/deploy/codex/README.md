@@ -58,6 +58,8 @@ The adapter classifies a failed Turn only from the exact root terminal Turn's `c
 | `httpConnectionFailed`, `responseStreamConnectionFailed`, `responseStreamDisconnected` | `connection_failed`, with the upstream `httpStatusCode` |
 | `responseTooManyFailedAttempts` | `rate_limit_exceeded` when `httpStatusCode` is 429, otherwise `connection_failed` |
 
+HTTP status 402 normalizes to `provider_billing_unavailable` and is not a retry recommendation. When `codexErrorInfo` is missing, null, or the exact string `other`, the adapter can recognize a single-line native terminal message beginning exactly `unexpected status 402 Payment Required`, followed only by the native colon/comma separator or end of message. It never searches partial assistant text, accumulated outcome text, retry notifications, response-body keywords or unknown structured variants. Known structured variants take precedence. A trailing `, request id: ` UUID is retained as private correlation only; arbitrary identifiers, multiline messages and suffixes are rejected. Terminal logs contain classification, status, bounded correlation and lengths rather than raw native payloads.
+
 Codex `0.153.4` reports a provider HTTP 400 as `other` and puts the provider's error body in the message, such as the rejection of an unknown model name. Every other variant stays unclassified, and so does `other` with any other message, including a plain-text 400 body and the `unexpected status` text Codex writes for provider 401 and 404 responses.
 
 ## Runtime image

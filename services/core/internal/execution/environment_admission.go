@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
+
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspacefs"
 )
@@ -75,11 +77,17 @@ func (w *Worker) validateCreation(ctx context.Context, input sessions.CreateSess
 	return nil
 }
 
-func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.Session, key string, inputs []sessions.Input) ([]sessions.InputReceipt, error) {
-	if err := w.validateEnvironmentAdmission(ctx, session.Engine, session.Configuration); err != nil {
+func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.Session, key string, inputs []sessions.Input) (receipts []sessions.InputReceipt, err error) {
+	checkAt := time.Now()
+	err = w.validateEnvironmentAdmission(ctx, session.Engine, session.Configuration)
+	observeExecutionStage(ctx, "input_validate", checkAt, err, "session_id", session.ID)
+	if err != nil {
 		return nil, err
 	}
-	if err := w.checkAdmissionOwnership(ctx); err != nil {
+	checkAt = time.Now()
+	err = w.checkAdmissionOwnership(ctx)
+	observeExecutionStage(ctx, "input_ownership", checkAt, err, "session_id", session.ID)
+	if err != nil {
 		return nil, err
 	}
 	kind := ""
@@ -92,14 +100,26 @@ func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.S
 	}
 	changed, unsubscribe := w.dispatcher.notifications.subscribe(session.TenantID, session.ID)
 	defer unsubscribe()
+	reservedAt := time.Now()
 	reserve, cancel := context.WithTimeout(ctx, 5*time.Second)
 	reservation, err := w.dispatcher.Sessions.ReserveEnvironmentInput(reserve, session.TenantID, session.ID, key, inputs)
 	cancel()
+	observeExecutionStage(ctx, "input_reserve", reservedAt, err, "session_id", session.ID)
 	if err != nil {
 		return nil, err
 	}
+	obslog.Ctx(ctx).Info("environment input reserved", "session_id", session.ID,
+		"reservation_id", reservation.ID, "execution_trace_id", reservationTraceID(reservation.ID).String(), "state", reservation.State)
+	admittedAt := time.Now()
+	var notificationWakeups, pollWakeups int
+	lastWake := "none"
+	defer func() {
+		observeExecutionStage(ctx, "input_admission_wait", admittedAt, err,
+			"session_id", session.ID, "reservation_id", reservation.ID, "state", reservation.State,
+			"notification_wakeups", notificationWakeups, "poll_wakeups", pollWakeups, "last_wake_source", lastWake)
+	}()
 	w.wakeScheduler()
-	if reservation.State == sessions.EnvironmentInputPending && !reservation.IsInitial {
+	if reservation.State == sessions.EnvironmentInputPending {
 		w.hintRuntimeWake(ctx, session)
 	}
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -119,7 +139,11 @@ func (w *Worker) submitEnvironmentInputs(ctx context.Context, session sessions.S
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
+			pollWakeups++
+			lastWake = "poll"
 		case <-changed:
+			notificationWakeups++
+			lastWake = "notification"
 		}
 		if err := w.checkAdmissionOwnership(ctx); err != nil {
 			return nil, err
@@ -135,10 +159,17 @@ func (w *Worker) environmentInputOutcome(ctx context.Context, session sessions.S
 	read, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// The database rechecks its clock under the Session lock before settlement.
+	var result sessions.EnvironmentInputReservation
+	var err error
 	if !time.Now().Before(reservation.Deadline) {
-		return w.dispatcher.Sessions.ExpireEnvironmentInput(read, session.TenantID, session.ID, reservation.ID)
+		result, err = w.dispatcher.Sessions.ExpireEnvironmentInput(read, session.TenantID, session.ID, reservation.ID)
+	} else {
+		result, err = w.dispatcher.SessionsReader.GetEnvironmentInputReservation(read, session.TenantID, session.ID, reservation.ID)
 	}
-	return w.dispatcher.SessionsReader.GetEnvironmentInputReservation(read, session.TenantID, session.ID, reservation.ID)
+	if err == nil && result.ID == reservation.ID {
+		w.schedulingObservations.handlerOutcome(ctx, session.ID, result)
+	}
+	return result, err
 }
 
 func (w *Worker) checkAdmissionOwnership(ctx context.Context) error {

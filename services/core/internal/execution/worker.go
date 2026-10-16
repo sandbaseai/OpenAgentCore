@@ -9,24 +9,30 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
 const DefaultExecutionConcurrency = 4
 
+const ownershipCheckTimeout = 5 * time.Second
+
 // Worker owns queued work; the database lease excludes a second execution service.
 type Worker struct {
-	concurrency         int
-	metrics             workerMetricsState
-	dispatcher          *Dispatcher
-	lease               Ownership
-	directoryReads      chan directoryReadRequest
-	fileWrites          chan fileWriteRequest
-	scheduleWake        chan struct{}
-	stopped             chan struct{}
-	stopOnce            sync.Once
-	runtimes            *runtimeManager
-	enrolledConnections map[string]*runtimeConnection
+	concurrency            int
+	metrics                workerMetricsState
+	schedulingObservations schedulingObservations
+	dispatcher             *Dispatcher
+	lease                  Ownership
+	ownershipCheckOnce     sync.Once
+	ownershipChecks        chan struct{}
+	directoryReads         chan directoryReadRequest
+	fileWrites             chan fileWriteRequest
+	scheduleWake           chan struct{}
+	stopped                chan struct{}
+	stopOnce               sync.Once
+	runtimes               *runtimeManager
+	enrolledConnections    map[string]*runtimeConnection
 }
 
 // StartWorker takes over owner.Lease from the moment it is called: a failed
@@ -75,6 +81,9 @@ func StartWorker(ctx context.Context, dispatcher *Dispatcher, owner Owner) (_ *W
 	if owner.Deployment == nil {
 		return nil, errors.New("execution worker requires the deployment execution operations")
 	}
+	if err := owner.Deployment.CheckRuntimeComputeProtocol(ctx, sandbox.SuspensionStateVersion); err != nil {
+		return nil, err
+	}
 	owned.notifications = &executionNotifications{}
 	worker := &Worker{concurrency: dispatcher.MaxConcurrentExecutions, dispatcher: owned, lease: owner.Lease, directoryReads: make(chan directoryReadRequest), fileWrites: make(chan fileWriteRequest), stopped: make(chan struct{}), scheduleWake: make(chan struct{}, 1), enrolledConnections: make(map[string]*runtimeConnection)}
 	worker.runtimes, err = newRuntimeManager(owner, owned.Deployment, owned.DeploymentReader, owned.SessionsReader, owned.Registry, owned.ManagedRuntimes)
@@ -104,6 +113,20 @@ func StartWorker(ctx context.Context, dispatcher *Dispatcher, owner Owner) (_ *W
 
 // CheckOwnership checks the same database lease used for execution writes.
 func (w *Worker) CheckOwnership(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, ownershipCheckTimeout)
+	defer cancel()
+	w.ownershipCheckOnce.Do(func() { w.ownershipChecks = make(chan struct{}, 1) })
+	select {
+	case w.ownershipChecks <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-w.ownershipChecks }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Keep the authoritative result and its observation in the same order.
+	// A delayed success must not overwrite a later failed ownership check.
 	err := w.lease.CheckOwnership(ctx)
 	w.observeOwnership(err)
 	return err
@@ -140,6 +163,10 @@ func (w *Worker) CreateSession(ctx context.Context, tenant string, input session
 	input.SupportsRetainedNativeHistory = profile.RetainedNativeHistory.IsSupported()
 	creation, err := w.dispatcher.Sessions.CreateSession(ctx, tenant, input)
 	if err == nil {
+		w.hintRuntimeWake(ctx, creation.Session)
+		if len(input.InitialInputs) > 0 {
+			recordInitialInputOrigin(ctx, creation.Session.ID)
+		}
 		w.wakeScheduler()
 	}
 	return creation, err
@@ -149,12 +176,21 @@ func (w *Worker) CreateSession(ctx context.Context, tenant string, input session
 func (w *Worker) Run(ctx context.Context) (runErr error) {
 	defer w.stopOnce.Do(func() { close(w.stopped) })
 	ctx, cancel := context.WithCancel(ctx)
+	exitStage := "context"
 	var running sync.WaitGroup
 	defer func() {
 		w.observeWorkerStop(runErr, ctx.Err())
+		if runErr != nil && !errors.Is(runErr, ctx.Err()) {
+			observeWorkerFailure(ctx, exitStage, runErr)
+		}
 		cancel()
 		w.runtimes.stop()
 		running.Wait()
+		outcome := "unknown"
+		if exitStage == "ownership_check" {
+			outcome = "owner_lost"
+		}
+		w.schedulingObservations.close(ctx, outcome)
 		// Drain an external provisioning caller before releasing the writer lease.
 		w.runtimes.drain()
 		w.observeWorkerClosed(closeLease(ctx, w.lease))
@@ -200,8 +236,10 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-preparationDone:
+			exitStage = "environment_initialization"
 			return err
 		case err := <-lifecycleDone:
+			exitStage = "runtime_lifecycle"
 			return err
 		case request := <-w.fileWrites:
 			if request.ctx.Err() != nil || active[request.environment.SessionID] || len(active) == w.executionConcurrency() {
@@ -261,6 +299,7 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 			delete(active, result.id)
 			w.observeSlots(len(active))
 			if result.err != nil {
+				exitStage = "execution_completion"
 				return result.err
 			}
 			if !rescanOnCompletion {
@@ -269,23 +308,28 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 			rescanOnCompletion = false
 		case <-w.scheduleWake:
 			rescanOnCompletion = true
+		case <-w.dispatcher.Registry.CapabilityHints():
+			rescanOnCompletion = true
 		case <-ticker.C:
 			maintenance = true
 		}
-		check, stop := context.WithTimeout(ctx, 5*time.Second)
+		check, stop := context.WithTimeout(ctx, ownershipCheckTimeout)
 		err := w.CheckOwnership(check)
 		stop()
 		if err != nil {
 			w.observeSchedulerPoll(0, err)
+			exitStage = "ownership_check"
 			return err
 		}
 		if maintenance {
 			if _, err := w.dispatcher.sessionExecution.ExpireEnvironmentInputs(ctx); err != nil {
 				w.observeSchedulerPoll(0, err)
+				exitStage = "expire_environment_inputs"
 				return err
 			}
 			if err := w.observeEnrolledRuntimes(ctx); err != nil {
 				w.observeSchedulerPoll(0, err)
+				exitStage = "observe_enrolled_runtimes"
 				return err
 			}
 		}
@@ -298,13 +342,11 @@ func (w *Worker) Run(ctx context.Context) (runErr error) {
 			w.observeSchedulerPoll(0, nil)
 			continue
 		}
-		if !maintenance {
-			schedule.nextEnvironmentScan = time.Time{}
-		}
-		work, err := schedule.selectWork(ctx, w, devices, active)
+		work, err := schedule.selectWork(ctx, w, devices, active, !maintenance)
 		w.observeSlots(len(active))
 		if err != nil {
 			w.observeSchedulerPoll(0, err)
+			exitStage = "select_work"
 			return err
 		}
 		w.observeSchedulerPoll(len(work), nil)
@@ -347,8 +389,12 @@ func (w *Worker) reconcile(ctx context.Context) error {
 }
 
 func (w *Worker) runClaim(ctx context.Context, item sessions.ExecutionWork) error {
-	_, err := w.dispatcher.Run(ctx, item.TenantID, item.SessionID, item.TurnID)
-	if err == nil || errors.Is(err, sessions.ErrTurnConflict) {
+	ran, err := w.dispatcher.Run(ctx, item.TenantID, item.SessionID, item.TurnID)
+	if err == nil {
+		w.maybeAutoRetry(ctx, item.TenantID, ran)
+		return nil
+	}
+	if errors.Is(err, sessions.ErrTurnConflict) {
 		return nil
 	}
 	var rejection *preparationRejection

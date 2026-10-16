@@ -362,6 +362,10 @@ func (t *deploymentTx) RecordAuditAs(source adminaudit.Source, action, installat
 	return auditpg.RecordDeploymentMutation(adminaudit.WithSource(t.ctx, source), t.q, action, "sandbox_deployment", installationID)
 }
 
+func (t *deploymentTx) HasIncompatibleComputeState(version string) (bool, error) {
+	return t.q.HasIncompatibleRuntimeComputeState(t.ctx, version)
+}
+
 func (u unit) SaveIdleSeconds(seconds int64) error {
 	return u.q.UpdateSandboxIdleSeconds(u.ctx, seconds)
 }

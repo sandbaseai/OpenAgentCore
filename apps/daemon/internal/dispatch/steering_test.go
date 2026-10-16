@@ -201,6 +201,15 @@ func TestSteeringDoesNotBlockOtherRunCancellation(t *testing.T) {
 
 func lastSteeringAck(t *testing.T, sender *recSender, runID, inputID string) proto.PromptSteerAckPayload {
 	t.Helper()
+	waitFor(t, func() bool {
+		frames := sender.snapshot()
+		if len(frames) == 0 {
+			return false
+		}
+		env := frames[len(frames)-1]
+		var ack proto.PromptSteerAckPayload
+		return env.Type == proto.TypePromptSteerAck && env.ID == runID && env.DecodePayload(&ack) == nil && ack.InputID == inputID
+	}, "steering receipt arrival")
 	frames := sender.snapshot()
 	if len(frames) == 0 {
 		t.Fatal("missing ack")
@@ -235,10 +244,20 @@ func TestSteeringCapacityPreservesExistingReceipts(t *testing.T) {
 	startRun(t, h.router, h.sender, "run-1", proto.PromptRequestPayload{AgentKind: "codex"})
 	for i := range 257 {
 		input := proto.PromptSteerPayload{InputID: fmt.Sprintf("input-%d", i), Input: proto.TextInput("extra")}
-		if err := handleSteeringAndWait(t, h, mustEnv(t, proto.TypePromptSteer, "run-1", input)); err != nil {
-			t.Fatal(err)
+		var ack proto.PromptSteerAckPayload
+		deadline := time.Now().Add(time.Second)
+		for {
+			if err := handleSteeringAndWait(t, h, mustEnv(t, proto.TypePromptSteer, "run-1", input)); err != nil {
+				t.Fatal(err)
+			}
+			ack = lastSteeringAck(t, h.sender, "run-1", input.InputID)
+			// Receipt publication can precede the previous worker's final
+			// release. Retry the declared transient response with the same ID.
+			if ack.ErrorCode != "busy" || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
 		}
-		ack := lastSteeringAck(t, h.sender, "run-1", input.InputID)
 		if i < 256 && !ack.Accepted || i == 256 && ack.ErrorCode != "input_limit" {
 			t.Fatalf("input %d: %+v", i, ack)
 		}

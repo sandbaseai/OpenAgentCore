@@ -48,6 +48,7 @@ func defaultSessionConfig(stateRoot string) sessionConfig {
 //  5. turn/completed emits TypeDone + closes out. Cancel can short-cut
 //     this by killing the child early.
 type Session struct {
+	boundary                  *nativeBoundary
 	retiredTurns              map[string]bool
 	executor                  *Executor
 	outputDone                chan struct{}
@@ -198,7 +199,7 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 		"status", p.Turn.Status,
 		"final_text_len", len(finalText),
 		"buffered_err_text_len", len(errText),
-		"raw_payload", string(raw))
+		"has_error", p.Turn.Error != nil)
 	if status == "failed" {
 		// Body precedence on failure:
 		//   1. agent's final text (rare on hard failures but exists for
@@ -312,7 +313,7 @@ func (s *Session) onErrorNotif(raw json.RawMessage) {
 	s.cfg.logger.Warn("codex: error notification received",
 		"run_id", s.runID,
 		"thread_id", s.currentThreadID(),
-		"message", p.Message)
+		"message_len", len(p.Message))
 	s.finalTextMu.Lock()
 	s.lastErrText = p.Message
 	s.finalTextMu.Unlock()
@@ -377,15 +378,15 @@ func (s *Session) emitTerminalFailure(message string, asError bool, failure prot
 	}
 	s.stopSteering()
 	s.stopFunctionCalls()
-	// Always log: this is the only place the daemon decides "the prompt is
-	// over, here's what went wrong (if anything)". Without this, post-
-	// mortem requires correlating server-side TypeError frames against
-	// daemon timestamps with no message body anywhere.
+	// Keep safe correlation at terminal settlement; native bodies stay private.
 	if asError {
 		s.cfg.logger.Warn("codex: emitting terminal error",
 			"run_id", s.runID,
 			"thread_id", s.currentThreadID(),
-			"message", message)
+			"error_code", failure.Code,
+			"http_status", failure.HTTPStatus,
+			"upstream_request_id", proto.NormalizeProviderRequestID(failure.UpstreamRequestID),
+			"message_len", len(message))
 	} else {
 		s.cfg.logger.Info("codex: emitting terminal done",
 			"run_id", s.runID,

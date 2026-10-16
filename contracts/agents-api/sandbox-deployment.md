@@ -8,7 +8,7 @@ This contract owns the Core API routes below and their semantics. The [nodes gui
 
 ## Suspension policy
 
-`PATCH /core/v1/sandbox/deployment` accepts `{"idle_seconds": 300}`. `idle_seconds` is a required integer from 30 to 86400 seconds, defaulting to 300, stored in Core's database. Only configured Providers declaring checkpoint support accept this change; unconfigured, unsupported or resetting deployments reject it. Success returns the deployment view with the saved `suspension.idle_seconds`.
+`PATCH /core/v1/sandbox/deployment` accepts `{"idle_seconds": 300}`. `idle_seconds` is a required integer from 30 to 86400 seconds, defaulting to 300, stored in Core's database. Only configured Providers declaring suspension support accept this change; unconfigured, unsupported or resetting deployments reject it. Success returns the deployment view with the saved `suspension.idle_seconds`.
 
 Changes apply to existing and new running allocations on the next lifecycle pass, without a Core restart, generation change or node rollout. Suspension already in progress is not cancelled; existing snapshots and the 24-hour retention period are unchanged. [Capacity-pressure reclamation](../../docs/sandbox-provider.md#suspension) can still suspend after 15 seconds of inactivity. Web manages this deployment-wide policy in **Settings** → **Sandbox and scheduling** → **Automatic suspension**; each node's capacity limits stay node-owned and are edited on **Nodes** with **Edit node**.
 
@@ -97,7 +97,7 @@ For E2B, post `{"configuration": {"api_url": "…", "domain": "…"}, "credentia
 GET and successful writes return `installation_id`, `provider`, `core_url` (read-only: the installation public URL, present even before configuration), `mode`, `generation`, `owner_epoch`, `reset`, `rollout`, `suspension`, `resources` and `credential_configured`. A configured deployment also returns `specification`, `specification_digest`, `configuration` and `metadata`: the adapter's public projection of its selectors and of the observations it recorded, never raw stored values or secrets. E2B returns `configuration.template`, `configuration.api_url`, `configuration.domain` and, once recorded, `metadata.template_build`. Docker and microsandbox return empty `configuration` and `metadata` objects and `credential_configured: false`; an unconfigured deployment has neither object.
 
 - `metadata.template_build` is `{status, resources: {cpus, memory_mib, root_disk_mib}}`: the build as Core read it through the pinned SDK when the selection was saved. GET never calls E2B, so it stays cheap during an E2B outage. Validation admits only a `ready` build whose CPU count and memory equal the selected values; `root_disk_mib` is the build's native disk size, which Core does not enforce. Unknown values are null, `metadata: {}` means no observation was recorded, and an identical PUT without a credential does not refresh it.
-- `suspension` is `{idle_seconds, retention_seconds}`, Core's [suspension policy](../../docs/sandbox-provider.md#suspension), when the selected Provider declares checkpoint support; any other deployment, including an unconfigured one, returns null.
+- `suspension` is `{idle_seconds, retention_seconds}`, Core's [suspension policy](../../docs/sandbox-provider.md#suspension), when the selected Provider declares suspension support; any other deployment, including an unconfigured one, returns null.
 - Request `resources` and response `specification.resources` are per-sandbox limits. Response `resources.allocations` and `resources.pending` count unreleased allocations and pending hosted Environments without an allocation.
 - An unconfigured deployment has an empty provider and no specification. Docker and microsandbox use `mode: nodes`; E2B uses `mode: direct`, without a synthetic node.
 - `generation` identifies the saved selection. `owner_epoch` fences the execution owner and node connections; it does not replace `expected_generation`.
@@ -125,7 +125,7 @@ Initial setup requires the selected template to appear in the key's team-owned t
 | `400 sandbox_configuration_invalid` | The candidate build is invalid or does not match the resources |
 | `503 sandbox_verification_unconfirmed` | A receipt is missing or unsettled, or a read is unconfirmed |
 
-No provider text or credential is returned. The write and its `change` or `replace_credential` audit entry share one transaction. A replacement briefly fences provider calls, waits for helper processes to actually exit even after the caller cancelled, and verifies again before committing; a helper's exit does not prove that a remote Create settled. The fence and reads are bounded, and a failure keeps the old key and lifecycles. After the successful response, all retained-generation management uses the committed key; only then revoke the old key in E2B, never before cleanup. Template and resource changes do not drain lifecycles.
+No provider text or credential is returned. The write and its `change` or `replace_credential` audit entry share one transaction. Core derives administrator provenance from the authenticated request, with the optional `X-Core-Console-Actor` header as its actor label. A replacement briefly fences provider calls, waits for helper processes to actually exit even after the caller cancelled, and verifies again before committing; a helper's exit does not prove that a remote Create settled. The fence and reads are bounded, and a failure keeps the old key and lifecycles. After the successful response, all retained-generation management uses the committed key; only then revoke the old key in E2B, never before cleanup. Template and resource changes do not drain lifecycles.
 
 ## Generation ownership and rollout
 
@@ -204,7 +204,7 @@ Some fields keep one name across providers but differ in meaning, or do not appl
 | Deployment `specification.resources` | `cpus`, `memory_mib`, `root_disk_mib` and `environment_disk_mib` | `cpus` and `memory_mib`, equal to the ready template build's and taken from it when omitted; no disk fields | `cpus` and `memory_mib`; no disk quota |
 | Deployment `specification.runtime` | The full [release](#runtime-release); nodes match `microsandbox_ref`, `runtime_sha256` and `firmware_sha256` | Absent; `configuration.template` selects the build | The full [release](#runtime-release); nodes match `image_id` or `image_manifest_digest` |
 | Deployment `metadata.template_build` | Absent: `metadata` is empty | The build as Core read it when the selection was saved | Absent: `metadata` is empty |
-| Deployment `suspension` | `{idle_seconds, retention_seconds}` | `null`; Core does not suspend E2B sandboxes | `null` |
+| Deployment `suspension` | `{idle_seconds, retention_seconds}` | `{idle_seconds, retention_seconds}` | `null` |
 | Deployment `resources.allocations`, `resources.pending` | Totals across all nodes | Core's unreleased E2B sandboxes, and hosted Environments waiting for one | Totals across all nodes |
 | Enrollment-token `max_active`, `max_retained` | Both limits apply | 409 `sandbox_deployment_conflict`, after the 400 capacity checks; E2B has no nodes | `max_retained` always equals `max_active` |
 | Node list and detail | Enrolled nodes | Empty list; detail returns 404 | Enrolled nodes |
@@ -213,7 +213,7 @@ Some fields keep one name across providers but differ in meaning, or do not appl
 | Allocation `compute_phase`, `compute_phase_changed_at` | Includes `suspended`; the timestamp describes the current phase, not snapshot expiry | Not applicable: no node allocations | Always `disabled`, counted as running until release; the time is the allocation's creation |
 | Runtime observation `cpu`, `memory` | From the VM: `cpu.usage_seconds_total`, CPU and memory limits, memory usage | From E2B metrics: `cpu.utilization_ratio` and `capacity_cores`, memory usage and limit; no cumulative CPU time | From Docker stats: `cpu.usage_seconds_total`, CPU and memory limits, memory usage |
 | Runtime observation `disk` | `null` | E2B `diskUsed` and `diskTotal`; `null` when the template does not report them | `null`: no disk quota |
-| Runtime observation `lifecycle_state: sleeping` | While suspended | Never | Never |
+| Runtime observation `lifecycle_state: sleeping` | While suspended | While paused | Never |
 | Runtime history CPU | Derived from cumulative CPU time | Mean of the utilization ratios E2B reported in each bucket | Derived from cumulative CPU time |
 
 ## Errors

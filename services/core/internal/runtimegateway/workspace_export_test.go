@@ -104,7 +104,8 @@ func TestWorkspaceExportRoundTripFixture(t *testing.T) {
 				for {
 					var env proto.Envelope
 					select {
-					case env = <-s.sendCh:
+					case frame := <-s.sendCh:
+						env = frame.Envelope
 					case <-ctx.Done():
 						peerDone <- count
 						return
@@ -258,12 +259,12 @@ func TestWorkspaceExportRejectsInvalidReceiptScopeAndMaximum(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 			defer s.Close("test")
-			replies := make(chan proto.Envelope, 1)
+			replies := make(chan workspaceExportReceipt, 1)
 			env, err := proto.NewEnvelope(test.typ, test.id, test.result)
 			if err != nil {
 				t.Fatal(err)
 			}
-			replies <- env
+			replies <- workspaceExportReceipt{Envelope: env, dispatched: time.Now()}
 			r := &workspaceExportReader{ctx: t.Context(), peer: s, id: "export", replies: replies, offset: test.offset, pending: true}
 			if _, err := r.Read(make([]byte, 1)); err == nil {
 				t.Fatal("invalid receipt accepted")

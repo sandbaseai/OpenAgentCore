@@ -101,7 +101,9 @@ func (s *Session) allowsReceiptFrame(env proto.Envelope, outbound bool) bool {
 		return false
 	}
 	if outbound {
-		return env.Type == proto.TypePromptCancel
+		// Credit only drains the already-owned archived Run; it grants no
+		// new execution, workspace or cross-Run authority.
+		return env.ID == s.receiptDrain.RunID && (env.Type == proto.TypePromptCancel || env.Type == proto.TypeExecutionEventsAck || env.Type == proto.TypeExecutionEventsStop)
 	}
 	if env.Type == proto.TypeInteractionDecisionAck {
 		var ack proto.InteractionDecisionAckPayload
