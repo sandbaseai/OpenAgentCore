@@ -4,7 +4,7 @@
 
 # OpenAgentCore
 
-OpenAI Agents API 的开源实现，支持多种原生执行引擎，可部署在自己的基础设施上。
+OpenAI Agents API 的开源实现，支持多种原生 Harness，可部署在自己的基础设施上。
 
 [官网](https://openagentcore.dev/zh/) · [安装](#安装) · [调用 API](https://openagentcore.dev/zh/docs/getting-started/quickstart) · [文档](https://openagentcore.dev/zh/docs/getting-started/) · [参与贡献](CONTRIBUTING.md)
 
@@ -45,7 +45,7 @@ OpenAgentCore 在你自己的基础设施上运行 AI Agent，对外提供 [Open
 在已按[前置条件](https://openagentcore.dev/zh/docs/getting-started/install#prerequisites)准备 Docker 的 Linux 或 macOS 上：
 
 ```sh
-curl -fsSL https://github.com/MiniMax-AI/OpenAgentCore/releases/latest/download/install.sh | bash
+curl -fsSL https://openagentcore.dev/install.sh | bash
 ```
 
 Windows PowerShell:
@@ -56,8 +56,8 @@ irm https://github.com/MiniMax-AI/OpenAgentCore/releases/latest/download/install
 
 然后：
 
-1. 用安装器生成的 Core key **登录 Web**（管理控制台），并**配置域名和 HTTPS**。
-2. **设置默认模型**，并**签发 Project API key**。
+1. 用安装器生成的 Core 密钥 **登录 Web**（管理控制台），并**配置域名和 HTTPS**。
+2. **设置默认模型**，并**签发项目 API 密钥**。
 3. **添加执行资源**：节点、E2B，或你自己的机器。
 4. 用 OpenAI SDK **[运行第一个 Session](https://openagentcore.dev/zh/docs/getting-started/quickstart)**。
 

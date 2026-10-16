@@ -2,7 +2,6 @@ import { AgentCoreError, type AgentSession, type RuntimeObservation } from "@oac
 import { queryOptions } from "@tanstack/react-query";
 
 import { projectClient } from "../../lib/projects";
-import { retryTransient } from "../resources/detail-queries";
 import { loadSessionHistory, nextPollDelay, type SessionHistory } from "./session-history";
 import { loadSessionRuntimeHistory, type SessionRuntimeHistory, type SessionRuntimeRange } from "./session-runtime";
 
@@ -88,15 +87,13 @@ export function sessionObservationQuery(projectId: string, sessionId: string) {
   return queryOptions<RuntimeObservation>({
     queryKey: [...sessionKey(projectId, sessionId), "runtime", "observation"],
     queryFn: ({ signal }) => projectClient(projectId).retrieveRuntimeObservation(sessionId, { signal }),
-    retry: retryTransient,
   });
 }
 
-/** Retained runtime samples for the range ending now; null when Core keeps none. */
+/** Retained runtime samples for the range Core's clock ends; null when Core keeps none. */
 export function sessionRuntimeHistoryQuery(projectId: string, session: AgentSession, range: SessionRuntimeRange) {
   return queryOptions<SessionRuntimeHistory | null>({
     queryKey: [...sessionKey(projectId, session.id), "runtime", "history", range],
     queryFn: ({ signal }) => loadSessionRuntimeHistory(projectClient(projectId), session, range, signal),
-    retry: retryTransient,
   });
 }

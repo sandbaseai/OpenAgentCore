@@ -129,8 +129,8 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		if dialCtx.Err() != nil {
 			return nil, fmt.Errorf("transport.Dial: ws upgrade: %w", dialCtx.Err())
 		}
-		// Upgrade errors can include peer-controlled text; never log credentials.
-		return nil, fmt.Errorf("transport.Dial: ws upgrade failed")
+		// The credential travels only in the request header, never in the error.
+		return nil, fmt.Errorf("transport.Dial: ws upgrade failed: %w", err)
 	}
 	eventCredit, err := proto.NegotiateExecutionFlow(resp.Header.Values(proto.ExecutionFlowHeader))
 	if err != nil {

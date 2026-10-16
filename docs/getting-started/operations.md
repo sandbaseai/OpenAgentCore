@@ -17,10 +17,11 @@ docker compose -f ~/.oac/core/compose.yaml ps
 | `docker compose ps` | Shows the services. Run it in the installation directory |
 | `docker compose start` | Starts the services |
 | `docker compose stop` | Stops the services. Data, nodes and sandboxes are kept |
-| `oac apply` | Runs `oac-core check-config`, then `docker compose up -d --wait`. A failed check changes no service |
+| `oac apply` | Checks the data volume and `.env`, then starts the services and recreates those whose configuration changed; see [how oac apply works](../configuration.md#how-oac-apply-works). A failed check changes no service. On success it prints `Services are running with the current settings.` |
 | `oac core-key [--show]` | Identifies the key location in the data volume, or prints the key with `--show` |
-| `oac rotate-core-key` | Replaces the Core key and restarts Core and Web |
-| `docker compose down` | Removes the containers. Data is kept; to delete it, [uninstall](#uninstall) |
+| `oac rotate-core-key` | Replaces the Core key and restarts Core and Web, then says how to read the new key |
+| `docker compose down` | Removes the containers. Data is kept |
+| `oac uninstall` | Deletes the installation and its data after confirmation; see [Uninstall](#uninstall) |
 
 The examples use the default installation directory. On Windows, invoke the management command with `& "$HOME/.oac/core/oac.exe"` followed by the same arguments. For a custom installation directory, replace the path in each command.
 
@@ -44,13 +45,13 @@ Use these observations for different questions:
 
 | Observation | What it establishes |
 | --- | --- |
-| `docker compose ps` | The database accepts its readiness check |
+| `docker compose ps` | The database accepts its readiness check, and Core and Web each answer their own `/healthz` |
 | Core `/healthz` | Core's process is alive |
 | An authenticated API read | The caller's key works for that resource |
 | Environment connection | The Runtime transport is connected |
 | A finished Turn and its results | The task's recorded outcome |
 
-Service health does not show that a harness or a model works. Use Session, Turn, Items and Usage reads for execution, and Web's **Nodes** page for node connection, readiness and placement. For local diagnosis, use the installation's own Compose file:
+Service health does not show that a Harness or a model works. Use Session, Turn, Items and Usage reads for execution, and Web's **Nodes** page for node connection, readiness and placement. For local diagnosis, use the installation's own Compose file:
 
 ```sh
 docker compose -f "$HOME/.oac/core/compose.yaml" ps --all
@@ -117,7 +118,7 @@ core() (  # core METHOD PATH [JSON body]
 | Issue an API key (shown once, as `key`) | `core POST /projects/$PROJECT_ID/keys '{"name": "prod"}'` |
 | Revoke a key | `core DELETE /projects/$PROJECT_ID/keys/$KEY_ID` |
 | Archive a Project (revokes all keys) | `core POST /projects/$PROJECT_ID/archive` |
-| See harnesses and their default models | `core GET /harnesses` |
+| See Harnesses and their default models | `core GET /harnesses` |
 | Set Codex's default model | `core PUT /harnesses/codex/model-configuration '{"model": "your-model-id", "model_provider": {"protocol": "responses", "base_url": "https://provider.example/v1", "api_key": "sk-..."}}'` |
 | Installation facts, including the API base URL | `core GET /installation` |
 
@@ -143,11 +144,41 @@ To rotate an application key:
 
 **Archive** disables every key of a Project and keeps its assets.
 
-Core records which key made each public resource write; the retention of that history is [`core.write_audit_retention`](../configuration.md#settings).
+Core records which key made each public resource write; the retention of that history is [`OAC_WRITE_AUDIT_RETENTION`](../configuration.md#settings).
 
 ## Back up
 
-A recoverable backup contains one consistent, stopped-write set. A database dump or Core volume export alone does not include independent workspace storage or node compute state. Use the same release when restoring; see [installation version policy](#installation-version-policy).
+A recoverable backup contains one consistent, stopped-write set. A database dump or Core volume export alone does not include independent workspace storage or node compute state. Restore the data volume together with the installation directory from the same backup, which holds the release that wrote it; a newer release can [upgrade](#upgrade) the restored installation afterward.
+
+### Single-host backup and restore {#single-host-backup}
+
+For an installation whose data all lives in its Docker volume, with no independent workspace storage and no node state to keep, the data volume and the installation directory are the whole backup. This recipe uses a Unix shell and the PostgreSQL image the installation already pulled.
+
+```sh
+cd ~/.oac/core
+docker compose stop
+project=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env)
+image=$(docker compose images --quiet database)
+mkdir -p ~/oac-backup
+docker run --rm -v "${project}_data:/data:ro" -v ~/oac-backup:/backup --entrypoint tar "$image" czf /backup/data.tar.gz -C /data .
+cp -a ~/.oac/core ~/oac-backup/installation
+docker compose start
+```
+
+To restore on this host or another, first [uninstall](#uninstall) any installation that still uses the project, then:
+
+```sh
+cp -a ~/oac-backup/installation ~/.oac/core
+cd ~/.oac/core
+project=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env)
+docker compose pull
+docker compose up --no-start
+image=$(docker compose images --quiet database)
+docker run --rm -v "${project}_data:/data" -v ~/oac-backup:/backup:ro --entrypoint tar "$image" xzf /backup/data.tar.gz -C /data
+./oac apply
+```
+
+An installation with independent workspace storage or nodes needs the full procedure below.
 
 ### Backup contents
 
@@ -188,44 +219,92 @@ The cold released baseline resumes only qualified native history after new compu
 
 Start the database, Core and node services only after their restored dependencies are complete; keep ingress restricted while checking them. In an isolated rehearsal, verify a retained Session's files and native continuation on fresh compute where qualified, confirm that deleted objects cannot be reopened, and check that no old writer can access the restored namespace. Record the results before relying on the backup for recovery.
 
+## Upgrade {#upgrade}
+
+An installation of v0.0.10 or later upgrades in place to a newer release. It keeps its database, data volume, `.env`, secrets, Core key, installation ID and the entries you added to `compose.override.yaml`. An older installation can't upgrade: install the new release into a new directory. Downgrades are refused.
+
+1. Read the target release's notes for [protocol changes](#protocol-changes) and the actions they require.
+2. [Back up](#single-host-backup) the installation. The upgrade takes no backup, and after it the backup is the only way back to the previous release.
+3. Run the target release's installer with `--upgrade` and the installation directory:
+
+   ```sh
+   curl -fsSL https://openagentcore.dev/install.sh | bash -s -- --upgrade --install-dir "$HOME/.oac/core"
+   ```
+
+   `--version TAG` selects a release other than the latest. On Windows, run `& ([scriptblock]::Create((irm https://github.com/MiniMax-AI/OpenAgentCore/releases/latest/download/install.ps1))) --upgrade --install-dir "$HOME\.oac\core"`. For an installation from a [source bundle](../development.md#install-a-checkout-without-publishing-a-release), run the new bundle's installer: `python3 <bundle>/install.py --install-dir <dir> --upgrade`.
+4. When you are ready, [apply the release's Runtime](#runtime-after-an-upgrade).
+
+Without `--upgrade`, another release's installer changes nothing and stops with `This installation runs release <old>; this installer is <new>. Back up the installation (Upgrade in the operations guide), then rerun with --upgrade.` (`install.py` says `this bundle is`). The installed release's installer resumes the installation, with or without the flag. Installation and mutating `oac` commands share the [installation lock](../configuration.md#installation-directory); if another command is running, wait for it to finish before retrying.
+
+### What the upgrade does
+
+The installer downloads the release's `compose.yaml` and pulls missing images. Before it replaces any file, it runs the new release's configuration check and initialization with the installation's `.env` and Compose overrides. Initialization upgrades the data volume, or refuses a downgrade. The installer then puts the new `compose.yaml` and `oac` in place and starts the services, recreating those that changed; Core migrates the database as it starts. [Deployment](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/README.md#installation) describes each step. The restart interrupts work as any [Core restart](#stop-and-restart) does; nodes and sandboxes keep running and reconnect.
+
+On success the installer prints the console address, `oac core-key --show` in place of the key, and the line `Upgraded from <old> to <new>. Settings → Sandbox and scheduling offers this release's Runtime; sandboxes keep their current Runtime until you apply it.`
+
+If a check fails, the installer prints `Upgrade stopped; the running services are unchanged` with Docker's output, and the previous release keeps serving. Fix the cause and rerun the command. Once initialization has upgraded the data volume, the previous release can no longer start on it: if a later step fails, for example with `startup failed; data retained, rerun the installer`, rerun the same command, which repeats every step safely, or [roll back](#roll-back).
+
+### Runtime after an upgrade
+
+The upgrade leaves the sandbox configuration unchanged: nodes keep serving the saved Runtime, and new Sessions use it. To move to the release's Runtime, open **Settings** → **Sandbox and scheduling**, choose **Use this installation's Runtime** in the **Runtime** row, review the change and choose **Save configuration**. Nodes then prepare the new generation, and existing sandboxes keep theirs until they are released; see [Change the sandbox configuration](./nodes.md#change-the-sandbox-configuration). An E2B deployment has no **Runtime** row; its template keeps working unless the release changes the Core–Runtime protocol.
+
+### Protocol changes
+
+Three connections require the same protocol version on both sides: Core and its nodes, a node and its microsandbox helper, and Core and the Runtime. The upgrade changes no node host and no running sandbox. A release that changes one of these protocols says so in its release notes and names which of these actions it requires:
+
+- reinstall each node: [remove it](./nodes.md#remove-a-node), clean up the host, then add the host again with **Add node**. Core refuses to remove a node that still holds sandboxes, so archive those Sessions before you upgrade;
+- apply the release's Runtime right after the upgrade; sandboxes on earlier generations stop working;
+- [build a new E2B template](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md#build-a-template) and select it in [the sandbox configuration](./nodes.md#change-the-sandbox-configuration);
+- reconnect [self-hosted machines](./self-hosted.md#reconnect-an-existing-session).
+
+### Downgrades
+
+Initialization refuses a release that is not newer than the installed one, with `This installation runs release <installed> (<date>); this release, <own> (<date>), is not newer. Downgrades are not supported: run that release or a newer one, or restore the backup taken before the upgrade.` The installer reports it as a stopped upgrade, and the installation keeps running. Core refuses a database that a newer release migrated, with `Agents API database schema version N is newer than this Core supports (M). Downgrades are not supported: run the release that upgraded this database or a newer one, or restore the backup taken before the upgrade.` To return to an earlier release, [roll back](#roll-back).
+
+### Roll back
+
+A rollback restores the backup taken before the upgrade: stop the services, [restore](#restore-and-rehearse) the data volume and the installation directory, then start them. Restore before you apply the release's Runtime if you can: once nodes have prepared it, the restored database doesn't know their new generation, so also [remove every node](./nodes.md#remove-a-node) and add it again. Sessions and data created after the backup are lost.
+
 ## Uninstall
 
 ```sh
-cd ~/.oac/core
-docker compose down --volumes --remove-orphans --rmi all
-cd && rm -rf ~/.oac/core
+~/.oac/core/oac uninstall
 ```
 
-`down --volumes` deletes the installation data volume. Remove the installation directory afterward; on Windows use `Remove-Item -Recurse "$HOME/.oac/core"`.
+On Windows, run `& "$HOME/.oac/core/oac.exe" uninstall`. The command shows the Compose project, the data volume, the installation directory and the installation ID, and deletes nothing until you type the directory name or `yes`. It then removes the containers, the network and the data volume, the installation directory and the [installation lock](../configuration.md#installation-directory) (`~/.oac/core.lock`). On Windows the running `oac.exe` cannot delete itself: the command prints the `Remove-Item` that removes the rest, and you run it before you reinstall into the same directory. It keeps the Docker images so that a reinstall doesn't download them again, and prints the `docker image rm` command that removes them.
 
 All data goes with it: Projects and API keys, Session history, stored credentials and the Core key. To keep the data, stop the installation with `docker compose stop` instead, or [back it up](#back-up) first.
 
-Uninstall stops no sandbox: node sandboxes keep running on their nodes, and E2B sandboxes keep running, and billing, at E2B. While Core is still up, archive their Sessions or [reset the deployment](./nodes.md#change-the-sandbox-configuration) and let it complete; the command shows how many sandboxes Core has in use.
+Uninstall stops no sandbox: node sandboxes keep running on their nodes, and E2B sandboxes keep running, and billing, at E2B. While Core is still up, archive their Sessions or [reset the deployment](./nodes.md#change-the-sandbox-configuration) and let it complete.
 
-Nodes on other hosts keep running. To uninstall them the usual way, remove them in Web first, as in [Remove a node](./nodes.md#remove-a-node). After the installation directory is gone, their Core is gone: on each node host, run the node uninstall command with `--force`, using `node-install.pyz` from the release that installed them. The installation ID is `secrets/core/installation.id` in the data volume.
+Nodes on other hosts keep running. To uninstall them the usual way, remove them in Web first, as in [Remove a node](./nodes.md#remove-a-node). After the installation is gone, their Core is gone: on each node host, run the node uninstall command with `--force`, using the installer the original command left in `~/.oac/node-bootstrap/`, as in [Remove a node](./nodes.md#remove-a-node), and the installation ID that `oac uninstall` printed. If you didn't note it, read it from the node's unit name `oac-node-<installation-id>.service`.
 
-## Installation version policy
+If the installation directory was deleted by hand, its containers keep running and keep the Web port. Find the project and remove it without any installation file:
 
-An installation runs one release for its whole life. In-place version upgrades and downgrades are not supported. Nothing migrates data between releases.
+```sh
+docker compose ls --all
+docker compose -p <project> down --volumes --remove-orphans
+```
 
-To move to a new release, install it into a new, empty directory, with its own database, Core key and nodes, and add nodes from its Web. Keep the old installation, its data and its nodes until their work is finished. Nodes run the program of the console that added them and are never upgraded in place; Core accepts only nodes that speak its own node protocol.
-
-An interrupted installation can [resume with its saved configuration](./install.md#install). An unrelated nonempty directory is refused.
-
-Installation and mutating `oac` commands share the [installation lock](../configuration.md#installation-directory). If another command is running, wait for it to finish before retrying.
+The project is the `oac-…` name from the list. Then delete `~/.oac/core.lock` (on Windows also `~/.oac/.core.lock.runtime.lock`) if it is still there.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `Port N is already in use.` | Another program holds that port. Stop it, or choose another `--web-port`. The installer does not move to a different port |
-| `Directory is not a complete Core installation` | Preserve the directory and choose another `--install-dir` |
+| `Web port unavailable; choose --web-port` | Another program holds that port. Stop it, or choose another `--web-port`. The installer does not move to a different port. When the message names a Compose project `oac-…`, an earlier installation whose directory is gone still runs: remove it as in [Uninstall](#uninstall) |
+| `incomplete installation: preserve … and choose another directory` | Preserve the directory and choose another `--install-dir` |
 | `configuration check failed; no service was changed` | `.env` has a value Core rejects. The message names the variable and not the value. Fix `.env` and run `oac apply` again |
-| `Docker Compose 2.26 or newer is required` | Update the Docker Compose plugin |
-| `Installation and data retained at …` | Read the service logs above it, fix the cause, then [resume installation](./install.md#install); keep the data |
+| `data volume check failed; no service was changed` | Initialization refused the data volume; the message names the cause, such as a volume a newer release upgraded. See [downgrades](#downgrades) |
+| `This installation runs release …` | The installer or initialization belongs to another release. To move to a newer one, follow [Upgrade](#upgrade); downgrades are refused |
+| `This account cannot use Docker` | Add the account to the `docker` group and log in again, or use Docker Desktop or rootless Docker. Do not run the installer with `sudo` |
+| `This account cannot access …` | An earlier run with `sudo` left files owned by root. Run the `sudo chown` command the message prints, then rerun as your own account |
+| `Docker Compose 2.26 or newer is required` | Install or update the Docker Compose plugin |
+| `Docker could not pull …` | The Docker daemon cannot reach the registry. Configure its proxy or a registry mirror, or use the [offline archive](./install-options.md#offline-hosts) |
+| `startup failed; data retained, rerun the installer` | The message lists the services that are not healthy and the `docker compose logs --tail 50` command for them. Fix the cause, then [resume installation](./install.md#install); keep the data. After `oac apply`, the same message says to run `oac apply` again |
 | Web answers 403 `Forbidden` | The browser host is not `OAC_PUBLIC_URL`. Open that origin; a reverse proxy must pass the original Host |
 | Web shows that Core is unavailable (502) | Core is stopped or failing: `docker compose ps`, then Core's log |
-| Session creation returns 400 `model_provider_required` | No model provider: set a [default model](../configuration.md#default-models) for the harness, or pass one; self-hosted Sessions always pass their own |
+| Session creation returns 400 `model_provider_required` | No model provider: set a [default model](../configuration.md#default-models) for the Harness, or pass one; self-hosted Sessions always pass their own |
 | Add node shows no command | See [Before you add a node](./nodes.md#before-you-add-a-node) |
 | A node is not ready | See [node troubleshooting](./nodes.md#troubleshooting) |
 

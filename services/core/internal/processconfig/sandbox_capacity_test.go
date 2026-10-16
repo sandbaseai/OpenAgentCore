@@ -23,7 +23,7 @@ func TestSandboxCapacityDefaultsAndSettings(t *testing.T) {
 	for _, setting := range settings {
 		found[setting.Key] = setting.Value
 	}
-	if found["core.sandbox_capacity.max_active"] != 7 || found["core.sandbox_capacity.max_retained"] != 31 {
+	if found["OAC_SANDBOX_MAX_ACTIVE"] != 7 || found["OAC_SANDBOX_MAX_RETAINED"] != 31 {
 		t.Fatal("installation omitted effective direct capacity", found)
 	}
 }

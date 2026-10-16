@@ -9,6 +9,7 @@ import { EmptyState, PageBody, PageHeader, RefreshButton, SegmentedControl } fro
 import { ListToolbar, listSummary, NameCell, RowActions, SearchField } from "../../components/list-ui";
 import { useConsoleIntent, useConsoleNavigation } from "../../lib/console-navigation";
 import { formatClock, formatCompact, formatDateTime, formatInteger, formatRelative, MISSING } from "../../lib/format";
+import { sessionTitle } from "../../lib/session-title";
 import { CreatorCell, CreatorHeading, ProjectFilter, ProjectName, useCreators, useProjectCollection, useProjects, type Creators, type Owned, type ProjectFilterValue } from "../../lib/projects";
 import { SessionDeleteDialog, type SessionDeleteTarget } from "./SessionDeleteDialog";
 import { SessionStatus } from "./SessionStatus";
@@ -127,8 +128,8 @@ export function SessionLogPage() {
             <thead>
               <tr>
                 <th scope="col">{t("log.session")}</th>
-                {allProjects ? <th scope="col">{tCommon("project.column")}</th> : null}
                 <th scope="col">{t("log.status")}</th>
+                {allProjects ? <th scope="col">{tCommon("project.column")}</th> : null}
                 <th scope="col">{t("log.model")}</th>
                 <th scope="col">{t("log.environment")}</th>
                 <th scope="col" className="numeric">{t("log.tokens")}</th>
@@ -240,16 +241,17 @@ function SessionLogRow({
   onDelete: (target: { project: AdminProject; sessionId: string }) => void;
 }) {
   const { t } = useTranslation("sessions");
+  const { t: tCommon } = useTranslation("common");
   const projectCell = allProjects ? <td><ProjectName project={row.project} /></td> : null;
   const session = row.value;
   const open = () => onOpen(row.project.id, session.id);
   return (
     <tr className="clickable-row" onClick={open}>
       <th scope="row">
-        <NameCell name={session.agent.name} id={session.id} fallback={t("common.untitledAgent")} onOpen={open} openLabel={t("log.open", { id: session.id })} />
+        <NameCell name={sessionTitle(session)} id={session.id} fallback={tCommon("untitledSession")} onOpen={open} openLabel={t("log.open", { id: session.id })} />
       </th>
-      {projectCell}
       <td onClick={(event) => event.stopPropagation()}><SessionStatus projectId={row.project.id} session={session} truncate /></td>
+      {projectCell}
       <td><code>{session.agent.model || MISSING}</code></td>
       <td className="session-nowrap">{t(`environment.${environmentKind(session)}`)}</td>
       <td className="numeric" title={session.usage ? t("log.exactTokens", { tokens: session.usage.total_tokens.toLocaleString(locale) }) : undefined}>

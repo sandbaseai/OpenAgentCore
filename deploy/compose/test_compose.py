@@ -21,6 +21,7 @@ def rendered_compose(directory):
         'INIT_IMAGE': 'ghcr.io/minimax-ai/openagentcore/ingress@sha256:' + 'e' * 64,
         'CORE_IMAGE': 'ghcr.io/minimax-ai/openagentcore/core@sha256:' + 'e' * 64,
         'WEB_IMAGE': 'ghcr.io/minimax-ai/openagentcore/web@sha256:' + 'e' * 64,
+        'DATABASE_IMAGE': 'ghcr.io/minimax-ai/openagentcore/postgres@sha256:' + 'f' * 64,
     })
     path = Path(directory) / 'compose.yaml'
     path.write_text(text)
@@ -29,7 +30,7 @@ def rendered_compose(directory):
 
 class ComposeTests(unittest.TestCase):
     @classmethod
-    def render(cls, public_url=None, settings=None):
+    def render(cls, public_url=None, web_port=None, settings=None):
         env = dict(os.environ)
         env.pop('OAC_PUBLIC_URL', None)
         env.pop('OAC_HOST', None)
@@ -42,6 +43,8 @@ class ComposeTests(unittest.TestCase):
         env.update(settings or {})
         if public_url is not None:
             env['OAC_PUBLIC_URL'] = public_url
+        if web_port is not None:
+            env['OAC_WEB_PORT'] = web_port
         return json.loads(subprocess.check_output(
             ['docker', 'compose', '--env-file', os.devnull, '-f', str(cls.compose_file),
              'config', '--format', 'json'], env=env))
@@ -63,7 +66,7 @@ class ComposeTests(unittest.TestCase):
             self.assertNotIn('build', service)
             if service is not services['web']:
                 self.assertNotIn('ports', service)
-            self.assertTrue(service['image'] == 'postgres:16-alpine' or service['image'].endswith('@sha256:' + 'e' * 64))
+            self.assertTrue(service['image'].startswith('ghcr.io/'))
             for volume in service.get('volumes', []):
                 self.assertNotIn('docker.sock', json.dumps(volume))
                 self.assertEqual(volume['type'], 'volume')
@@ -73,6 +76,8 @@ class ComposeTests(unittest.TestCase):
         self.assertIsNone(services['core']['command'])
         self.assertNotIn('OAC_WEB_INSTALLATION_SOCKET', services['web']['environment'])
         self.assertEqual(services['init']['command'], ['/usr/local/bin/oac', 'init'])
+        # Each service reports its own health, so up --wait waits for Core directly.
+        self.assertEqual(services['core']['healthcheck']['test'], ['CMD', '/usr/local/bin/oac-core', 'healthcheck'])
         self.assertEqual(services['web']['healthcheck']['test'], ['CMD', '/usr/local/bin/oac-web', 'healthcheck'])
         self.assertNotIn('python3', json.dumps(self.compose))
         self.assertEqual(services['init']['environment']['OAC_REVISION'], 'd' * 40)
@@ -86,11 +91,17 @@ class ComposeTests(unittest.TestCase):
             self.assertEqual(services['core']['environment'][key], value)
             self.assertNotIn(key, services['web']['environment'])
 
+    def test_database_stays_on_postgresql_16_pinned_by_digest(self):
+        # An upgrade keeps the data volume only within one PostgreSQL major version.
+        self.assertRegex(render_compose.DATABASE_PIN, r'^postgres:16-alpine@sha256:[0-9a-f]{64}$')
+
     def test_public_url_can_be_configured_after_initial_startup(self):
-        for value in (None, '', 'https://oac.example.test', 'http://localhost:9080'):
-            with self.subTest(public_url=value):
-                configured = self.render(value)
-                expected = value or 'http://localhost:8080'
+        for value, port, expected in ((None, None, 'http://localhost:8080'), ('', None, 'http://localhost:8080'),
+                                      (None, '9080', 'http://localhost:9080'), ('', '9080', 'http://localhost:9080'),
+                                      ('https://oac.example.test', '9080', 'https://oac.example.test'),
+                                      ('http://localhost:9080', None, 'http://localhost:9080')):
+            with self.subTest(public_url=value, web_port=port):
+                configured = self.render(value, port)
                 for name, setting in (('core', 'OAC_PUBLIC_URL'), ('web', 'OAC_PUBLIC_URL')):
                     self.assertEqual(configured['services'][name]['environment'][setting], expected)
                 self.assertEqual(

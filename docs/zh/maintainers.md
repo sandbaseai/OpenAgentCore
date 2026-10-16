@@ -1,7 +1,7 @@
 ---
 title: "构建并发布 OpenAgentCore"
 source: docs/maintainers.md
-source_hash: 402a990e859cb3fb0155e2b4e60421cd841de88f84a49b678eb918450b253114
+source_hash: 18bb1549e69536abfe758b043e8621e77899a848efa8613760f7aff728afd63e
 ---
 
 本指南面向负责构建和发布 OpenAgentCore 的维护者。要安装 Core 和 Web，请使用 [安装指南](getting-started/install.md)。安装器代码遵循的规则见 [部署](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/README.md) 和 [节点安装器](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/deploy/node/README.md)；必需检查见 [CONTRIBUTING](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/CONTRIBUTING.md#required-checks)。
@@ -10,7 +10,7 @@ source_hash: 402a990e859cb3fb0155e2b4e60421cd841de88f84a49b678eb918450b253114
 
 分发包是从同一个提交构建的一组相互匹配的发布资源：控制归档（安装器、`oac` 命令，以及 Core、Web、ingress 和 PostgreSQL 镜像）、作为独立文件的 Runtime 镜像和节点构件，以及原生安装器。
 
-Core、Web 和 ingress 镜像发布为经过校验的 Linux amd64/arm64 多架构索引。arm64 控制归档包含这三个镜像；Node、托管 Runtime 和离线包使用 Linux amd64。发行构建使用 QEMU 执行 ARM 镜像步骤，包括 E2B helper。宿主机 `oac` 从同一份实现构建为 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 二进制；启动脚本只选择、校验并运行它们。所有版本索引校验通过后才更新浮动标签。
+Core、Web 和 ingress 镜像发布为经过校验的 Linux amd64/arm64 多架构索引。arm64 控制归档包含这三个镜像；Node、托管 Runtime 和离线包使用 Linux amd64。发行构建使用 QEMU 执行 ARM 镜像步骤，包括 E2B helper。主机 `oac` 从同一份实现构建为 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 二进制；启动脚本只选择、校验并运行它们。所有版本索引校验通过后才更新浮动标签。
 
 
 请在 Linux x86_64 上构建，所需环境包括与 Debian 12 兼容的 glibc、Docker、`go.mod` 中指定的 Go 版本、C 编译器（microsandbox 辅助程序使用 CGO 构建）、Node、pnpm、Python 3.9 或更高版本、curl、tar、pigz 和 sha256sum。源代码必须保持干净并已提交。请先准备固定版本的 Codex 包和 MiniMax Code 配套程序，然后执行构建：
@@ -37,9 +37,9 @@ make build-core-distribution
 | `CORE_DISTRIBUTION_BUILD_DIR` | `~/.oac` 下的输出目录。默认值：`~/.oac/build/core-distribution` |
 | `CORE_DISTRIBUTION_BUILD_NETWORK` | Docker 构建网络：`default`、`host` 或 `none` |
 | `CORE_DISTRIBUTION_MICROSANDBOX_ARCHIVE` | 已缓存的 microsandbox 发布归档。默认值：`~/.oac/cache/microsandbox-v0.7.8-linux-x86_64.tar.gz`，缺失时下载 |
-| `CORE_DISTRIBUTION_DATABASE_IMAGE` | PostgreSQL 16 镜像；默认值通过其 linux/amd64 清单摘要固定 |
+| `CORE_DISTRIBUTION_DATABASE_IMAGE` | PostgreSQL 16 镜像；默认值为 `deploy/compose/database-image.txt` 中索引的 linux/amd64 清单 |
 
-构建过程会复用 Core、Web、Runtime、SDK 和辅助程序构建器。清单会记录提交和源代码树、镜像配置及 OCI 清单摘要、Runtime OCI 清单摘要、microsandbox 运行时和固件哈希，以及每个 Runtime 和节点构件的大小与 SHA-256；原生安装器在[目录](#native-installers)中仅记录其 SHA-256。输出包括控制归档及其 `.sha256`、可选的离线归档，以及带版本号的 Runtime、节点和原生安装器资源。此过程不会发布任何内容。如果目标目录中已包含此提交的分发包，重建会拒绝执行。
+构建过程会复用 Core、Web、Runtime、SDK 和辅助程序构建器。清单会记录提交、其提交时间（`source_time`，用于在升级时为发布版本排序）和源代码树、镜像配置及 OCI 清单摘要、Runtime OCI 清单摘要、microsandbox 运行时和固件哈希，以及每个 Runtime 和节点构件的大小与 SHA-256；原生安装器在[目录](#native-installers)中仅记录其 SHA-256。输出包括控制归档及其 `.sha256`、可选的离线归档，以及带版本号的 Runtime、节点和原生安装器资源。此过程不会发布任何内容。如果目标目录中已包含此提交的分发包，重建会拒绝执行。
 
 ingress 镜像仅包含 `oac` 和四个节点元数据文件：`manifest.json`、`SHA256SUMS`、`node-install.pyz` 与 `runtime/seccomp.json`。构建流程根据与分发包相同的 Runtime 和构件身份生成其清单，再禁用网络验证初始化。节点清单不包含控制平面镜像身份，因此可在 ingress 镜像生成前打包。
 
@@ -134,15 +134,17 @@ git push origin v1.2.3
 
 标签使用 `vMAJOR.MINOR.PATCH` 格式，可选用 `-rc.1` 等预发布后缀以及 `+build.1` 等构建元数据。预发布后缀会创建 GitHub 预发布版。推送标签即表示发布决定。自动检查用于确定构建和测试结果，而不是真实模型资格：推送标签前应评估实际执行证据。模型凭据和私有证书颁发机构绝不能进入 CI 或发布输入，包含它们的验收镜像也不例外。
 
+发布说明会列出每一项协议版本变更（节点线协议、microsandbox 辅助程序或 Core–Runtime 协议），以及它要求运维人员执行的操作。Core 绝不能依赖只有更新版本的初始化才会创建的密钥或文件：升级会先运行新 Core 的 `check-config`，再运行新的 `init`。Release 发布后，将 `deploy/compose/smoke-pins.json` 设为它的标签及其 `compose.yaml` 的 SHA-256，使 Compose 冒烟测试从最新的已发布版本升级。
+
 工作流会在带标签的提交上运行 `check`，包括完整的本地门禁、官方客户端和镜像验收，以及启用打包构件的原生平台矩阵。检查成功后，`blacksmith-4vcpu-ubuntu-2204` 上的一个 `build` 作业会准备固定的 Runtime 输入、复用原生安装器、构建分发包，并直接从本地文件发布。此合并作业具有 `contents: write` 和 `packages: write` 权限；检出过程不会保留凭据。只有发布失败或手动构建不发布时，才会把这些文件保留为未压缩的 Actions 构建产物，供恢复使用。
 
 分发归档和 Runtime 归档使用 `pigz` 级别 6，最多使用四个压缩工作线程，并且 gzip 头部中不包含文件名或时间戳。发布器会验证归档和原生安装器校验和、解析仓库身份、拒绝使用该标签已有的 Release 或草稿，并创建一个具有固定 ID 的草稿。最多四个资源可并发上传，按从大到小的顺序进行，且不会重试。确认完整的远程资源清单后，发布器会验证所有镜像归档和现有注册表标签，再并发推送最多四个镜像。每个镜像配置和注册表清单都会接受验证；任何错误都会使 Release 保持未发布状态。失败操作返回前，正在进行的传输会完成。发布器会按 ID 发布草稿，并在发布前重新检查版本标签。
 
 ### 容器注册表 {#container-registry}
 
-版本发布和手动 `build-<full SHA>` 草稿使用 `ghcr.io/minimax-ai/openagentcore/<component>:<version>`，其中 `<component>` 为 `core`、`web`、`runtime` 或 `ingress`。Core、Web 和 ingress 索引包含 Linux amd64 和 arm64 镜像，Runtime 包含 Linux amd64。各平台镜像使用 `<version>-<architecture>` 标签，从发行归档加载。已有版本标签必须与发行镜像及平台集合一致。发布器校验全部版本索引后，才为稳定版更新 `latest`；预发布版和草稿保持 `latest` 不变。PostgreSQL 使用上游镜像。容器标签中的 SemVer 构建元数据用 `_` 替换 `+`，版本字符串上限为 128 个字符。镜像校验后，发布器上传该版本的 `compose.yaml` 和校验和清单。Compose 用对应发行版的索引摘要固定 Core、Web 和 ingress，初始化时检查其构建版本与 Compose 版本一致。
+版本发布和手动 `build-<full SHA>` 草稿使用 `ghcr.io/minimax-ai/openagentcore/<component>:<version>`，其中 `<component>` 为 `core`、`web`、`runtime`、`ingress` 或 `postgres`。Core、Web 和 ingress 索引包含 Linux amd64 和 arm64 镜像，Runtime 包含 Linux amd64。各平台镜像使用 `<version>-<architecture>` 标签，从发行归档加载。已有版本标签必须与发行镜像及平台集合一致。发布器校验全部版本索引后，才为稳定版更新 `latest`；预发布版和草稿保持 `latest` 不变。`postgres` 是固定在 `deploy/compose/database-image.txt` 中的官方 PostgreSQL 索引，连同全部平台和原摘要一并复制；注册表中的标签若指向其他摘要，发布器会拒绝。要升级 PostgreSQL，请把该文件改为同一主版本的新摘要，模板、离线包和镜像复制都读取这一处。容器标签中的 SemVer 构建元数据用 `_` 替换 `+`，版本字符串上限为 128 个字符。镜像校验后，发布器上传该版本的 `compose.yaml` 和校验和清单。Compose 用对应发行版的索引摘要固定 Core、Web、ingress 和 PostgreSQL，初始化时检查其构建版本与 Compose 版本一致。
 
-合并的构建/发布作业使用具有 `packages: write` 权限的 `GITHUB_TOKEN`。首次发布时，GitHub 会将每个容器软件包创建为私有：软件包管理员必须先在各自的软件包设置中将全部四个软件包改为 **Public**，用户才能匿名拉取。请参阅 [GitHub container visibility](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。更改可见性后，请验证未认证拉取。仅更改仓库可见性并不会使新的容器软件包变为公开。
+合并的构建/发布作业使用具有 `packages: write` 权限的 `GITHUB_TOKEN`。首次发布时，GitHub 会将每个容器软件包创建为私有：软件包管理员必须先在各自的软件包设置中将全部五个软件包（`core`、`web`、`runtime`、`ingress` 和 `postgres`）改为 **Public**，用户才能匿名拉取。请参阅 [GitHub container visibility](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。更改可见性后，请验证未认证拉取。仅更改仓库可见性并不会使新的容器软件包变为公开。
 
 GHCR 和 GitHub Releases 不共享事务。发布失败后，GHCR 中可能仍会保留一些匹配的版本标签；请保留这些镜像，并使用原始构件按照下文的草稿恢复流程操作。除清单缺失以外，注册表故障都会停止发布。作业摘要会记录按摘要固定的引用。这些镜像和渲染后的 Compose 文件仍需要[配置](configuration.md)中描述的配置、机密和路由。
 
@@ -174,7 +176,7 @@ gh workflow run core-release --repo MiniMax-AI/OpenAgentCore --ref main \
 | --- | --- |
 | `hygiene` | 名称、仓库链接、随包文档完整性以及 CI 计划器/门禁测试；每次变更都会运行 |
 | `distribution` | Harness 目录和安装器模式、安装/应用/恢复/清理测试、Compose 解析和初始化固定数据、发布/下载和捆绑包契约、Go 控制台测试与构建；模板解析需要 Docker Compose，不需要 pnpm install 或浏览器 |
-| `compose` | 使用从当前检出构建的镜像从空数据卷实际启动、登录和 API 访问、上传文件和下载节点安装器，然后在保留凭据和数据的同时重新配置 URL 并重新创建容器；需要 Docker、Go 和网络访问，不需要模型凭据 |
+| `compose` | 使用从当前检出构建的镜像从空数据卷实际启动、登录和 API 访问、上传文件和下载节点安装器，然后在保留凭据和数据的同时重新配置 URL 并重新创建容器，并从固定的已发布版本原地升级；需要 Docker、Go 和网络访问，不需要模型凭据 |
 | `backend` | 并行部分，每部分都有专用 PostgreSQL 保护检查：`runtime`（sqlc 新鲜度、Runtime/共享 Go 测试、Linux microsandbox 辅助程序、守护进程构建）、`core`（独立 Core 构建、Core 服务和客户端测试），以及串行 Core 集成测试包的三个 `integration` 分片 |
 | `harness` | Claude SDK 测试和打包、MiniMax 配套脚本 |
 | `example` | 可选的应用程序类型检查、测试、构建和隔离的浏览器验收 |
@@ -187,7 +189,7 @@ gh workflow run core-release --repo MiniMax-AI/OpenAgentCore --ref main \
 
 `.github/actionlint.yaml` 会选择 hygiene 和 lint。已知工作流变更会选择其使用方：CI review 和 actionlint 工作流运行 hygiene 和 lint；原生工作流变更会添加原生检查；API 验收工作流变更会添加启用容器验收的 API 检查；网站工作流变更会添加网站检查。共享 Node 操作会选择使用它的每个作业以及 lint。新工作流或未分类的工作流/操作会选择完整门禁，直至在计划器中声明其使用方。计划器测试和 CI 测量脚本运行 hygiene；更改计划器本身会运行完整门禁。
 
-Compose 模板和 Compose 测试发生变更时，会同时选择 `distribution` 固定数据和 `compose` 冒烟作业；Core、Web、共享 Go 软件包和镜像 Dockerfile 的变更也会选择冒烟作业。安装 Docker 后，可在本地运行 `python3 scripts/compose-smoke.py` 重复该测试。该脚本使用唯一的项目、自动分配的回环端口，并将在 `~/.oac/tests/` 下生成构件；退出时移除其容器和数据卷。CI 还会在冒烟步骤失败或中断后执行清理。诊断信息会显示容器状态，但不会打印 HTTP 响应正文或登录密钥。Core、Web 和 ingress 镜像都从当前检出构建；Web 提供占位页面而不是控制台构建。构建时的节点元数据来自 `deploy/compose/smoke-pins.json` 固定的发布版本；初始化容器禁用网络运行。冒烟矩阵使用 Linux amd64 和 arm64 原生 runner；原生矩阵在 Linux、macOS 和 Windows 上构建并测试共享的 Core 安装器。
+Compose 模板和 Compose 测试发生变更时，会同时选择 `distribution` 固定数据和 `compose` 冒烟作业；Core、Web、共享 Go 软件包和镜像 Dockerfile 的变更也会选择冒烟作业。安装 Docker 后，可在本地运行 `python3 scripts/compose-smoke.py` 重复该测试。该脚本使用唯一的项目、自动分配的回环端口，并将在 `~/.oac/tests/` 下生成构件；退出时移除其容器和数据卷。CI 还会在冒烟步骤失败或中断后执行清理。诊断信息会显示容器状态，但不会打印 HTTP 响应正文或登录密钥。Core、Web 和 ingress 镜像都从当前检出构建，并带有当前检出提交的节点元数据；Web 提供占位页面而不是控制台构建，初始化容器禁用网络运行。升级阶段使用 `deploy/compose/smoke-pins.json` 中按标签和 SHA-256 固定的发布版本的已发布 `compose.yaml` 启动一个新安装，创建一个 Project、一个 Project 密钥和一个文件，然后使用当前检出的镜像运行安装器的预检（先 `core check-config`，再 `init`）和 `up --wait`。它会检查安装 ID、Core 密钥、Project、Project 密钥和文件均被保留，Core 和节点载荷报告当前检出的提交，并且数据库架构处于最新迁移。冒烟矩阵使用 Linux amd64 和 arm64 原生 runner；原生矩阵在 Linux、macOS 和 Windows 上构建并测试共享的 Core 安装器。
 
 Go 模块和工作区输入会选择后端、API（包括容器）、原生和分发检查。每个 Node 模块都拥有自己的清单和锁文件。网站依赖项会选择网站检查；Web 依赖项会选择 Web 和浏览器检查；示例依赖项会选择示例检查；共享 TypeScript 客户端依赖项会选择 Web、浏览器和示例检查；Claude 适配器依赖项会选择 Harness、原生和分发检查。共享包管理器配置会选择所有 Node 使用方。根 TypeScript 配置会选择 Web 和示例检查；适配器 TypeScript 配置会选择 Harness 和原生检查。每个所选集合都包含 hygiene。混合变更会累加其使用方，并且每个作业都读取同一计划，而不是维护各自的路径列表。例如，仅修改通知的 PR 会跳过数据库、浏览器和原生作业，而同时修改通知和 Core 的 PR 会添加后端和 API 检查。
 

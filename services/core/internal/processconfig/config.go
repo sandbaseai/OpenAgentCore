@@ -1,8 +1,8 @@
 // Package processconfig is the process settings Core loads from its
 // environment. Load reads every variable and every file it names exactly once,
-// applies each default and validates the result; startup and `oac-core
-// check-config` both call it. Errors name the variable and never include its
-// value or the content of a file.
+// applies each default and validates the result; startup, `oac-core
+// check-config` and `oac-core healthcheck` call it. Errors name the variable
+// and never include its value or the content of a file.
 package processconfig
 
 import (
@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/publicorigin"
 	"io"
 	"net/url"
 	"os"
@@ -22,7 +23,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/api"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/credentialcrypto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/databaseurl"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/oauthrefresh"
@@ -45,7 +45,7 @@ type Config struct {
 	// Addr is OAC_ADDR, the listener address.
 	Addr string
 	// PublicOrigin is OAC_PUBLIC_URL.
-	PublicOrigin deployment.PublicOrigin
+	PublicOrigin publicorigin.Origin
 	// DatabaseURL is OAC_DATABASE_URL with the password from
 	// OAC_DATABASE_PASSWORD_FILE.
 	DatabaseURL string
@@ -114,7 +114,7 @@ func Load() (Config, error) {
 	if value == "" {
 		return Config{}, configError("OAC_PUBLIC_URL is required; applications, nodes and sandboxes reach Core at this origin")
 	}
-	if c.PublicOrigin, err = deployment.NewPublicOrigin(value); err != nil {
+	if c.PublicOrigin, err = publicorigin.New(value); err != nil {
 		return Config{}, configError("OAC_PUBLIC_URL must be a canonical http or https origin without path, credentials, query or fragment, such as https://core.example")
 	}
 	if c.DatabaseURL, err = databaseurl.FromEnvironment(); err != nil {
@@ -159,7 +159,8 @@ func Load() (Config, error) {
 }
 
 // Settings projects the configuration that GET /core/v1/installation
-// reports. Sensitive file settings report only whether they are configured.
+// reports, each setting under the environment variable that sets it.
+// Sensitive file settings report only whether they are configured.
 func (c Config) Settings() []api.InstallationSetting {
 	format := c.Log.Format
 	if format == "" {
@@ -170,18 +171,18 @@ func (c Config) Settings() []api.InstallationSetting {
 		origins = []string{}
 	}
 	return []api.InstallationSetting{
-		setting("public_url", c.PublicOrigin.String(), nil, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
-		setting("log.level", strings.ToLower(c.Log.Level.String()), "info", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
-		setting("log.format", format, "auto", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
-		setting("log.add_source", c.Log.AddSource, false, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
-		setting("core.sandbox_capacity.max_active", c.SandboxCapacity.MaxActive, defaultSandboxMaxActive, []api.InstallationService{api.InstallationCore}),
-		setting("core.sandbox_capacity.max_retained", c.SandboxCapacity.MaxRetained, defaultSandboxMaxRetained, []api.InstallationService{api.InstallationCore}),
-		setting("core.execution_concurrency", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
-		setting("core.harnesses", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
-		setting("core.default_harness", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
-		setting("core.write_audit_retention", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
-		setting("core.oauth_trusted_origins", origins, []string{}, []api.InstallationService{api.InstallationCore}),
-		sensitive("core.runtime_history", c.RuntimeHistory.File != "", []api.InstallationService{api.InstallationCore}),
+		setting("OAC_PUBLIC_URL", c.PublicOrigin.String(), nil, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
+		setting("OAC_LOG_LEVEL", strings.ToLower(c.Log.Level.String()), "info", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
+		setting("OAC_LOG_FORMAT", format, "auto", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
+		setting("OAC_LOG_ADD_SOURCE", c.Log.AddSource, false, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
+		setting("OAC_EXECUTION_CONCURRENCY", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_HARNESSES", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
+		setting("OAC_DEFAULT_HARNESS", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_WRITE_AUDIT_RETENTION", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
+		setting("OAC_OAUTH_TRUSTED_ORIGINS", origins, []string{}, []api.InstallationService{api.InstallationCore}),
+		sensitive("OAC_HISTORY_SETTINGS_FILE", c.RuntimeHistory.File != "", []api.InstallationService{api.InstallationCore}),
+		setting("OAC_SANDBOX_MAX_ACTIVE", c.SandboxCapacity.MaxActive, defaultSandboxMaxActive, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_SANDBOX_MAX_RETAINED", c.SandboxCapacity.MaxRetained, defaultSandboxMaxRetained, []api.InstallationService{api.InstallationCore}),
 	}
 }
 
@@ -199,11 +200,11 @@ func duration(d time.Duration) string {
 }
 
 func setting(key string, value, fallback any, restarts []api.InstallationService) api.InstallationSetting {
-	return api.InstallationSetting{Key: key, Value: value, Default: fallback, Changeable: true, Sensitive: false, Restarts: restarts}
+	return api.InstallationSetting{Key: key, Value: value, Default: fallback, Sensitive: false, Restarts: restarts}
 }
 
 func sensitive(key string, configured bool, restarts []api.InstallationService) api.InstallationSetting {
-	return api.InstallationSetting{Key: key, Configured: &configured, Changeable: true, Sensitive: true, Restarts: restarts}
+	return api.InstallationSetting{Key: key, Configured: &configured, Sensitive: true, Restarts: restarts}
 }
 
 func installationID() (string, error) {
