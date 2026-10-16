@@ -223,6 +223,9 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 		if setting.Key == "OAC_WRITE_AUDIT_RETENTION" && setting.Default != "2160h" {
 			t.Fatal(setting.Default)
 		}
+		if setting.Key == "OAC_TURN_AUTO_RETRIES" && setting.Default != 3 {
+			t.Fatal(setting.Default)
+		}
 		if setting.Key == "OAC_HISTORY_SETTINGS_FILE" && (setting.Configured == nil || !*setting.Configured) {
 			t.Fatal("history file was not reported as configured")
 		}
@@ -234,10 +237,10 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 
 func TestTurnAutoRetries(t *testing.T) {
 	required(t)
-	if c, err := Load(); err != nil || c.TurnAutoRetries != 0 {
+	if c, err := Load(); err != nil || c.TurnAutoRetries != 3 {
 		t.Fatal(c.TurnAutoRetries, err)
 	}
-	for value, want := range map[string]int{"0": 0, "3": 3, "5": 5} {
+	for value, want := range map[string]int{"": 3, "0": 0, "3": 3, "5": 5} {
 		t.Setenv("OAC_TURN_AUTO_RETRIES", value)
 		if c, err := Load(); err != nil || c.TurnAutoRetries != want {
 			t.Fatal(value, c.TurnAutoRetries, err)
