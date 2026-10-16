@@ -346,7 +346,8 @@ func (r *Result) mergeObservation(env proto.Envelope) error {
 		if err := env.DecodePayload(&failure); err != nil {
 			return err
 		}
-		// Unclassified settlement errors must not erase native failure evidence.
+		// A later frame without an accepted code, such as the Runtime's own
+		// settlement failure, keeps the adapter's classification.
 		if code, status := proto.NormalizeEngineFailure(failure.Code, failure.HTTPStatus); code != "" {
 			r.EngineErrorCode, r.EngineHTTPStatus = code, status
 		}

@@ -13,12 +13,21 @@ const codes: Record<SDKAssistantMessageError, string | undefined> = {
 // last error text. A matching native error result alone commits a classification.
 export class NativeFailure {
   private readonly candidates = new Map<string, string>();
+  // Claude Code reports both retries that got no HTTP response and a server error in
+  // an already streaming response as server_error without a status. Only the first
+  // ends with a retry whose error_status is null and no model output after it.
+  private connectionRetry = false;
 
   observe(message: SDKMessage, sessionID: string, pending: readonly string[]): string | undefined {
-    if (!sessionID || message.session_id !== sessionID || !pending.length ||
+    if (!sessionID || message.session_id !== sessionID ||
         ("isReplay" in message && message.isReplay) || ("isSynthetic" in message && message.isSynthetic)) return;
+    if (message.type === "system" && message.subtype === "api_retry") this.connectionRetry = message.error_status === null;
+    const connectionRetry = this.connectionRetry;
+    if (message.type === "stream_event" || message.type === "assistant" || message.type === "result") this.connectionRetry = false;
+    if (!pending.length) return;
     if (message.type === "assistant" && message.parent_tool_use_id === null) {
-      const code = typeof message.error !== "string" || !Object.hasOwn(codes, message.error) ? undefined : codes[message.error];
+      const native = typeof message.error !== "string" || !Object.hasOwn(codes, message.error) ? undefined : codes[message.error];
+      const code = native === "server_error" && connectionRetry ? "connection_failed" : native;
       for (const id of pending) {
         this.candidates.delete(id);
         if (code) this.candidates.set(id, code);

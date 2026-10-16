@@ -23,30 +23,22 @@ import { TableSkeleton } from "../../components/Skeleton";
 import { useFailureToast } from "../../components/Toast";
 import { ListToolbar, listSummary, NameCell, SearchField } from "../../components/list-ui";
 import { useConsoleNavigation } from "../../lib/console-navigation";
-import { formatBytes, formatClock, formatCompact, formatCores, formatDateTime, formatDuration, formatInteger, formatPercent, formatRelative, MISSING } from "../../lib/format";
+import { formatBytes, formatClock, formatCompact, formatCores, formatDuration, formatInteger, formatPercent, MISSING } from "../../lib/format";
 import { projectClient, ProjectName, useProjects } from "../../lib/projects";
-import { sandboxStateLabel } from "../../lib/sandbox-labels";
-import { nodeProviderDiagnostic } from "../../lib/sandbox-diagnostic";
-import { loadRuntimeDurableSnapshot, RUNTIME_DURABLE_RANGES, type RuntimeDurableRange } from "../dashboard/runtime-history";
+import { coreError } from "../../lib/core-error";
+import { loadRuntimeDurableSnapshot, RUNTIME_DURABLE_RANGES, RuntimeDurableHistoryIncompleteError, type RuntimeDurableRange } from "../dashboard/runtime-history";
 import type { RuntimeDashboardSnapshot } from "../dashboard/runtime-snapshot";
 import { RUNTIME_SNAPSHOT_REFRESH_MS } from "../dashboard/runtime-snapshot";
-import { DiagnosticTip } from "../fleet/DiagnosticTip";
-import { nodeHealth, suspendedSandboxes, type NodeHealth } from "../fleet/fleet-model";
-import { nodeDetailQuery } from "../fleet/fleet-queries";
-import { SandboxLifecycle } from "../sandbox/SandboxLifecycle";
-import { NodeRolloutStatus } from "../sandbox/NodeRolloutStatus";
-import { FleetReadNotice, fleetObservationStale } from "../fleet/FleetReadNotice";
+import { FleetReadNotice } from "../fleet/FleetReadNotice";
 import { SandboxResetNotice } from "../fleet/SandboxResetNotice";
-import { fleetSnapshot, useSandboxFleet, type FleetState } from "../fleet/use-sandbox-fleet";
+import { fleetSnapshot, useSandboxFleet } from "../fleet/use-sandbox-fleet";
 import { sandboxSize, templateBuildStatus } from "../sandbox/deployment-specification";
-import { formatShare, NodeHostCharts } from "./NodeHostCharts";
 import {
   hostedRuntimeRows,
   hostedRuntimeUsage,
   matchesRuntime,
+  runtimeSampleGap,
   runtimeSnapshot,
-  runtimeSnapshotWhere,
-  sessionTitle,
   type HostedRuntimeLoad,
   type HostedRuntimeRow,
 } from "./sandbox-runtime";
@@ -54,9 +46,8 @@ import "./MetricsView.css";
 import { RuntimeCharts } from "./RuntimeCharts";
 import { hostedRuntimesQuery } from "./metrics-queries";
 import { SessionRuntimeSection } from "../sessions/SessionRuntimeSection";
-import type { SandboxDeployment, SandboxNode } from "@oac/agents-client";
-
-const healthTone: Record<NodeHealth, Tone> = { available: "ok", degraded: "warning", offline: "danger" };
+import { sessionTitle } from "../../lib/session-title";
+import type { SandboxDeployment } from "@oac/agents-client";
 
 type RuntimeState =
   | { status: "loading"; load: HostedRuntimeLoad | null }
@@ -65,6 +56,7 @@ type RuntimeState =
 
 /** Hosted Runtimes through the query cache, polled while the page is visible; a refresh keeps the last load on screen. */
 function useHostedRuntimes() {
+  const { t } = useTranslation("common");
   const query = useQuery({
     ...hostedRuntimesQuery,
     refetchInterval: RUNTIME_SNAPSHOT_REFRESH_MS,
@@ -72,7 +64,7 @@ function useHostedRuntimes() {
   });
   const load = query.data ?? null;
   let state: RuntimeState;
-  const error = query.isError ? (query.error instanceof Error ? query.error.message : String(query.error)) : null;
+  const error = query.isError ? coreError(query.error, t) : null;
   if (error !== null && !query.isFetching) state = { status: "failed", load, error };
   else if (load && !query.isFetching) state = { status: "ready", load };
   else state = { status: "loading", load };
@@ -88,11 +80,6 @@ const loadHistory = (snapshot: RuntimeDashboardSnapshot, range: RuntimeDurableRa
   return projectId ? projectClient(projectId) : null;
 }, snapshot, range, signal);
 
-function fleetMessage(state: FleetState, t: TFunction<"metrics">): string {
-  if (state.status === "failed") return t("sandbox.fleetFailed");
-  return t("sandbox.fleetLoading");
-}
-
 export function SandboxMetricsPage() {
   const { t, i18n } = useTranslation("metrics");
   const locale = i18n.resolvedLanguage;
@@ -100,19 +87,14 @@ export function SandboxMetricsPage() {
   const { state: fleetState, refresh: refreshFleet, deployment } = useSandboxFleet({ allocations: true });
   const { state: runtimeState, refresh: refreshRuntime, stale: runtimeStale } = useHostedRuntimes();
   const fleet = fleetSnapshot(fleetState);
-  const now = Math.floor(Date.now() / 1000);
   const refreshing = runtimeState.status === "loading" || (fleetState.status === "ready" && fleetState.refreshing);
   const updatedAt = runtimeState.load?.loadedAt ?? fleet?.loadedAt ?? null;
-  const message = fleetMessage(fleetState, t);
-  const [range, setRange] = useState<RuntimeDurableRange>(RUNTIME_DURABLE_RANGES[0].milliseconds);
-  // A node or a sandbox opens in a dialog with its own figures, instead of leaving the page.
-  const [openNode, setOpenNode] = useState<string | null>(null);
+  const [range, setRange] = useState<RuntimeDurableRange>(RUNTIME_DURABLE_RANGES[0]);
+  // A sandbox opens in a dialog with its own figures, instead of leaving the page.
   const [openRuntime, setOpenRuntime] = useState<string | null>(null);
   const rows = useMemo(() => (runtimeState.load ? hostedRuntimeRows(runtimeState.load, "", fleet) : []), [fleet, runtimeState.load]);
-  // A direct Provider runs sandboxes in its cloud: no machines, so no node table, node column or node dialog.
+  // A direct Provider runs sandboxes in its cloud: no machines, so no node column.
   const cloud = fleet?.deployment.mode === "direct";
-  // Only a Provider that declares checkpoint support suspends sandboxes; its nodes also show how many sleep.
-  const suspends = Boolean(fleet?.deployment.suspension);
 
   return (
     <section className="page-section console-page metrics-page" aria-labelledby="sandbox-metrics-heading">
@@ -123,9 +105,9 @@ export function SandboxMetricsPage() {
         actions={<>
           <SegmentedControl
             label={t("range.label")}
-            value={String(range)}
-            options={RUNTIME_DURABLE_RANGES.map((entry) => ({ value: String(entry.milliseconds), label: t(`range.${entry.label}`) }))}
-            onChange={(value) => setRange(Number(value) as RuntimeDurableRange)}
+            value={range}
+            options={RUNTIME_DURABLE_RANGES.map((entry) => ({ value: entry, label: t(`range.${entry}`) }))}
+            onChange={setRange}
           />
           <RefreshButton refreshing={refreshing} updatedAt={updatedAt ? formatClock(updatedAt, locale) : null} onClick={() => { refreshRuntime(); refreshFleet(); }} />
         </>}
@@ -133,103 +115,23 @@ export function SandboxMetricsPage() {
       <PageBody>
         <SandboxResetNotice deployment={deployment.data} failed={deployment.isError} onRetry={() => void deployment.refetch()} />
         <FleetReadNotice state={fleetState} onRetry={refreshFleet} />
-        {fleet && suspends ? <SandboxLifecycle deployment={fleet.deployment} nodes={fleet.nodes} stale={fleetObservationStale(fleetState)} /> : null}
-        {cloud && fleet ? <CloudSection deployment={fleet.deployment} /> : <Section
-          headingId="node-capacity-heading"
-          title={t("sandbox.node")}
-          help={t("sandbox.nodesSectionDetail")}
-          actions={<button className="button outline" type="button" onClick={() => navigate("nodes")}>{t("sandbox.manageNodes")}</button>}
-        >
-          {fleet ? fleet.nodes.length ? (
-            <div className="table-frame">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th scope="col">{t("sandbox.node")}</th>
-                    <th scope="col">{t("sandbox.status")}</th>
-                    <th scope="col">{t("sandbox.slots")}</th>
-                    {suspends ? <th scope="col" className="numeric"><span className="column-help">{t("sandbox.suspended")}<HelpTip>{t("sandbox.suspendedHelp")}</HelpTip></span></th> : null}
-                    <th scope="col" className="numeric">{t("sandbox.cpus")}</th>
-                    <th scope="col" className="numeric">{t("sandbox.freeMemory")}</th>
-                    <th scope="col" className="numeric">{t("sandbox.freeDiskColumn")}</th>
-                    <th scope="col" className="numeric">{t("sandbox.cleanupPending")}</th>
-                    <th scope="col" className="numeric">{t("sandbox.lastSeen")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fleet.nodes.map((node) => (
-                    <tr key={node.id} className="clickable-row" onClick={() => setOpenNode(node.id)}>
-                      <th scope="row"><NameCell name={node.name} id={node.id} onOpen={() => setOpenNode(node.id)} openLabel={t("sandbox.nodeDialog.openLabel", { name: node.name || node.id })} /></th>
-                      <td><div className="metrics-node-status"><NodeHealthStatus node={node} /><NodeRolloutStatus node={node} stale={fleetObservationStale(fleetState)} /></div></td>
-                      <td>
-                        <span className="table-meter">
-                          <Meter value={node.active} limit={node.max_active} label={t("sandbox.slotsOf", { name: node.name })} />
-                          <span>{node.active} / {node.max_active}</span>
-                        </span>
-                      </td>
-                      {suspends ? <td className="numeric">{suspendedSandboxes(node)}</td> : null}
-                      <td className="numeric">{node.online ? node.cpu_count ?? MISSING : MISSING}</td>
-                      <td className="numeric">{node.online ? formatBytes(node.available_memory_bytes) : MISSING}</td>
-                      <td className="numeric">{node.online ? formatBytes(node.available_disk_bytes) : MISSING}</td>
-                      <td className={node.cleanup_pending > 0 ? "numeric numeric-warning" : "numeric"}>{node.cleanup_pending}</td>
-                      <td className="numeric">{formatRelative(node.last_seen_at ? Date.parse(node.last_seen_at) / 1000 : null, now, locale)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            // Before sandbox setup there is nothing to add a node to; setup comes first.
-            fleet?.deployment.provider ? (
-              <EmptyState
-                icon={Server}
-                title={t("sandbox.noNodesTitle")}
-                hint={t("sandbox.noNodesDescription")}
-                action={<button className="button primary" type="button" onClick={() => navigate("settings", { id: "sandbox" }, "add-node")}>{t("sandbox.addNode")}</button>}
-              />
-            ) : (
-              <EmptyState
-                icon={Server}
-                title={t("sandbox.notSetUpTitle")}
-                action={<button className="button primary" type="button" onClick={() => navigate("settings", { id: "sandbox" })}>{t("sandbox.setUp")}</button>}
-              />
-            )
-          ) : fleetState.status === "loading"
-            ? <TableSkeleton label={message} rows={3} columns={suspends ? 9 : 8} />
-            : <p className="page-status" role={fleetState.status === "failed" ? "alert" : "status"}>{message}</p>}
-        </Section>}
-
-        <HostedRuntimeSection state={runtimeState} stale={runtimeStale} fleet={fleet} range={range} onOpen={setOpenRuntime} />
+        {fleet && !fleet.deployment.provider ? (
+          <EmptyState
+            icon={Server}
+            title={t("sandbox.notSetUpTitle")}
+            action={<button className="button primary" type="button" onClick={() => navigate("settings", { id: "sandbox" })}>{t("sandbox.setUp")}</button>}
+          />
+        ) : <>
+          {cloud && fleet ? <CloudSection deployment={fleet.deployment} /> : null}
+          <HostedRuntimeSection state={runtimeState} stale={runtimeStale} fleet={fleet} range={range} onOpen={setOpenRuntime} />
+        </>}
       </PageBody>
-      <NodeDialog
-        node={fleet?.nodes.find((node) => node.id === openNode) ?? null}
-        rows={rows}
-        stale={fleetObservationStale(fleetState)}
-        load={runtimeState.load}
-        range={range}
-        suspends={suspends}
-        onClose={() => setOpenNode(null)}
-      />
-      <RuntimeDialog row={rows.find((row) => row.observation.session_id === openRuntime) ?? null} showNode={!cloud} showCompute={suspends} onClose={() => setOpenRuntime(null)} />
+      <RuntimeDialog row={rows.find((row) => row.observation.session_id === openRuntime) ?? null} showNode={!cloud} onClose={() => setOpenRuntime(null)} />
     </section>
   );
 }
 
-/** A node's health; a degraded node names the reason its provider is not ready behind the help tip. */
-function NodeHealthStatus({ node }: { node: SandboxNode }) {
-  const { t } = useTranslation("metrics");
-  const health = nodeHealth(node);
-  const diagnostic = health === "degraded" ? nodeProviderDiagnostic(node) : "";
-  return (
-    <span className="status-with-help">
-      <StatusDot tone={healthTone[health]} label={t(`sandbox.health.${health}`)} />
-      {/* The tip opens on its own, not the row's node dialog. */}
-      {diagnostic ? <span className="status-with-help" onClick={(event) => event.stopPropagation()}><DiagnosticTip code={diagnostic} /></span> : null}
-    </span>
-  );
-}
-
-/** An E2B deployment in place of the node table: what runs in its cloud now, and with what. */
+/** An E2B deployment: what runs in its cloud now, and with what. */
 function CloudSection({ deployment }: { deployment: SandboxDeployment }) {
   const { t, i18n } = useTranslation("metrics");
   const locale = i18n.resolvedLanguage;
@@ -286,11 +188,21 @@ function useRuntimeHistory(snapshot: RuntimeDashboardSnapshot | null, range: Run
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
+    // One read per Session per poll: the 30-second poll is the retry, and a
+    // retry here would read every Session again.
+    retry: false,
   });
+}
+
+/** Core's typed errors and Web's own read bound, in the console's language. */
+function historyFailure(error: unknown, t: TFunction<"metrics">, tCommon: TFunction<"common">): string {
+  if (!(error instanceof RuntimeDurableHistoryIncompleteError)) return coreError(error, tCommon);
+  return error.limit === null ? t("sandbox.charts.historyMixed") : t("sandbox.charts.historyBudget", { limit: error.limit });
 }
 
 function HostedRuntimeSection({ state, stale, fleet, range, onOpen }: { state: RuntimeState; stale: string | null; fleet: ReturnType<typeof fleetSnapshot>; range: RuntimeDurableRange; onOpen: (sessionId: string) => void }) {
   const { t, i18n } = useTranslation("metrics");
+  const { t: tCommon } = useTranslation("common");
   const locale = i18n.resolvedLanguage;
   const load = state.load;
   const usage = useMemo(() => (load ? hostedRuntimeUsage(load.observations) : null), [load]);
@@ -311,9 +223,9 @@ function HostedRuntimeSection({ state, stale, fleet, range, onOpen }: { state: R
     body = (
       <>
         {durable ? <RuntimeCharts samples={durable.samples} resolutionSeconds={durable.resolutionSeconds} />
-          : history.isError ? <p className="page-status" role="alert">{t("sandbox.charts.historyFailed", { reason: history.error instanceof Error ? history.error.message : "" })}</p>
+          : history.isError ? <p className="page-status" role="alert">{t("sandbox.charts.historyFailed", { reason: historyFailure(history.error, t, tCommon) })}</p>
             : history.isFetched ? <p className="page-status">{t("sandbox.charts.historyUnavailable")}</p> : null}
-        <RuntimeTable rows={hostedRuntimeRows(load, "", fleet)} showProject showNode={fleet?.deployment.mode !== "direct"} showCompute={Boolean(fleet?.deployment.suspension)} onOpen={onOpen} />
+        <RuntimeTable rows={hostedRuntimeRows(load, "", fleet)} showProject showNode={fleet?.deployment.mode !== "direct"} onOpen={onOpen} />
       </>
     );
   }
@@ -326,6 +238,7 @@ function HostedRuntimeSection({ state, stale, fleet, range, onOpen }: { state: R
         {usage?.hosted ? (
           <span className="section-meta">
             {t(fleet?.deployment.suspension ? "sandbox.runtimeMetaSuspended" : "sandbox.runtimeMeta", {
+              active: formatInteger(usage.active, locale),
               n: formatInteger(usage.hosted, locale),
               sleeping: formatInteger(usage.sleeping, locale),
               cpu: usage.cpuUsageCores === null ? MISSING : t("sandbox.cores", { value: formatCores(usage.cpuUsageCores, locale) }),
@@ -348,7 +261,6 @@ function HostedRuntimeSection({ state, stale, fleet, range, onOpen }: { state: R
 }
 
 function lifecycleTone(row: HostedRuntimeRow): Tone {
-  if (row.observation.status === "unavailable") return "warning";
   switch (row.observation.lifecycle_state) {
     case "active": return "ok";
     case "transitioning":
@@ -357,12 +269,12 @@ function lifecycleTone(row: HostedRuntimeRow): Tone {
   }
 }
 
+/** Status is Core's record of the sandbox's compute; a missing sample only explains the empty figures. */
 function lifecycleLabel(row: HostedRuntimeRow, t: TFunction<"metrics">): string {
-  if (row.observation.status === "unavailable") return t(`sandbox.reason.${row.observation.reason}`);
   return t(`sandbox.lifecycle.${row.observation.lifecycle_state ?? "stopped"}`);
 }
 
-function RuntimeTable({ rows, showProject, showNode, showCompute, onOpen }: { rows: HostedRuntimeRow[]; showProject: boolean; showNode: boolean; showCompute: boolean; onOpen: (sessionId: string) => void }) {
+function RuntimeTable({ rows, showProject, showNode, onOpen }: { rows: HostedRuntimeRow[]; showProject: boolean; showNode: boolean; onOpen: (sessionId: string) => void }) {
   const { t, i18n } = useTranslation("metrics");
   const { t: tCommon } = useTranslation("common");
   const locale = i18n.resolvedLanguage;
@@ -379,10 +291,9 @@ function RuntimeTable({ rows, showProject, showNode, showCompute, onOpen }: { ro
           <thead>
             <tr>
               <th scope="col">{t("sandbox.session")}</th>
+              <th scope="col"><span className="column-help">{t("sandbox.status")}<HelpTip>{t("sandbox.statusHelp")}</HelpTip></span></th>
               {showProject ? <th scope="col">{tCommon("project.column")}</th> : null}
               {showNode ? <th scope="col">{t("sandbox.node")}</th> : null}
-              <th scope="col">{t("sandbox.status")}</th>
-              {showCompute ? <th scope="col"><span className="column-help">{t("sandbox.recordedCompute")}<HelpTip>{t("sandbox.recordedComputeHelp")}</HelpTip></span></th> : null}
               <th scope="col">{t("sandbox.cpu")}</th>
               <th scope="col">{t("sandbox.memory")}</th>
               <th scope="col" className="numeric">{t("sandbox.uptime")}</th>
@@ -393,18 +304,19 @@ function RuntimeTable({ rows, showProject, showNode, showCompute, onOpen }: { ro
             {visible.map((row) => {
               const { observation, session } = row;
               const observed = observation.status === "observed";
+              const sampleGap = runtimeSampleGap(observation);
               const cpu = observed ? observation.cpu : null;
               const memory = observed ? observation.memory : null;
               const open = () => onOpen(observation.session_id);
               return (
                 <tr key={`${observation.project_id}:${observation.session_id}`} className="clickable-row" onClick={open}>
                   <th scope="row">
-                    <NameCell name={sessionTitle(session)} id={observation.session_id} fallback={t("sandbox.untitled")} onOpen={open} openLabel={t("sandbox.runtimeDialog.openLabel", { name: sessionTitle(session) ?? observation.session_id })} />
+                    <NameCell name={sessionTitle(session)} id={observation.session_id} fallback={tCommon("untitledSession")} onOpen={open} openLabel={t("sandbox.runtimeDialog.openLabel", { name: sessionTitle(session) ?? observation.session_id })} />
                   </th>
-                  {showProject ? <td><ProjectName project={byId.get(observation.project_id)} /></td> : null}
-                  {showNode ? <td>{row.node ? row.node.name || row.node.id : <span className="table-muted">{MISSING}</span>}</td> : null}
                   <td><StatusDot tone={lifecycleTone(row)} label={lifecycleLabel(row, t)} /></td>
-                  {showCompute ? <td>{row.allocation ? sandboxStateLabel(row.allocation.compute_phase, locale?.startsWith("zh") ? "zh-CN" : "en") : MISSING}</td> : null}
+                  {showProject ? <td><ProjectName project={byId.get(observation.project_id)} /></td> : null}
+                  {showNode ? <td><NodeLink node={row.node} /></td> : null}
+                  {sampleGap ? <td colSpan={2} className="table-muted">{t(`sandbox.reason.${sampleGap}`)}</td> : <>
                   <td>
                     {cpu?.usage_cores != null ? (
                       <span className="table-meter">
@@ -427,6 +339,7 @@ function RuntimeTable({ rows, showProject, showNode, showCompute, onOpen }: { ro
                       </span>
                     ) : <span className="table-muted">{MISSING}</span>}
                   </td>
+                  </>}
                   <td className="numeric">{formatDuration(row.uptimeSeconds)}</td>
                   <td className="numeric" title={session?.usage ? t("sandbox.tokenSplit", { input: formatInteger(session.usage.input_tokens, locale), output: formatInteger(session.usage.output_tokens, locale) }) : undefined}>
                     {session?.usage ? formatCompact(session.usage.total_tokens, locale) : MISSING}
@@ -442,6 +355,15 @@ function RuntimeTable({ rows, showProject, showNode, showCompute, onOpen }: { ro
   );
 }
 
+/** A Runtime's host, opening its page on Nodes. */
+function NodeLink({ node }: { node: HostedRuntimeRow["node"] }) {
+  const { t } = useTranslation("metrics");
+  const { navigate } = useConsoleNavigation();
+  if (!node) return <span className="table-muted">{MISSING}</span>;
+  const name = node.name || node.id;
+  return <button type="button" className="table-link" aria-label={t("sandbox.openNode", { name })} onClick={(event) => { event.stopPropagation(); navigate("nodes", { id: node.id }); }}><strong>{name}</strong></button>;
+}
+
 /** Keeps the last value on screen while a dialog closes. */
 function useLast<T>(value: T | null): T | null {
   const last = useRef(value);
@@ -449,100 +371,9 @@ function useLast<T>(value: T | null): T | null {
   return value ?? last.current;
 }
 
-/**
- * A node in a dialog: the host figures it reports with each heartbeat, and
- * CPU and memory of the hosted sandboxes placed on it over the page's range.
- */
-function NodeDialog({ node, rows, load, range, stale, suspends, onClose }: {
-  stale: boolean;
-  /** Whether the deployment's Provider suspends sandboxes, which its suspension policy declares. */
-  suspends: boolean;
-  node: SandboxNode | null;
-  rows: readonly HostedRuntimeRow[];
-  load: HostedRuntimeLoad | null;
-  range: RuntimeDurableRange;
-  onClose: () => void;
-}) {
-  const { t, i18n } = useTranslation("metrics");
-  const locale = i18n.resolvedLanguage;
-  const { navigate } = useConsoleNavigation();
-  const shown = useLast(node);
-  const sessionIds = useMemo(() => new Set(rows.filter((row) => row.node?.id === node?.id).map((row) => row.observation.session_id)), [node?.id, rows]);
-  const snapshot = useMemo<RuntimeDashboardSnapshot | null>(
-    () => (load && node && sessionIds.size ? runtimeSnapshotWhere(load, (observation) => sessionIds.has(observation.session_id)) : null),
-    [load, node, sessionIds],
-  );
-  const history = useRuntimeHistory(snapshot, range);
-  // The machine itself: its last heartbeat and host history over the page's range.
-  const hostRange = RUNTIME_DURABLE_RANGES.find((entry) => entry.milliseconds === range)?.label ?? "1h";
-  const detail = useQuery({
-    ...nodeDetailQuery(shown?.id ?? "", hostRange),
-    enabled: node !== null,
-    placeholderData: keepPreviousData,
-    refetchInterval: RUNTIME_SNAPSHOT_REFRESH_MS,
-    refetchIntervalInBackground: false,
-  });
-  const host = detail.data?.id === shown?.id ? detail.data?.host ?? null : null;
-  const now = Math.floor(Date.now() / 1000);
-  const online = shown?.online ?? false;
-  const seen = shown?.last_seen_at ? Date.parse(shown.last_seen_at) / 1000 : null;
-  const cores = host?.effective_cpu_cores ?? shown?.cpu_count ?? null;
-  const coresLabel = cores === null ? null : t("sandbox.cores", { value: formatInteger(cores, locale) });
-  const cpu = !online || coresLabel === null ? MISSING
-    : host?.cpu_utilization != null ? t("sandbox.nodeDialog.cpuOf", { percent: formatShare(host.cpu_utilization, locale), cores: coresLabel }) : coresLabel;
-  const memory = !online ? MISSING
-    : host?.total_memory_bytes != null && host.available_memory_bytes != null
-      ? t("sandbox.nodeDialog.memoryOf", { used: formatBytes(host.total_memory_bytes - host.available_memory_bytes), total: formatBytes(host.total_memory_bytes) })
-      : formatBytes(shown?.available_memory_bytes ?? null);
-  return (
-    <Modal
-      open={node !== null}
-      wide
-      title={shown ? shown.name || shown.id : ""}
-      onClose={onClose}
-      footer={shown ? <button className="button outline" type="button" onClick={() => navigate("nodes", { id: shown.id })}>{t("sandbox.nodeDialog.openNode")}</button> : undefined}
-    >
-      {shown ? (
-        <div className="metrics-dialog">
-          {stale ? <p className="detail-note" role="status">{t("sandbox.nodeObservationStale")}</p> : null}
-          <dl className="resource-facts" aria-label={t("sandbox.nodeDialog.facts")}>
-            <div><dt>{t("sandbox.status")}</dt><dd><NodeHealthStatus node={shown} /></dd></div>
-            <div><dt>{t("sandbox.targetPreparation")}</dt><dd><NodeRolloutStatus node={shown} stale={stale} /></dd></div>
-            <div><dt>{t("sandbox.servingGeneration")}</dt><dd><span className="status-with-help">{shown.rollout.ready_generation ?? MISSING}<HelpTip>{t("sandbox.servingGenerationHelp")}</HelpTip></span></dd></div>
-            <div><dt>{t("sandbox.slots")}</dt><dd>{formatInteger(shown.active, locale)} / {formatInteger(shown.max_active, locale)}</dd></div>
-            {suspends ? <div><dt>{t("sandbox.suspended")}</dt><dd>{formatInteger(suspendedSandboxes(shown), locale)}</dd></div> : null}
-            {suspends ? <div><dt>{t("sandbox.nodeDialog.retainedSlots")}</dt><dd>{formatInteger(shown.retained, locale)} / {formatInteger(shown.max_retained, locale)}</dd></div> : null}
-            <div><dt>{t("sandbox.cpus")}</dt><dd>{cpu}</dd></div>
-            <div><dt>{t("sandbox.memory")}</dt><dd>{memory}</dd></div>
-            <div><dt>{t("sandbox.freeDiskColumn")}</dt><dd>{online ? formatBytes(shown.available_disk_bytes) : MISSING}</dd></div>
-            <div><dt>{t("sandbox.cleanupPending")}</dt><dd>{formatInteger(shown.cleanup_pending, locale)}</dd></div>
-            <div><dt>{t("sandbox.lastSeen")}</dt><dd title={seen === null ? undefined : formatDateTime(seen, locale)}>{formatRelative(seen, now, locale)}</dd></div>
-          </dl>
-          <Section headingId="node-host-heading" title={t("sandbox.nodeDialog.host")} help={t("sandbox.nodeDialog.hostHelp")}>
-            {detail.data?.id === shown.id ? <NodeHostCharts detail={detail.data} />
-              : detail.isError ? <p className="page-status">{t("sandbox.nodeDialog.hostFailed", { reason: detail.error instanceof Error ? detail.error.message : "" })}</p>
-                : <TableSkeleton label={t("sandbox.runtimeLoading")} rows={3} columns={4} />}
-          </Section>
-          <Section
-            headingId="node-runtimes-heading"
-            title={<>{t("sandbox.nodeDialog.runtimes")}<span className="section-meta">{t("sandbox.nodeDialog.runtimesMeta", { n: formatInteger(sessionIds.size, locale) })}</span></>}
-            help={t("sandbox.nodeDialog.runtimesHelp")}
-          >
-            {!sessionIds.size ? <EmptyState title={t("sandbox.nodeDialog.noRuntimes")} />
-              : history.data ? <RuntimeCharts samples={history.data.samples} resolutionSeconds={history.data.resolutionSeconds} height={150} />
-                : history.isError ? <p className="page-status" role="alert">{t("sandbox.charts.historyFailed", { reason: history.error instanceof Error ? history.error.message : "" })}</p>
-                  : history.isFetched ? <p className="page-status">{t("sandbox.charts.historyUnavailable")}</p>
-                    : <TableSkeleton label={t("sandbox.runtimeLoading")} rows={3} columns={4} />}
-          </Section>
-        </div>
-      ) : null}
-    </Modal>
-  );
-}
-
 /** A hosted sandbox in a dialog: where it runs, and its Session's Runtime state and history. */
-function RuntimeDialog({ row, showNode, showCompute, onClose }: { row: HostedRuntimeRow | null; showNode: boolean; showCompute: boolean; onClose: () => void }) {
-  const { t, i18n } = useTranslation("metrics");
+function RuntimeDialog({ row, showNode, onClose }: { row: HostedRuntimeRow | null; showNode: boolean; onClose: () => void }) {
+  const { t } = useTranslation("metrics");
   const { t: tCommon } = useTranslation("common");
   const { navigate } = useConsoleNavigation();
   const { byId } = useProjects();
@@ -560,9 +391,8 @@ function RuntimeDialog({ row, showNode, showCompute, onClose }: { row: HostedRun
         <div className="metrics-dialog">
           <dl className="resource-facts" aria-label={t("sandbox.runtimeDialog.facts")}>
             <div><dt>{tCommon("project.column")}</dt><dd><ProjectName project={byId.get(observation.project_id)} /></dd></div>
-            {showNode ? <div><dt>{t("sandbox.node")}</dt><dd>{shown.node ? shown.node.name || shown.node.id : MISSING}</dd></div> : null}
+            {showNode ? <div><dt>{t("sandbox.node")}</dt><dd><NodeLink node={shown.node} /></dd></div> : null}
             <div><dt>{t("sandbox.status")}</dt><dd><StatusDot tone={lifecycleTone(shown)} label={lifecycleLabel(shown, t)} /></dd></div>
-            {showCompute && shown.allocation ? <div><dt>{t("sandbox.recordedCompute")}</dt><dd>{sandboxStateLabel(shown.allocation.compute_phase, i18n.resolvedLanguage?.startsWith("zh") ? "zh-CN" : "en")}</dd></div> : null}
             <div><dt>{t("sandbox.configurationGeneration")}</dt><dd>{shown.deploymentGeneration ?? MISSING}</dd></div>
             <div><dt>{t("sandbox.uptime")}</dt><dd>{formatDuration(shown.uptimeSeconds)}</dd></div>
             {/* Only E2B reports a sandbox's disk. */}

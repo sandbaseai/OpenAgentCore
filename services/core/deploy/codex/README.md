@@ -14,6 +14,8 @@ Codex accepts only the `responses` model protocol ([`harnessconfig/codex`](../..
 
 Each Session has its own `CODEX_HOME` at `<StateRoot>/daemon/agent-sessions/<state key>/`, where the Runtime supplies `<StateRoot>` from the [state directory setting](../../../../docs/configuration.md#runtime-resource-directories). Native history stays there; Runtime device credentials stay in the Runtime home. The state layout alone does not qualify cross-node native continuation. The adapter regenerates that directory's `config.toml` on every prompt: the Session's frozen provider bundle becomes the `[model_providers.oac]` block, with `wire_api` `responses`, and the thread is pinned to that provider, so Codex never falls back to its built-in `openai` provider. Provider bearer credentials use the native `env_key` reference and enter the model-loop child process environment; they are not written into retained `config.toml`. The adapter excludes that variable from native shell environments with `shell_environment_policy.exclude` and disables `shell_snapshot`, whose capture in the pinned native version can otherwise persist the model-loop environment. This retains native thread history without retaining native shell snapshots; it introduces no user setting.
 
+By default Codex retries a failed model connection forever, waiting up to 60 seconds between attempts, so a Turn whose model host is unreachable stays in progress with no events. The adapter disables that `unbounded_connection_retries` feature, so Codex falls back to its bounded defaults: up to 4 retries per request and 5 per response stream. A model host that does not resolve or refuses connections then fails the Turn with `connection_failed` within about a minute, depending on how long each lookup or connection attempt takes. Retries start only after a request fails, so slow responses are unaffected, and a stream still ends after Codex's 300 seconds without data. Codex sets no connect timeout: against a host that silently drops connections, each of the 30 attempts waits for the operating system's connect timeout.
+
 ## Execution controls
 
 The adapter applies Core's typed controls and opt-ins, described in the [Runtime protocol](../../../../docs/runtime-protocol.md#capability-declarations), through native Codex settings on both new and resumed Turns.
@@ -52,10 +54,11 @@ The adapter classifies a failed Turn only from the exact root terminal Turn's `c
 | `internalServerError` | `server_error` |
 | `badRequest` | `invalid_request` |
 | `cyberPolicy` | `cyber_policy` |
+| `other` whose message is a JSON object with an object `error` member | that member's `code` or `type` when it is an accepted code, otherwise `invalid_request` |
 | `httpConnectionFailed`, `responseStreamConnectionFailed`, `responseStreamDisconnected` | `connection_failed`, with the upstream `httpStatusCode` |
 | `responseTooManyFailedAttempts` | `rate_limit_exceeded` when `httpStatusCode` is 429, otherwise `connection_failed` |
 
-Every other variant stays unclassified.
+Codex `0.153.4` reports a provider HTTP 400 as `other` and puts the provider's error body in the message, such as the rejection of an unknown model name. Every other variant stays unclassified, and so does `other` with any other message, including a plain-text 400 body and the `unexpected status` text Codex writes for provider 401 and 404 responses.
 
 ## Runtime image
 

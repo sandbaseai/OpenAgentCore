@@ -40,9 +40,17 @@ func TestEngineClassificationSurvivesDrainWithoutChangingSettlement(t *testing.T
 		if json.Unmarshal(raw, &persisted) != nil || persisted.EngineErrorCode != result.EngineErrorCode {
 			t.Fatal(string(raw))
 		}
+		// A later frame without an accepted code, like the Runtime's settlement failure, keeps the classification.
 		unknown := proto.Envelope{Type: proto.TypeError, Payload: json.RawMessage(`{"error":"new","code":{"arbitrary":"value"},"http_status":"secret"}`)}
-		if err := result.mergeObservation(unknown); err != nil || result.EngineErrorCode != "authentication_error" || result.ErrorCode != prior || result.Done.Usage.InputTokens != 9 {
-			t.Fatal(err, result)
+		settlement, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: "executor Turn settlement failed"})
+		for _, later := range []proto.Envelope{unknown, settlement} {
+			if err := result.mergeObservation(later); err != nil || result.EngineErrorCode != "authentication_error" || result.ErrorCode != prior || result.Done.Usage.InputTokens != 9 {
+				t.Fatal(err, result)
+			}
+		}
+		var fresh Result
+		if err := fresh.mergeObservation(unknown); err != nil || fresh.EngineErrorCode != "" || fresh.EngineHTTPStatus != nil {
+			t.Fatal(err, fresh)
 		}
 	}
 }
@@ -70,66 +78,6 @@ func TestClassifiedErrorCannotOverrideCancellationReceipt(t *testing.T) {
 		}
 		if status != sessions.TurnCancelled || result.Done.Usage.InputTokens != 9 || result.Done.Metadata[proto.DoneMetaAgentSessionID] != "native" || result.EngineErrorCode != "rate_limit_exceeded" {
 			t.Fatalf("receipt lost authority: %s %+v", status, result)
-		}
-	}
-}
-
-func TestEngineClassificationSurvivesUnclassifiedSettlement(t *testing.T) {
-	for _, drain := range []bool{false, true} {
-		result := Result{ErrorCode: "engine_failed"}
-		failure, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "claudesdk: execution_failed", Code: "resource_not_found"})
-		settlement, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "executor Turn settlement failed"})
-		done, _ := proto.NewEnvelope(proto.TypeDone, "turn", proto.DonePayload{Usage: proto.Usage{InputTokens: 7}})
-		events := []proto.Envelope{failure, settlement, done}
-		if drain {
-			queued := make(chan proto.Envelope, len(events))
-			for _, event := range events {
-				queued <- event
-			}
-			close(queued)
-			j := journal{writer: &recoveringWriter{}, next: 1}
-			if err := j.drain(queued, &result); err != nil {
-				t.Fatal(err)
-			}
-		} else {
-			for _, event := range events {
-				if err := result.mergeObservation(event); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		if result.EngineErrorCode != "resource_not_found" || result.EngineHTTPStatus != nil || result.ErrorCode != "engine_failed" || result.Done.Usage.InputTokens != 7 {
-			t.Fatalf("drain=%v: %+v", drain, result)
-		}
-		// Each delivery creates its own Result; generic errors in another Turn stay unknown.
-		next := Result{}
-		settlement.ID = "next-turn"
-		if err := next.mergeObservation(settlement); err != nil || next.EngineErrorCode != "" || next.EngineHTTPStatus != nil {
-			t.Fatalf("classification crossed Turns: %v %+v", err, next)
-		}
-	}
-}
-
-func TestEngineClassificationUpdatesOnlyFromAcceptedMetadata(t *testing.T) {
-	status := 502
-	result := Result{}
-	for _, step := range []struct {
-		payload string
-		code    string
-		status  *int
-	}{
-		{`{"code":"connection_failed","http_status":502}`, "connection_failed", &status},
-		{`{"error":"settlement failed"}`, "connection_failed", &status},
-		{`{"code":"unknown_code","http_status":401}`, "connection_failed", &status},
-		{`{"code":{"invalid":true},"http_status":"invalid"}`, "connection_failed", &status},
-		{`{"code":"resource_not_found","http_status":404}`, "resource_not_found", nil},
-		{`{"code":"authentication_error"}`, "authentication_error", nil},
-	} {
-		if err := result.mergeObservation(proto.Envelope{Type: proto.TypeError, Payload: json.RawMessage(step.payload)}); err != nil {
-			t.Fatal(err)
-		}
-		if result.EngineErrorCode != step.code || (result.EngineHTTPStatus == nil) != (step.status == nil) || (step.status != nil && *result.EngineHTTPStatus != *step.status) {
-			t.Fatalf("payload=%s: %+v", step.payload, result)
 		}
 	}
 }

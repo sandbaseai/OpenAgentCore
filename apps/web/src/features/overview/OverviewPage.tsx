@@ -7,7 +7,7 @@ import type { TFunction } from "i18next";
 import { InstallationNotice } from "../../components/InstallationNotice";
 import { installationQuery } from "../../lib/installation";
 import { ReadFailure } from "../../components/ReadFailure";
-import { readError } from "../../lib/read-error";
+import { coreError } from "../../lib/core-error";
 import { failedLast, useFailureToast } from "../../components/Toast";
 import { LiveNumber } from "../../components/live-number";
 import { TimeSeriesChart } from "../../components/charts/TimeSeriesChart";
@@ -25,8 +25,9 @@ import { NameCell } from "../../components/list-ui";
 import { useConsoleNavigation } from "../../lib/console-navigation";
 import { formatClock, formatCompact, formatInteger, formatPercent, formatRelative, MISSING } from "../../lib/format";
 import { ProjectName, useProjects } from "../../lib/projects";
+import { sessionTitle } from "../../lib/session-title";
 import { capacitySummary, coreStatus, type CoreStatus } from "../fleet/fleet-model";
-import { FleetReadNotice, fleetObservationStale } from "../fleet/FleetReadNotice";
+import { FleetReadNotice } from "../fleet/FleetReadNotice";
 import { SandboxResetNotice } from "../fleet/SandboxResetNotice";
 import { fleetSnapshot, useSandboxFleet, type FleetSnapshot, type FleetState } from "../fleet/use-sandbox-fleet";
 import { type InProject } from "../metrics/project-sessions";
@@ -34,9 +35,9 @@ import { FleetOverview, FLEET_LIMIT, type CloudHost } from "./FleetOverview";
 import { SessionFailure } from "../sessions/session-diagnostics";
 import { useWaitingFor } from "../sessions/SessionStatus";
 import { GettingStarted } from "./GettingStarted";
-import { type OverviewData } from "./overview-loader";
 import { overviewQuery } from "./overview-queries";
 import {
+  activityStart,
   attentionCount,
   attentionSessions,
   projectUsageRows,
@@ -57,15 +58,6 @@ const ATTENTION_LIMIT = 8;
 const serviceTone: Record<ServiceHealth, Tone> = { healthy: "ok", degraded: "warning", down: "danger", unknown: "pending" };
 const coreTone: Record<CoreStatus, Tone> = { checking: "pending", running: "ok", unreachable: "danger" };
 
-type LoadState =
-  | { status: "loading"; data: OverviewData | null }
-  | { status: "ready"; data: OverviewData }
-  | { status: "failed"; data: OverviewData | null; error: string };
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * The Overview's reads through the query cache: a revisit opens from the cache,
  * a refresh retains figures within the same project scope, and the
@@ -78,16 +70,10 @@ function useOverviewData(projects: readonly AdminProject[], projectsReady: boole
     refetchInterval: OVERVIEW_REFRESH_MS,
     refetchIntervalInBackground: false,
   });
-  const data = query.data ?? null;
-  let state: LoadState;
-  if (query.isError && !query.isFetching) state = { status: "failed", data, error: errorText(query.error) };
-  else if (data && !query.isFetching) state = { status: "ready", data };
-  else state = { status: "loading", data };
-
   const { refetch } = query;
   const refresh = useCallback(() => { void refetch(); }, [refetch]);
   // The failure lasts through the polls that retry it, so its toast shows once.
-  return { state, refresh, refreshing: query.isFetching, failure: failedLast(query) ? errorText(query.error) : null };
+  return { data: query.data ?? null, refresh, refreshing: query.isFetching, failed: failedLast(query) };
 }
 
 export function OverviewPage() {
@@ -100,12 +86,12 @@ export function OverviewPage() {
   const projectsReady = projectsState.state.status === "ready" || projects.length > 0;
   const projectsFailed = projectsState.state.status === "failed" || projectsState.refreshError !== null;
   const installation = useQuery(installationQuery);
-  const { state, refresh, refreshing, failure } = useOverviewData(projects, projectsReady);
+  const { data: loaded, refresh, refreshing, failed } = useOverviewData(projects, projectsReady);
   const { state: fleetState, refresh: refreshFleet, deployment } = useSandboxFleet();
   const fleet = fleetSnapshot(fleetState);
-  const data = projectsReady ? state.data : null;
+  const data = projectsReady ? loaded : null;
   const refreshAll = () => { projectsState.refresh(); if (projectsReady) refresh(); refreshFleet(); void installation.refetch(); };
-  const readFailed = projectsFailed || failure !== null;
+  const readFailed = projectsFailed || failed;
   const sessionReadsFailed = readFailed || Boolean(data?.sessions.failures.length);
   const now = Math.floor((data?.loadedAt ?? Date.now()) / 1000);
 
@@ -114,7 +100,7 @@ export function OverviewPage() {
   const usageRows = useMemo(() => (summaryRows ? projectUsageRows(projects, summaryRows) : null), [projects, summaryRows]);
   const sessions = data && (data.sessions.sessions.length || !sessionReadsFailed) ? data.sessions.sessions : null;
   const activity = useMemo(() => (sessions ? sessionActivity(sessions.map((entry) => entry.value), now) : null), [now, sessions]);
-  const attention = useMemo(() => (sessions ? attentionSessions(sessions, ATTENTION_LIMIT) : null), [sessions]);
+  const attention = useMemo(() => (sessions ? attentionSessions(sessions, activityStart(now)) : null), [now, sessions]);
   const capacity = fleet ? capacitySummary(fleet.nodes) : null;
   // An E2B deployment has no machines: capacity is what Core holds in E2B's cloud.
   const cloud = cloudHost(fleet);
@@ -149,16 +135,25 @@ export function OverviewPage() {
 
   const loading = refreshing || projectsState.state.status === "loading" || (fleetState.status === "ready" && fleetState.refreshing);
   const updatedAt = data?.loadedAt ?? fleet?.loadedAt ?? null;
-  const attentionTotal = totals ? attentionCount(totals) : null;
+  const attentionFailed = attention ? attention.filter((entry) => entry.value.status === "failed").length : null;
+  // Core's summary counts every Session needing attention; the rest of them are older than the window.
+  const attentionOlder = attention && totals ? Math.max(0, attentionCount(totals) - attention.length) : null;
   const truncated = data?.sessions.truncated ?? [];
+  const unreadNames = readFailures.map((failure) => failure.project.name).join(", ");
+  const truncatedNames = truncated.map((project) => project.name).join(", ");
+  // Attention comes from the browser's Session reads, so an unread or capped project leaves it partial.
+  const attentionPartialHelp = [
+    readFailures.length ? t("activity.unreadHelp", { names: unreadNames }) : null,
+    truncated.length ? t("attention.partialHelp", { names: truncatedNames }) : null,
+  ].filter(Boolean).join(" ");
   // Whether any Session exists: Core's summary counts them all; without it, any Session read counts.
   const sessionCount = totals ? totals.total
     : sessions?.length ? sessions.length
     : summaryError !== null || sessionReadsFailed ? "failed" : null;
 
   // Each failed read is its own toast, shown once while it lasts.
-  useFailureToast(failure !== null, tCommon("readFailure.unknown"), "overview-load");
-  useFailureToast(summaryError !== null, t("errors.summary", { reason: summaryError === null ? "" : readError(summaryError, tCommon) }), "overview-summary");
+  useFailureToast(failed, tCommon("readFailure.unknown"), "overview-load");
+  useFailureToast(summaryError !== null, t("errors.summary", { reason: summaryError === null ? "" : coreError(summaryError, tCommon) }), "overview-summary");
   useFailureToast(readFailures.length > 0, tCommon("project.partial", { names: readFailures.map((entry) => entry.project.name).join(", ") }), "overview-partial");
   useFailureToast(projectsFailed, t("errors.projects", { reason: projectsState.state.status === "failed" ? projectsState.state.error : projectsState.refreshError ?? "" }), "overview-projects");
 
@@ -214,8 +209,9 @@ export function OverviewPage() {
           <MetricTile
             label={t("kpi.attention")}
             help={t("attention.subtitle")}
-            value={<LiveNumber value={attentionTotal} />}
-            sub={totals ? t("tiles.attentionSplit", { failed: totals.failed, waiting: totals.requires_action }) : t("kpi.summaryUnavailable")}
+            note={attention && attentionPartialHelp ? <PartialChip>{attentionPartialHelp}</PartialChip> : null}
+            value={<LiveNumber value={attention ? attention.length : null} />}
+            sub={attention && attentionFailed !== null ? t("tiles.attentionSplit", { failed: attentionFailed, waiting: attention.length - attentionFailed }) : sessionReadsFailed ? t("kpi.readsFailed") : null}
           />
         </div>
 
@@ -228,14 +224,9 @@ export function OverviewPage() {
                 <HelpTip>{t("activity.help")}</HelpTip>
               </div>
               {truncated.length || readFailures.length ? (
-                <span className="partial-chip">
-                  <StatusDot tone="warning" label={t("activity.partial")} />
-                  <HelpTip>
-                    {readFailures.length ? t("activity.unreadHelp", { names: readFailures.map((failure) => failure.project.name).join(", ") }) : null}
-                    {readFailures.length && truncated.length ? " " : null}
-                    {truncated.length ? t("activity.partialHelp", { names: truncated.map((project) => project.name).join(", ") }) : null}
-                  </HelpTip>
-                </span>
+                <PartialChip>
+                  {[readFailures.length ? t("activity.unreadHelp", { names: unreadNames }) : null, truncated.length ? t("activity.partialHelp", { names: truncatedNames }) : null].filter(Boolean).join(" ")}
+                </PartialChip>
               ) : null}
             </header>
             {sessionReadsFailed ? <ReadFailure onRetry={refreshAll} partial={activity !== null} /> : null}
@@ -267,17 +258,18 @@ export function OverviewPage() {
             <div className="console-section-title">
               <h2 id="attention-heading">{t("attention.title")}</h2>
               <HelpTip>{t("attention.subtitle")}</HelpTip>
-              {attention && attentionTotal !== null && attention.length < attentionTotal ? (
+              {attention && attention.length > ATTENTION_LIMIT ? (
                 <>
-                  <span className="overview-card-meta">{t("attention.shown", { shown: formatInteger(attention.length, locale), total: formatInteger(attentionTotal, locale) })}</span>
-                  <HelpTip>{attention.length < Math.min(attentionTotal, ATTENTION_LIMIT) ? t("attention.partialHelp") : t("attention.limitHelp", { count: ATTENTION_LIMIT })}</HelpTip>
+                  <span className="overview-card-meta">{t("attention.shown", { shown: formatInteger(ATTENTION_LIMIT, locale), total: formatInteger(attention.length, locale) })}</span>
+                  <HelpTip>{t("attention.limitHelp", { count: ATTENTION_LIMIT })}</HelpTip>
                 </>
               ) : null}
+              {attention?.length && attentionPartialHelp ? <PartialChip>{attentionPartialHelp}</PartialChip> : null}
             </div>
             <button className="button outline" type="button" onClick={() => navigate("sessions")}>{t("attention.viewLog")}</button>
           </header>
           {sessionReadsFailed || summaryError !== null ? <ReadFailure onRetry={refreshAll} partial={Boolean(attention?.length)} /> : null}
-          {attention?.length || (!sessionReadsFailed && summaryError === null) ? <AttentionTable sessions={attention} expected={attentionTotal} unread={readFailures.map((failure) => failure.project.name)} truncated={truncated.length > 0} now={now} onOpen={openSession} /> : null}
+          {attention?.length || (!sessionReadsFailed && summaryError === null) ? <AttentionTable sessions={attention?.slice(0, ATTENTION_LIMIT) ?? null} older={attentionOlder} unreadNames={unreadNames} truncatedNames={truncatedNames} now={now} onOpen={openSession} /> : null}
         </section>
 
         <section className="overview-card overview-table-card" aria-labelledby="projects-heading">
@@ -296,13 +288,24 @@ export function OverviewPage() {
   );
 }
 
-function MetricTile({ label, help, value, sub }: { label: string; help?: ReactNode; value: ReactNode; sub?: ReactNode }) {
+function MetricTile({ label, help, note, value, sub }: { label: string; help?: ReactNode; note?: ReactNode; value: ReactNode; sub?: ReactNode }) {
   return (
     <article className="metric-tile">
-      <header className="console-section-title"><span className="metric-tile-label">{label}</span>{help ? <HelpTip label={label}>{help}</HelpTip> : null}</header>
+      <header className="console-section-title"><span className="metric-tile-label">{label}</span>{help ? <HelpTip label={label}>{help}</HelpTip> : null}{note}</header>
       <div className="metric-tile-value kpi-value">{value}</div>
       {sub ? <p className="metric-tile-sub">{sub}</p> : null}
     </article>
+  );
+}
+
+/** Marks figures read from only part of the Session lists; the help says which. */
+function PartialChip({ children }: { children: ReactNode }) {
+  const { t } = useTranslation("overview");
+  return (
+    <span className="partial-chip">
+      <StatusDot tone="warning" label={t("activity.partial")} />
+      <HelpTip>{children}</HelpTip>
+    </span>
   );
 }
 
@@ -316,7 +319,7 @@ function cloudHost(fleet: FleetSnapshot | null): CloudHost | null {
   return { running: fleet.deployment.resources.allocations, pending: fleet.deployment.resources.pending, template: fleet.deployment.configuration?.template || null };
 }
 
-/** Core and its sandbox nodes (or E2B's cloud) as an inventory; each opens a popover with the way onward. */
+/** Core and its sandbox nodes (or E2B's cloud) as an inventory; each row opens its page. */
 function FleetCard({ fleetState, core, localOnly }: { fleetState: FleetState; core: CoreStatus; localOnly: boolean }) {
   const { t } = useTranslation("overview");
   const { navigate } = useConsoleNavigation();
@@ -337,21 +340,18 @@ function FleetCard({ fleetState, core, localOnly }: { fleetState: FleetState; co
             ? <button className="button outline" type="button" onClick={() => navigate("settings", { id: "sandbox" })}>{t("fleet.setUp")}</button>
             : cloud || hosts.length
               ? <button className="button outline" type="button" onClick={() => cloud ? navigate("settings", { id: "sandbox" }) : navigate("nodes")}>{cloud ? t("fleet.cloud.openBackend") : t("fleet.manageNodes")}</button>
-              : <button className="button outline" type="button" onClick={() => localOnly ? navigate("nodes") : navigate("settings", { id: "sandbox" }, "add-node")}>{t(localOnly ? "fleet.manageNodes" : "fleet.addNode")}</button>
+              : <button className="button outline" type="button" onClick={() => navigate("nodes", {}, localOnly ? undefined : "add-node")}>{t(localOnly ? "fleet.manageNodes" : "fleet.addNode")}</button>
         ) : null}
       </header>
       <div className="overview-card-body fleet-body">
         <FleetOverview
           nodes={hosts}
           cloud={cloud}
-          suspends={Boolean(fleet?.deployment.suspension)}
-          onOpenBackend={() => navigate("settings", { id: "sandbox" })}
           coreLabel={t(`coreStatus.${core}`)}
           coreTone={coreTone[core]}
-          stale={fleetObservationStale(fleetState)}
           onOpenNode={(node) => navigate("nodes", { id: node.id })}
-          onOpenSandboxMetrics={() => navigate("sandbox-metrics")}
-          onOpenCoreMetrics={() => navigate("core-metrics")}
+          onOpenCloud={() => navigate("sandbox-metrics")}
+          onOpenCore={() => navigate("core-metrics")}
         />
         {hidden ? <button className="text-action fleet-more" type="button" onClick={() => navigate("nodes")}>{t("fleet.more", { count: hidden })}</button> : null}
         <FleetFooter state={fleetState} empty={fleet && !cloud ? hosts.length === 0 : false} unset={fleet ? !fleet.deployment.provider : false} />
@@ -435,24 +435,19 @@ function ProjectUsageTable({ rows, failed, now, onOpen }: { rows: ProjectUsageRo
   );
 }
 
-function sessionTitle(session: AgentSession): string | null {
-  const title = session.metadata?.title;
-  if (typeof title === "string" && title.trim()) return title;
-  return session.agent?.name?.trim() ? session.agent.name : null;
-}
-
 /**
- * Sessions needing attention. "Nothing needs attention" is claimed only when
- * every Session list was read and Core's summary agrees; otherwise the empty
- * table says the Sessions could not be listed.
+ * Sessions needing attention in the activity window. "Nothing needs attention"
+ * is claimed only when every Session list was read in full; otherwise the
+ * empty table says the Sessions could not be listed.
  */
-function AttentionTable({ sessions, expected, unread, truncated, now, onOpen }: {
+function AttentionTable({ sessions, older, unreadNames, truncatedNames, now, onOpen }: {
   sessions: InProject<AgentSession>[] | null;
-  /** Sessions needing attention by Core's summary, when it was read. */
-  expected: number | null;
+  /** Sessions needing attention before the window, when Core's summary was read. */
+  older: number | null;
   /** Projects whose Session list could not be read. */
-  unread: string[];
-  truncated: boolean;
+  unreadNames: string;
+  /** Projects whose Session read stopped at its cap, so some Sessions may be missing. */
+  truncatedNames: string;
   now: number;
   onOpen: (entry: InProject<AgentSession>) => void;
 }) {
@@ -462,14 +457,12 @@ function AttentionTable({ sessions, expected, unread, truncated, now, onOpen }: 
   const waitingFor = useWaitingFor();
   if (sessions === null) return <TableSkeleton label={t("attention.loading")} rows={4} columns={5} />;
   if (!sessions.length) {
-    const description = unread.length
-      ? t("attention.unreadDescription", { names: unread.join(", ") })
-      : expected
-        ? t("attention.unlistedDescription", { count: expected })
-        : truncated || expected === null ? t("attention.partialHelp") : null;
+    const description = unreadNames
+      ? t("attention.unreadDescription", { names: unreadNames })
+      : truncatedNames ? t("attention.partialHelp", { names: truncatedNames }) : null;
     return (
       <div className="overview-card-body">
-        {description ? <EmptyState title={t("attention.unlistedTitle")} description={description} /> : <EmptyState title={t("attention.emptyTitle")} hint={t("attention.emptyDescription")} />}
+        {description ? <EmptyState title={t("attention.unlistedTitle")} description={description} /> : <EmptyState title={t("attention.emptyTitle")} description={older ? t("attention.emptyOlder", { count: older }) : t("attention.emptyDescription")} />}
       </div>
     );
   }
@@ -479,8 +472,8 @@ function AttentionTable({ sessions, expected, unread, truncated, now, onOpen }: 
         <thead>
           <tr>
             <th scope="col">{t("attention.session")}</th>
-            <th scope="col">{tCommon("project.column")}</th>
             <th scope="col">{t("attention.status")}</th>
+            <th scope="col">{tCommon("project.column")}</th>
             <th scope="col" className="numeric">{t("attention.lastActive")}</th>
           </tr>
         </thead>
@@ -488,16 +481,17 @@ function AttentionTable({ sessions, expected, unread, truncated, now, onOpen }: 
           {sessions.map((entry) => {
             const session = entry.value;
             const failed = session.status === "failed";
+            const waiting = failed ? null : waitingFor(session).join(" · ");
             return (
               <tr key={`${entry.project.id}:${session.id}`} className="clickable-row" onClick={() => onOpen(entry)}>
                 <th scope="row">
-                  <NameCell name={sessionTitle(session)} id={session.id} fallback={t("attention.untitled")} onOpen={() => onOpen(entry)} />
+                  <NameCell name={sessionTitle(session)} id={session.id} fallback={tCommon("untitledSession")} onOpen={() => onOpen(entry)} />
                 </th>
-                <td><ProjectName project={entry.project} /></td>
                 <td onClick={(event) => event.stopPropagation()}>
                   <StatusDot tone={failed ? "danger" : "neutral"} label={t(`sessions.${failed ? "failed" : "requires_action"}`)} />
-                  <div className="overview-attention-reason">{failed ? <SessionFailure projectId={entry.project.id} session={session} truncate={false} /> : waitingFor(session).join(" · ")}</div>
+                  <div className="overview-attention-reason" title={waiting ?? undefined}>{failed ? <SessionFailure projectId={entry.project.id} session={session} /> : waiting}</div>
                 </td>
+                <td><ProjectName project={entry.project} /></td>
                 <td className="numeric">{formatRelative(session.last_active_at, now, locale)}</td>
               </tr>
             );

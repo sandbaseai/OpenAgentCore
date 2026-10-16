@@ -19,6 +19,9 @@
 .metric-tile:first-child { padding-left: 0; border-left: 0; }
 .metric-tile:last-child { padding-right: 0; }
 
+/* A Partial chip wraps under the label on narrow tiles instead of being cut off. */
+.metric-tile > header { flex-wrap: wrap; }
+
 .metric-tile-label {
   color: var(--fg-muted);
   font-size: 13px;
@@ -260,7 +263,7 @@
   border-top: 1px solid var(--line-soft);
   cursor: pointer;
 }
-.fleet-row:hover, .fleet-row[data-popup-open] { background: var(--hover); }
+.fleet-row:hover { background: var(--hover); }
 .fleet-row > svg { flex-shrink: 0; }
 .fleet-row-info { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .fleet-row-info strong { overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -286,7 +289,9 @@
   color: var(--danger);
 }
 
-.overview-attention-reason { max-width: 32ch; margin-top: 4px; color: var(--ink-2); font-size: 12px; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
+/* One line per row; the full reason and next step are in the title and on the Session page. */
+.overview-attention-reason { max-width: 56ch; margin-top: 4px; overflow: hidden; color: var(--ink-2); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.overview-attention-reason .session-status-reason { padding-left: 0; white-space: nowrap; }
 
 /* Tables inside cards ----------------------------------------------------- */
 
@@ -353,6 +358,7 @@
   .overview-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 0; }
   .metric-tile:nth-child(3) { padding-left: 0; border-left: 0; }
   .metric-tile { padding-right: 12px; }
+  .metric-tile-sub { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) {
   .getting-started, .overview-activity, .overview-fleet, .overview-table-card { animation: none; }
