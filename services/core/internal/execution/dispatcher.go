@@ -56,6 +56,9 @@ type Dispatcher struct {
 	// MaxConcurrentExecutions bounds work admitted by this Core execution owner.
 	// Zero uses DefaultExecutionConcurrency. It is independent of sandbox capacity.
 	MaxConcurrentExecutions int
+	// TurnAutoRetries is how many times a Turn that failed on a recoverable model
+	// or tool error is retried automatically. Zero disables retries.
+	TurnAutoRetries int
 }
 
 // Credentials opens the bearer token of a Session's frozen MCP credential

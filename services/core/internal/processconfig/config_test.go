@@ -231,3 +231,20 @@ func TestSettingsReportEffectiveValuesAndHideHistory(t *testing.T) {
 		t.Fatal(found)
 	}
 }
+
+func TestTurnAutoRetries(t *testing.T) {
+	required(t)
+	if c, err := Load(); err != nil || c.TurnAutoRetries != 0 {
+		t.Fatal(c.TurnAutoRetries, err)
+	}
+	for value, want := range map[string]int{"0": 0, "3": 3, "5": 5} {
+		t.Setenv("OAC_TURN_AUTO_RETRIES", value)
+		if c, err := Load(); err != nil || c.TurnAutoRetries != want {
+			t.Fatal(value, c.TurnAutoRetries, err)
+		}
+	}
+	for _, value := range []string{"-1", "6", "1.5", "synthetic-secret"} {
+		t.Setenv("OAC_TURN_AUTO_RETRIES", value)
+		rejects(t, "OAC_TURN_AUTO_RETRIES", "synthetic-secret")
+	}
+}

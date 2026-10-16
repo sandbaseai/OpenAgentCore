@@ -264,7 +264,7 @@ func run(config processconfig.Config) error {
 		Credentials: vaultService, Observer: modelConfigurationStore, Deployment: deploymentService, DeploymentReader: deploymentStore,
 		Sessions:        sessionService,
 		SessionsReader:  sessionStore,
-		ManagedRuntimes: managedNodes.runtime, MaxConcurrentExecutions: config.ExecutionConcurrency}
+		ManagedRuntimes: managedNodes.runtime, MaxConcurrentExecutions: config.ExecutionConcurrency, TurnAutoRetries: config.TurnAutoRetries}
 	lease, err := pgunit.AcquireLease(ctx, pool)
 	if err != nil {
 		return err

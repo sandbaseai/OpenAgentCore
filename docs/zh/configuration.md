@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: 04cde38505f1f09ea913ab2a966e09bb571350ecca8c6e100dbd2e77f143547f
+source_hash: 9b3a2b1e7dcc2e742b252ebd700a088be56416ee0a293e78a79730df026b3576
 ---
 
 Core 安装的每项设置都恰好只有一个归属位置，分属以下三类：
@@ -57,6 +57,7 @@ Core 安装的每项设置都恰好只有一个归属位置，分属以下三类
 | `OAC_EXECUTION_CONCURRENCY` | `4` | Concurrent execution work, from 1 to 1024 |
 | `OAC_SANDBOX_MAX_ACTIVE` | `100` | 启用暂停能力的直接 Provider 的活跃沙箱上限，范围 1–100000；独立于执行并发度和节点容量 |
 | `OAC_SANDBOX_MAX_RETAINED` | `400` | 直接 Provider 的保留沙箱上限，范围 1–100000，包括活跃、已暂停以及尚未确认清理完成的分配；必须不小于活跃上限 |
+| `OAC_TURN_AUTO_RETRIES` | `0` | Turn 因可恢复的模型或工具错误失败后的自动重试次数，0 到 5。`0` 表示关闭 |
 | `OAC_DEFAULT_HARNESS` | `codex` | Harness used when a request does not name one |
 | `OAC_HARNESSES` | Every registered Harness | Comma-separated Harnesses to enable besides the default one. Unknown names stop startup |
 | `OAC_WRITE_AUDIT_RETENTION` | `2160h` | Minimum `1h` |
@@ -276,7 +277,7 @@ Core 读取进程环境。Compose 将 `.env` 插值到环境中，并把机密�
 | `OAC_CREDENTIAL_KEY_FILE` | 必填。`/run/oac/credential.key`：Base64 编码的 32 字节随机密钥。Core 用它加密存储的凭据 |
 | `OAC_CORE_KEY_DIGESTS_FILE` | 必填。`/run/oac/core-key-digests.json`：一个包含 Core 密钥 SHA-256 的 JSON 数组 |
 | `OAC_INSTALLATION_ID_FILE` | 必填。`/run/oac/installation.id`：安装 ID，采用规范 UUID 格式。如果 ID 与数据库记录的 ID 不一致，Core 会拒绝它 |
-| `OAC_SANDBOX_MAX_ACTIVE`、`OAC_SANDBOX_MAX_RETAINED`、`OAC_EXECUTION_CONCURRENCY`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
+| `OAC_SANDBOX_MAX_ACTIVE`、`OAC_SANDBOX_MAX_RETAINED`、`OAC_EXECUTION_CONCURRENCY`、`OAC_TURN_AUTO_RETRIES`、`OAC_DEFAULT_HARNESS`、`OAC_HARNESSES`、`OAC_WRITE_AUDIT_RETENTION`、`OAC_OAUTH_TRUSTED_ORIGINS`、`OAC_HISTORY_SETTINGS_FILE`、`OAC_LOG_LEVEL`、`OAC_LOG_FORMAT`、`OAC_LOG_ADD_SOURCE` | 对应的[进程设置](#settings)。Web 也读取三个日志设置 |
 | `OAC_PROVIDER_ROOT` | 适配器构件的绝对根目录。Core 镜像设置为 `/opt/oac`。每个适配器都拥有此根目录下的辅助路径。当其中的 `native-installers/` 目录包含 `catalog.json` 时，Core 在核对该目录清单与自身发行版后提供自托管守护进程安装程序。适配器状态位于 `/state`，即数据卷的 [`state/`](#compose-installations) |
 
 Core 会记录所加载的历史文件路径，但绝不记录环境变量的值或文件内容。

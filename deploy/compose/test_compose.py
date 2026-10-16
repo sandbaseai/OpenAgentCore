@@ -81,7 +81,7 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual(services['web']['healthcheck']['test'], ['CMD', '/usr/local/bin/oac-web', 'healthcheck'])
         self.assertNotIn('python3', json.dumps(self.compose))
         self.assertEqual(services['init']['environment']['OAC_REVISION'], 'd' * 40)
-        for name in ('OAC_SANDBOX_MAX_ACTIVE', 'OAC_SANDBOX_MAX_RETAINED', 'OAC_EXECUTION_CONCURRENCY', 'OAC_DEFAULT_HARNESS', 'OAC_HARNESSES', 'OAC_WRITE_AUDIT_RETENTION', 'OAC_LOG_LEVEL'):
+        for name in ('OAC_SANDBOX_MAX_ACTIVE', 'OAC_SANDBOX_MAX_RETAINED', 'OAC_EXECUTION_CONCURRENCY', 'OAC_TURN_AUTO_RETRIES', 'OAC_DEFAULT_HARNESS', 'OAC_HARNESSES', 'OAC_WRITE_AUDIT_RETENTION', 'OAC_LOG_LEVEL'):
             self.assertEqual(services['core']['environment'][name], '', name)
 
     def test_direct_sandbox_capacity_reaches_core(self):

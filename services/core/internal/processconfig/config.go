@@ -57,6 +57,7 @@ type Config struct {
 	// CoreKeys authenticates the Core key from OAC_CORE_KEY_DIGESTS_FILE.
 	CoreKeys             *api.DeploymentAuthenticator
 	ExecutionConcurrency int
+	TurnAutoRetries      int
 	DefaultHarness       string
 	// Harnesses is the sorted set of enabled Harnesses, the default included.
 	Harnesses           []string
@@ -135,6 +136,9 @@ func Load() (Config, error) {
 	if c.ExecutionConcurrency, err = executionConcurrency(); err != nil {
 		return Config{}, err
 	}
+	if c.TurnAutoRetries, err = turnAutoRetries(); err != nil {
+		return Config{}, err
+	}
 	c.DefaultHarness = cmp.Or(os.Getenv("OAC_DEFAULT_HARNESS"), defaultHarness)
 	if _, known := (engine.Catalog{}).Lookup(c.DefaultHarness); !known {
 		return Config{}, configError("OAC_DEFAULT_HARNESS is not a known harness")
@@ -176,6 +180,7 @@ func (c Config) Settings() []api.InstallationSetting {
 		setting("OAC_LOG_FORMAT", format, "auto", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_LOG_ADD_SOURCE", c.Log.AddSource, false, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_EXECUTION_CONCURRENCY", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_TURN_AUTO_RETRIES", c.TurnAutoRetries, 0, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_HARNESSES", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
 		setting("OAC_DEFAULT_HARNESS", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_WRITE_AUDIT_RETENTION", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
@@ -267,6 +272,18 @@ func executionConcurrency() (int, error) {
 	limit, err := strconv.Atoi(value)
 	if err != nil || limit < 1 || limit > 1024 {
 		return 0, configError("OAC_EXECUTION_CONCURRENCY must be an integer between 1 and 1024")
+	}
+	return limit, nil
+}
+
+func turnAutoRetries() (int, error) {
+	value := os.Getenv("OAC_TURN_AUTO_RETRIES")
+	if value == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 0 || limit > execution.MaxTurnAutoRetries {
+		return 0, configError("OAC_TURN_AUTO_RETRIES must be an integer between 0 and 5")
 	}
 	return limit, nil
 }
