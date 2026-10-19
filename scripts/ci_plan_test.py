@@ -193,6 +193,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.jobs("services/core/code.go"), {"hygiene", "backend", "api", "compose"})
         self.assertEqual(self.jobs("apps/web/src/style.css"), {"hygiene", "web", "web-acceptance"})
         self.assertEqual(self.jobs("services/core/migrations/123.sql"), {"hygiene", "backend", "api", "compose"})
+        self.assertEqual(self.jobs("services/core/deploy/creative/check.mjs"),
+                         {"hygiene", "backend", "api", "compose", "distribution"})
 
     def test_fixture_and_embedded_resources_keep_checks_regardless_of_suffix(self):
         for path in ("services/core/tests/testdata/prompt.md", "services/core/tests/testdata/image.jpg"):
