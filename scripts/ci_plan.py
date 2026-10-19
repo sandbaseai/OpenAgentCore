@@ -49,7 +49,7 @@ DEPENDENCY_INPUTS = {
 # across shared consumers. Exact dependency and workflow inputs are above.
 GO = (".go", ".mod", ".sum", ".work")
 WEB = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff", ".woff2")
-CORE = (*GO, ".sql", ".py", ".json", ".yaml", ".yml", ".sh", ".ps1", ".txt", ".in", ".lock", "Dockerfile")
+CORE = (*GO, ".sql", ".py", ".mjs", ".json", ".yaml", ".yml", ".sh", ".ps1", ".txt", ".in", ".lock", "Dockerfile")
 SCRIPTS = (".py", ".sh", ".mjs", ".go", ".json")
 RULES = (
     (("apps/web/",), WEB, ("web", "web-acceptance")),
