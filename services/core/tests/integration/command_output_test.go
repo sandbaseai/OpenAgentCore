@@ -187,13 +187,18 @@ func TestExecutionSecondTurnCommandSnapshotAndStorageFailure(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			// A full snapshot exceeds the old journal limit. A NUL is instead a
-			// deterministic PostgreSQL JSONB failure, not a native engine failure.
+			// A full snapshot exceeds the old journal limit. Exhaust the journal
+			// storage budget separately to verify persistence failure retains history.
 			output := strings.Repeat("x", 2*1024*1024)
 			expectedStatus, expectedOutput := "completed", output
 			turnStatus := sessions.TurnCompleted
 			if failStorage {
-				output = "\x00"
+				output = "unpersisted snapshot"
+				_, pool := testStore(t)
+				defer pool.Close()
+				if _, err := pool.Exec(ctx, "UPDATE turns SET event_bytes=33554432 WHERE id=$1", second.TurnID); err != nil {
+					t.Fatal(err)
+				}
 				expectedStatus, expectedOutput = "incomplete", "retained stream"
 				turnStatus = sessions.TurnFailed
 			}

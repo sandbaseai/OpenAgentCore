@@ -66,7 +66,7 @@ func NewEnvelope(typ string, id string, payload any) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("proto: marshal payload for type %q: %w", typ, err)
 	}
 	env.Payload = raw
-	return env, nil
+	return NormalizeOutputText(env)
 }
 
 // NewEnvelopeWithTrace stamps the given W3C traceparent string into

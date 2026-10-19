@@ -58,6 +58,11 @@ func (j *journal) observe(ctx context.Context, env proto.Envelope) error {
 }
 
 func (j *journal) enqueue(env proto.Envelope) error {
+	normalized, err := proto.NormalizeOutputText(env)
+	if err != nil {
+		return err
+	}
+	env = normalized
 	if (env.Type == proto.TypeSubagentIdentity || env.Type == proto.TypeSubagentLifecycle || env.Type == proto.TypeSubagentTurn || env.Type == proto.TypeSubagentItem || env.Type == proto.TypeSubagentCoordination) && !j.observeSubagents {
 		return sessions.ErrInvalidInput
 	}
