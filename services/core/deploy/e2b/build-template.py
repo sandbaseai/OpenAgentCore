@@ -59,6 +59,7 @@ with tempfile.TemporaryDirectory(dir=state) as temporary:
                     archive.extractall(destination.parent, filter='tar')
     finally:
         subprocess.run(['docker', 'rm', container], check=True, stdout=subprocess.DEVNULL)
+    creative_tools = (tree / 'opt/oac-creative/install.sh').is_file()
     bundle = context / 'runtime.tar.gz'
     with tarfile.open(bundle, 'w:gz') as archive:
         for entry in tree.iterdir():
@@ -83,11 +84,16 @@ with tempfile.TemporaryDirectory(dir=state) as temporary:
                          '&& chmod 0444 /etc/oac-runtime-env.json '
                          '&& chmod 0555 /opt/oac-e2b /opt/oac-e2b/init.py /opt/oac-e2b/managed_init.py /opt/oac-e2b/helper_contract_generated.py', user='root')
                 .set_user('runtime').set_workdir('/environment/workspace'))
+    # /opt carries the pinned browser and npm payload, but not Debian packages.
+    # Reinstall their system dependencies in E2B using the image's own installer.
+    if creative_tools:
+        template = template.run_cmd('sh /opt/oac-creative/install.sh --system-only', user='root')
     result = Template.build(template, name=args.name, cpu_count=2, memory_mb=2048,
                             on_build_logs=lambda entry: print(entry.message, flush=True),
                             api_key=args.api_key_file.read_text().strip())
     report = {'template': result.template_id + ':' + result.build_id, 'image': image['Id'],
-              'runtime_sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(), 'base': BASE}
+              'runtime_sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(), 'base': BASE,
+              'creative_tools': creative_tools}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
