@@ -1,6 +1,7 @@
 """Exercise real Runtime tar metadata without Docker or provider calls."""
 import contextlib
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -16,8 +17,8 @@ from unittest.mock import Mock, patch
 
 class BundlePermissionsTest(unittest.TestCase):
     def test_public_parents_and_runtime_modes_under_both_umasks(self):
-        for mask in (0o022, 0o077):
-            with self.subTest(umask=oct(mask)), tempfile.TemporaryDirectory() as temporary:
+        for mask, creative in itertools.product((0o022, 0o077), (False, True)):
+            with self.subTest(umask=oct(mask), creative=creative), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 key = root / 'key'
                 key.write_text('fixture-only')
@@ -27,6 +28,8 @@ class BundlePermissionsTest(unittest.TestCase):
                                 'codex-resources': 0o755, 'codex': 0o700,
                                 'codex/config': 0o600, 'opt': 0o755,
                                 'opt/private': 0o700, 'opt/private/key': 0o600}
+                if creative:
+                    source_modes.update({'opt/oac-creative': 0o755, 'opt/oac-creative/install.sh': 0o755})
                 image = {'Architecture': 'amd64', 'Os': 'linux', 'Id': 'sha256:fixture',
                          'Config': {'Env': ['OAC_RUNTIME_WORKSPACE=/environment/workspace']}}
 
@@ -48,7 +51,7 @@ class BundlePermissionsTest(unittest.TestCase):
                                 continue
                             entry = tarfile.TarInfo(path)
                             entry.mode = mode
-                            if path in ('bin', 'codex-resources', 'codex', 'opt', 'opt/private'):
+                            if path in ('bin', 'codex-resources', 'codex', 'opt', 'opt/private', 'opt/oac-creative'):
                                 entry.type = tarfile.DIRTYPE
                                 archive.addfile(entry)
                             else:
@@ -82,6 +85,8 @@ class BundlePermissionsTest(unittest.TestCase):
                         template.copy.assert_any_call(source, '/opt/oac-e2b/' + source, user='root')
                     self.assertTrue(any('chmod 0555' in call.args[0] and '/opt/oac-e2b/' + projection in call.args[0]
                                         for call in template.run_cmd.call_args_list))
+                    commands = [call.args[0] for call in template.run_cmd.call_args_list]
+                    self.assertEqual('sh /opt/oac-creative/install.sh --system-only' in commands, creative)
                     return SimpleNamespace(template_id='fixture', build_id='build')
 
                 factory = Mock(return_value=template)
@@ -99,6 +104,7 @@ class BundlePermissionsTest(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o666 & ~mask)
                     self.assertEqual(stat.S_IMODE(output.parent.stat().st_mode), 0o777 & ~mask)
                     self.assertEqual(key.read_text(), 'fixture-only')
+                    self.assertEqual(json.loads(output.read_text())['creative_tools'], creative)
                     factory.build.assert_called_once()
                 finally:
                     os.umask(original_mask)

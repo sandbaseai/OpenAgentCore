@@ -14,6 +14,13 @@ on:
         type: string
         required: false
 
+      tool_profile:
+        description: Tools included in the Runtime template
+        type: choice
+        options: [creative, base]
+        default: creative
+        required: true
+
       resume_build:
         description: Existing unsubmitted templateID:build_UUID after an upload failure; requires ref
         type: string
@@ -119,6 +126,8 @@ jobs:
           "$RUNNER_TEMP/e2b-sdk/bin/pip" install -r source/services/core/deploy/e2b/requirements.txt
       - name: Build the combined Runtime image
         working-directory: source
+        env:
+          TOOL_PROFILE: ${{ inputs.tool_profile }}
         run: |
           set -euo pipefail
           source_root="$GITHUB_WORKSPACE/source"
@@ -151,6 +160,20 @@ jobs:
             --label "org.opencontainers.image.revision=$revision" \
             --tag "oac-e2b-runtime:$revision" "$output_root/combined"
           image="$(docker image inspect --format '{{.Id}}' "oac-e2b-runtime:$revision")"
+          case "$TOOL_PROFILE" in
+            creative)
+              docker tag "$image" "oac-e2b-base-runtime:$revision"
+              test "$(docker image inspect --format '{{.Id}}' "oac-e2b-base-runtime:$revision")" = "$image"
+              docker build --platform linux/amd64 \
+                --build-arg "RUNTIME_IMAGE=oac-e2b-base-runtime:$revision" \
+                --label "org.opencontainers.image.revision=$revision" \
+                -f deploy/distribution/CreativeRuntime.Dockerfile \
+                --tag "oac-e2b-runtime:$revision" .
+              image="$(docker image inspect --format '{{.Id}}' "oac-e2b-runtime:$revision")"
+              ;;
+            base) ;;
+            *) echo '::error::Unknown Runtime tool profile.'; exit 1 ;;
+          esac
           python3 scripts/core-distribution-manifest.py verify-runtime \
             "$image" "$output_root/mcode/oac-daemon" "$source_root"
           printf '%s\n' "$image" > "$output_root/runtime-image.id"
