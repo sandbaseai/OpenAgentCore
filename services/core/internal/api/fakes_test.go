@@ -861,10 +861,18 @@ func (f *fakeSessions) AuditSessionOperation(a0 context.Context, a1 sessions.Aud
 	return f.auditSessionOperation(a0, a1)
 }
 
+func (f *fakeSessionsReader) GetInputReceipts(ctx context.Context, tenant, session, key string) (v1.SessionInputReceipts, error) {
+	if f.getInputReceipts == nil {
+		unexpectedCall(f.t, "GetInputReceipts")
+	}
+	return f.getInputReceipts(ctx, tenant, session, key)
+}
+
 type fakeSessionsReader struct {
-	t            testing.TB
-	getSession   func(context.Context, string, string) (sessions.Session, error)
-	listSessions func(context.Context, string, string, int, bool, *string) (sessions.Page, error)
+	getInputReceipts func(context.Context, string, string, string) (v1.SessionInputReceipts, error)
+	t                testing.TB
+	getSession       func(context.Context, string, string) (sessions.Session, error)
+	listSessions     func(context.Context, string, string, int, bool, *string) (sessions.Page, error)
 }
 
 func (f *fakeSessionsReader) GetSession(a0 context.Context, a1 string, a2 string) (sessions.Session, error) {

@@ -14,6 +14,8 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 
+	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/workspaceobs"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -53,8 +55,9 @@ type Conn struct {
 	ws       *websocket.Conn
 	deviceID string
 
-	recvCh chan proto.Envelope
-	sendCh chan envelopeWithAck
+	recvCh       chan ReceivedEnvelope
+	connectionID string
+	sendCh       chan envelopeWithAck
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -62,15 +65,23 @@ type Conn struct {
 	errMu sync.Mutex
 	err   error
 
-	hbCancel context.CancelFunc
+	hbCancel       context.CancelFunc
+	firstHeartbeat heartbeatObservation
+
+	eventCredit bool // Immutable selection confirmed by the upgrade response.
+	flowMu      sync.Mutex
+	flows       map[string]*eventFlow
 }
 
 // envelopeWithAck pairs an outbound frame with a done channel so Send
 // blocks until the frame is flushed (or the write goroutine errors).
 // Single-writer serialisation point gorilla/websocket requires.
 type envelopeWithAck struct {
-	env proto.Envelope
-	ack chan error
+	env         proto.Envelope
+	ack         chan error
+	observation *workspaceobs.Scope
+	stamp       *workspaceobs.QueueStamp
+	round       *workspaceobs.Round
 }
 
 // Dial opens the reverse WebSocket. Read/write goroutines are live
@@ -99,6 +110,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		headers = make(http.Header)
 	}
 	headers.Set("Authorization", "Bearer "+opts.Credential)
+	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
 	if err != nil {
 		// 401/403/426 are operator-fixable and MUST NOT be retried —
@@ -120,16 +132,23 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		// The credential travels only in the request header, never in the error.
 		return nil, fmt.Errorf("transport.Dial: ws upgrade failed: %w", err)
 	}
+	eventCredit, err := proto.NegotiateExecutionFlow(resp.Header.Values(proto.ExecutionFlowHeader))
+	if err != nil {
+		_ = wsConn.Close()
+		return nil, fmt.Errorf("transport.Dial: invalid execution flow selection: %w", ErrPermanent)
+	}
 	// Bound a single inbound frame so a misbehaving server can't OOM
 	// us. Matches the gateway's 4 MiB outbound ceiling.
-	wsConn.SetReadLimit(4 * 1024 * 1024)
+	wsConn.SetReadLimit(proto.MaxFrameBytes)
 
 	c := &Conn{
-		ws:       wsConn,
-		deviceID: opts.DeviceID,
-		recvCh:   make(chan proto.Envelope, 64),
-		sendCh:   make(chan envelopeWithAck, 64),
-		closed:   make(chan struct{}),
+		eventCredit:  eventCredit,
+		ws:           wsConn,
+		deviceID:     opts.DeviceID,
+		recvCh:       make(chan ReceivedEnvelope, 64),
+		connectionID: uuid.NewString(),
+		sendCh:       make(chan envelopeWithAck, 64),
+		closed:       make(chan struct{}),
 	}
 	go c.writeLoop()
 	go c.readLoop()
@@ -138,7 +157,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 
 // Recv returns the inbound envelope channel. Closes when the connection
 // terminates; Err() returns the cause after.
-func (c *Conn) Recv() <-chan proto.Envelope { return c.recvCh }
+func (c *Conn) Recv() <-chan ReceivedEnvelope { return c.recvCh }
 
 // Done closes when the connection has shut down.
 func (c *Conn) Done() <-chan struct{} { return c.closed }
@@ -162,17 +181,50 @@ func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
 		return err
 	}
 	env = normalized
-	ack := make(chan error, 1)
-	wrapped := envelopeWithAck{env: env, ack: ack}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
-	case c.sendCh <- wrapped:
 	case <-c.closed:
 		return errClosedOrErr(c)
+	default:
+	}
+	reservation, err := c.reserveEvent(ctx, env)
+	if err != nil {
+		if errors.Is(err, errEventCredit) {
+			// A frame that cannot fit the legal wire window must also end
+			// the peer's stream; a local-only error leaves Core waiting.
+			c.fail(err)
+			_ = c.Close()
+		}
+		return err
+	}
+	ack := make(chan error, 1)
+	wrapped := envelopeWithAck{env: env, ack: ack, observation: workspaceobs.ForConnection(ctx, c.connectionID)}
+	if wrapped.observation != nil {
+		wrapped.round = workspaceobs.RoundFromContext(ctx)
+	}
+	if wrapped.observation != nil {
+		wrapped.stamp = &workspaceobs.QueueStamp{}
+	}
+	wrapped.observation.Pending(1)
+	select {
+	case c.sendCh <- wrapped:
+		wrapped.stamp.Admitted()
+	case <-c.closed:
+		wrapped.observation.Pending(-1)
+		reservation.refund()
+		return errClosedOrErr(c)
 	case <-ctx.Done():
+		wrapped.observation.Pending(-1)
+		reservation.refund()
 		return ctx.Err()
 	}
 	select {
 	case err := <-ack:
+		if err == nil {
+			c.finishEventFlow(env)
+		}
 		return err
 	case <-c.closed:
 		return errClosedOrErr(c)
@@ -191,6 +243,7 @@ func (c *Conn) Close() error {
 		}
 		close(c.closed)
 	})
+	c.firstHeartbeat.finish(c, "unknown")
 	return nil
 }
 
@@ -211,15 +264,37 @@ func (c *Conn) StartHeartbeats(parentCtx context.Context, interval time.Duration
 	go func() {
 		defer cancel()
 		sendHeartbeat := func(sendTimeout time.Duration) {
-			env, err := proto.NewEnvelope(proto.TypeHeartbeat, "", payloadFn())
+			observing := c.firstHeartbeat.begin(logger)
+			started := time.Now()
+			payload := payloadFn()
+			if observing {
+				c.firstHeartbeat.record(true, started)
+			}
+			env, err := proto.NewEnvelope(proto.TypeHeartbeat, "", payload)
 			if err != nil {
+				if observing {
+					c.firstHeartbeat.finish(c, "error")
+				}
 				logger.Error("marshal heartbeat envelope", "err", err)
 				return
 			}
 			// Per-send deadline so a wedged peer doesn't pile up
 			// heartbeats on sendCh.
 			sendCtx, sendCancel := context.WithTimeout(ctx, sendTimeout)
-			if err := c.Send(sendCtx, env); err != nil && !errors.Is(err, context.Canceled) {
+			started = time.Now()
+			err = c.Send(sendCtx, env)
+			if observing {
+				c.firstHeartbeat.record(false, started)
+				outcome := "ok"
+				if err != nil {
+					outcome = "error"
+				}
+				if errors.Is(err, context.Canceled) {
+					outcome = "cancelled"
+				}
+				c.firstHeartbeat.finish(c, outcome)
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
 				logger.Warn("send heartbeat", "err", err)
 			}
 			sendCancel()
@@ -264,18 +339,29 @@ func (c *Conn) writeLoop() {
 		case <-c.closed:
 			return
 		case msg := <-c.sendCh:
+			msg.stamp.Received(msg.observation, workspaceobs.OutboundQueue)
+			started := msg.observation.Begin(workspaceobs.OutboundEncode)
 			raw, err := json.Marshal(msg.env)
+			msg.observation.End(workspaceobs.OutboundEncode, started, err)
 			if err != nil {
+				msg.observation.Pending(-1)
 				msg.ack <- fmt.Errorf("transport: marshal envelope: %w", err)
 				continue
 			}
 			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.ws.WriteMessage(websocket.TextMessage, raw); err != nil {
+			started = msg.observation.Begin(workspaceobs.OutboundWrite)
+			err = c.ws.WriteMessage(websocket.TextMessage, raw)
+			writeReturned := time.Now()
+			msg.observation.End(workspaceobs.OutboundWrite, started, err)
+			msg.round.Written(writeReturned, err)
+			if err != nil {
 				wrapped := fmt.Errorf("transport: write envelope (type=%s): %w", msg.env.Type, err)
+				msg.observation.Pending(-1)
 				msg.ack <- wrapped
 				c.fail(wrapped)
 				return
 			}
+			msg.observation.Pending(-1)
 			msg.ack <- nil
 		}
 	}
@@ -295,6 +381,7 @@ func (c *Conn) readLoop() {
 			_ = c.ws.Close()
 			close(c.closed)
 		})
+		c.firstHeartbeat.finish(c, "unknown")
 		close(c.recvCh)
 	}()
 	for {
@@ -310,7 +397,9 @@ func (c *Conn) readLoop() {
 			c.fail(fmt.Errorf("transport: read frame: %w", err))
 			return
 		}
+		readReturned := time.Now()
 		log.Bg().Debug("transport: received WS frame", "bytes", len(raw))
+		decodeStarted := time.Now()
 		var env proto.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			// Skip malformed frames rather than tearing down — server
@@ -320,9 +409,16 @@ func (c *Conn) readLoop() {
 				"bytes", len(raw), "err", err.Error(), "head", string(raw[:min(len(raw), 200)]))
 			continue
 		}
+		if handled, err := c.handleEventFlow(env); err != nil {
+			c.fail(err)
+			return
+		} else if handled {
+			continue
+		}
+		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), readReturned: readReturned, decodeStarted: decodeStarted, connectionID: c.connectionID}
 		log.Bg().Info("transport: dispatching envelope", "type", env.Type, "id", env.ID)
 		select {
-		case c.recvCh <- env:
+		case c.recvCh <- received:
 		case <-c.closed:
 			return
 		}
@@ -381,4 +477,21 @@ func withQueryParams(raw string, params map[string]string) (string, error) {
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// ReceivedEnvelope carries process-local timing only; it is never serialized.
+type ReceivedEnvelope struct {
+	proto.Envelope
+	decoded                     time.Time
+	readReturned, decodeStarted time.Time
+	connectionID                string
+}
+
+func (e ReceivedEnvelope) Context(ctx context.Context) context.Context {
+	switch e.Type {
+	case proto.TypeExecutionPrepare, proto.TypeExecutionRelease, proto.TypeWorkspaceExport:
+		return workspaceobs.ReceivedFrameContext(ctx, e.connectionID, e.readReturned, e.decodeStarted, e.decoded)
+	default:
+		return ctx
+	}
 }

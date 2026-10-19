@@ -86,6 +86,7 @@ func TestDurableCompletionWaitsForSteeringReceiptSend(t *testing.T) {
 			}
 			if mode != "send_failure" {
 				handle(proto.TypePromptSteer, input)
+				waitFor(t, func() bool { return len(sender.snapshot()) == base+1 }, "cached receipt arrival")
 				frames := sender.snapshot()[base:]
 				var ack proto.PromptSteerAckPayload
 				if len(frames) != 1 || frames[0].DecodePayload(&ack) != nil || ack.Accepted != (mode == "consumed") {
@@ -96,8 +97,10 @@ func TestDurableCompletionWaitsForSteeringReceiptSend(t *testing.T) {
 				}
 				input.Input = proto.TextInput("changed")
 				handle(proto.TypePromptSteer, input)
+				waitFor(t, func() bool { return len(sender.snapshot()) == base+2 }, "conflict receipt arrival")
 				input.InputID = "new"
 				handle(proto.TypePromptSteer, input)
+				waitFor(t, func() bool { return len(sender.snapshot()) == base+3 }, "inactive receipt arrival")
 				frames = sender.snapshot()[base:]
 				for i, want := range []string{"input_conflict", "run_inactive"} {
 					if frames[i+1].DecodePayload(&ack) != nil || ack.ErrorCode != want {

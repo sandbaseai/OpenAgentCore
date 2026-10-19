@@ -94,7 +94,7 @@ spec:
             - name: OAC_WEB_ADDR
               value: ":8080"
             # The exact browser-facing origin. Web serves no other host.
-            - name: OAC_WEB_ORIGIN
+            - name: OAC_PUBLIC_URL
               value: "${OAC_PUBLIC_URL}"
             - name: OAC_WEB_UPSTREAM
               value: "http://oac-core:8091"

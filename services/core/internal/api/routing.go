@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -134,8 +135,9 @@ func responseHeadersWithLog(next http.Handler, report func(string), logs *reques
 		header.Set("X-Request-Id", id)
 		header.Set("Openai-Version", "2020-10-01")
 		header.Set("X-Content-Type-Options", "nosniff")
-		writer := &processingTimeWriter{ResponseWriter: w, started: time.Now(), report: report}
-		r = r.WithContext(log.WithRequestID(r.Context(), id))
+		ctx := log.WithRequestID(r.Context(), id)
+		writer := &processingTimeWriter{ResponseWriter: w, started: time.Now(), report: report, ctx: ctx}
+		r = r.WithContext(ctx)
 		if logs != nil && recordRequest(r) {
 			surface := 0
 			if strings.HasPrefix(r.URL.Path, "/core/") {
@@ -185,14 +187,17 @@ func newRequestID() string {
 // Unwrap keeps http.ResponseController deadlines and flushing available.
 type processingTimeWriter struct {
 	http.ResponseWriter
-	started   time.Time
-	stamped   bool
-	report    func(string)
-	status    *int
-	bytes     int64
-	errorCode *string
-	observe   func()
-	failed    bool
+	started         time.Time
+	stamped         bool
+	report          func(string)
+	status          *int
+	bytes           int64
+	errorCode       *string
+	observe         func()
+	failed          bool
+	ctx             context.Context
+	environmentFile bool
+	rejectionReason apiRejectionReason
 }
 
 // reportAPIError observes the emitted code without reading or retaining bodies.
@@ -217,6 +222,7 @@ func (w *processingTimeWriter) stamp() {
 
 func (w *processingTimeWriter) WriteHeader(status int) {
 	if status >= http.StatusOK {
+		w.logRejection(status)
 		if !w.stamped {
 			w.status = &status
 		}

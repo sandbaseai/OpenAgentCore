@@ -41,6 +41,7 @@ const (
 
 // Config is Core's process configuration.
 type Config struct {
+	SandboxCapacity SandboxLimits
 	// Addr is OAC_ADDR, the listener address.
 	Addr string
 	// PublicOrigin is OAC_PUBLIC_URL.
@@ -56,6 +57,7 @@ type Config struct {
 	// CoreKeys authenticates the Core key from OAC_CORE_KEY_DIGESTS_FILE.
 	CoreKeys             *api.DeploymentAuthenticator
 	ExecutionConcurrency int
+	TurnAutoRetries      int
 	DefaultHarness       string
 	// Harnesses is the sorted set of enabled Harnesses, the default included.
 	Harnesses           []string
@@ -102,6 +104,9 @@ type runtimeHistoryFile struct {
 func Load() (Config, error) {
 	var c Config
 	var err error
+	if c.SandboxCapacity, err = SandboxCapacity(); err != nil {
+		return Config{}, err
+	}
 	if c.Log, err = log.LoadConfig(); err != nil {
 		return Config{}, err
 	}
@@ -129,6 +134,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if c.ExecutionConcurrency, err = executionConcurrency(); err != nil {
+		return Config{}, err
+	}
+	if c.TurnAutoRetries, err = turnAutoRetries(); err != nil {
 		return Config{}, err
 	}
 	c.DefaultHarness = cmp.Or(os.Getenv("OAC_DEFAULT_HARNESS"), defaultHarness)
@@ -172,11 +180,14 @@ func (c Config) Settings() []api.InstallationSetting {
 		setting("OAC_LOG_FORMAT", format, "auto", []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_LOG_ADD_SOURCE", c.Log.AddSource, false, []api.InstallationService{api.InstallationCore, api.InstallationWeb}),
 		setting("OAC_EXECUTION_CONCURRENCY", c.ExecutionConcurrency, execution.DefaultExecutionConcurrency, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_TURN_AUTO_RETRIES", c.TurnAutoRetries, execution.DefaultTurnAutoRetries, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_HARNESSES", c.Harnesses, (engine.Catalog{}).Kinds(), []api.InstallationService{api.InstallationCore}),
 		setting("OAC_DEFAULT_HARNESS", c.DefaultHarness, defaultHarness, []api.InstallationService{api.InstallationCore}),
 		setting("OAC_WRITE_AUDIT_RETENTION", duration(c.WriteAuditRetention), duration(defaultWriteAuditRetention), []api.InstallationService{api.InstallationCore}),
 		setting("OAC_OAUTH_TRUSTED_ORIGINS", origins, []string{}, []api.InstallationService{api.InstallationCore}),
 		sensitive("OAC_HISTORY_SETTINGS_FILE", c.RuntimeHistory.File != "", []api.InstallationService{api.InstallationCore}),
+		setting("OAC_SANDBOX_MAX_ACTIVE", c.SandboxCapacity.MaxActive, defaultSandboxMaxActive, []api.InstallationService{api.InstallationCore}),
+		setting("OAC_SANDBOX_MAX_RETAINED", c.SandboxCapacity.MaxRetained, defaultSandboxMaxRetained, []api.InstallationService{api.InstallationCore}),
 	}
 }
 
@@ -261,6 +272,18 @@ func executionConcurrency() (int, error) {
 	limit, err := strconv.Atoi(value)
 	if err != nil || limit < 1 || limit > 1024 {
 		return 0, configError("OAC_EXECUTION_CONCURRENCY must be an integer between 1 and 1024")
+	}
+	return limit, nil
+}
+
+func turnAutoRetries() (int, error) {
+	value := os.Getenv("OAC_TURN_AUTO_RETRIES")
+	if value == "" {
+		return execution.DefaultTurnAutoRetries, nil
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 0 || limit > execution.MaxTurnAutoRetries {
+		return 0, configError("OAC_TURN_AUTO_RETRIES must be an integer between 0 and 5")
 	}
 	return limit, nil
 }

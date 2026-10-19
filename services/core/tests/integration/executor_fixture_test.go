@@ -21,6 +21,9 @@ func (h *dispatchHarness) executionFrame(env proto.Envelope) (proto.Envelope, bo
 		h.admissions = make(map[string]fixtureAdmission)
 	}
 	switch env.Type {
+	case proto.TypeExecutionEventsAck, proto.TypeExecutionEventsStop:
+		// Transport-local controls never enter the execution dispatcher.
+		return proto.Envelope{}, false
 	case proto.TypeExecutionPrepare:
 		var prepare proto.ExecutionPreparePayload
 		if env.DecodePayload(&prepare) != nil {

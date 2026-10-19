@@ -111,7 +111,7 @@ securityDefinitions:
 			t.Fatal(err)
 		}
 	}
-	if len(extensions) != 4 || len(coreDocument.Definitions) != 2 || coreDocument.Definitions["Node"] == nil {
+	if len(extensions["definitions"].(map[string]any)) != 4 || len(coreDocument.Definitions) != 2 || coreDocument.Definitions["Node"] == nil {
 		t.Fatalf("definitions: extensions %v, core %v", extensions, coreDocument.Definitions)
 	}
 	// Every internal document keeps only the schemes its operations use.

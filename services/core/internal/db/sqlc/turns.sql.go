@@ -256,6 +256,104 @@ func (q *Queries) LockSession(ctx context.Context, arg LockSessionParams) (LockS
 	return i, err
 }
 
+const readInputReceiptBatch = `-- name: ReadInputReceiptBatch :many
+SELECT sequence, turn_id, kind, payload, batch_position
+FROM turn_inputs WHERE session_id = $1 AND idempotency_key = $2
+ORDER BY batch_position LIMIT 64
+`
+
+type ReadInputReceiptBatchParams struct {
+	SessionID      pgtype.UUID `json:"session_id"`
+	IdempotencyKey string      `json:"idempotency_key"`
+}
+
+type ReadInputReceiptBatchRow struct {
+	Sequence      int64       `json:"sequence"`
+	TurnID        pgtype.UUID `json:"turn_id"`
+	Kind          string      `json:"kind"`
+	Payload       []byte      `json:"payload"`
+	BatchPosition int32       `json:"batch_position"`
+}
+
+func (q *Queries) ReadInputReceiptBatch(ctx context.Context, arg ReadInputReceiptBatchParams) ([]ReadInputReceiptBatchRow, error) {
+	rows, err := q.db.Query(ctx, readInputReceiptBatch, arg.SessionID, arg.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReadInputReceiptBatchRow{}
+	for rows.Next() {
+		var i ReadInputReceiptBatchRow
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.TurnID,
+			&i.Kind,
+			&i.Payload,
+			&i.BatchPosition,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readInputReceiptItems = `-- name: ReadInputReceiptItems :many
+SELECT id, turn_id FROM session_items
+WHERE session_id = $1 AND id = ANY($2::uuid[])
+  AND payload->>'role' = 'user'
+`
+
+type ReadInputReceiptItemsParams struct {
+	SessionID pgtype.UUID   `json:"session_id"`
+	ItemIds   []pgtype.UUID `json:"item_ids"`
+}
+
+type ReadInputReceiptItemsRow struct {
+	ID     pgtype.UUID `json:"id"`
+	TurnID pgtype.UUID `json:"turn_id"`
+}
+
+func (q *Queries) ReadInputReceiptItems(ctx context.Context, arg ReadInputReceiptItemsParams) ([]ReadInputReceiptItemsRow, error) {
+	rows, err := q.db.Query(ctx, readInputReceiptItems, arg.SessionID, arg.ItemIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReadInputReceiptItemsRow{}
+	for rows.Next() {
+		var i ReadInputReceiptItemsRow
+		if err := rows.Scan(&i.ID, &i.TurnID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readInputReceiptReservation = `-- name: ReadInputReceiptReservation :one
+SELECT state FROM environment_input_reservations
+WHERE session_id = $1 AND idempotency_key = $2
+`
+
+type ReadInputReceiptReservationParams struct {
+	SessionID      pgtype.UUID `json:"session_id"`
+	IdempotencyKey string      `json:"idempotency_key"`
+}
+
+func (q *Queries) ReadInputReceiptReservation(ctx context.Context, arg ReadInputReceiptReservationParams) (string, error) {
+	row := q.db.QueryRow(ctx, readInputReceiptReservation, arg.SessionID, arg.IdempotencyKey)
+	var state string
+	err := row.Scan(&state)
+	return state, err
+}
+
 const requestTurnCancel = `-- name: RequestTurnCancel :exec
 UPDATE turns SET cancel_requested_at = COALESCE(cancel_requested_at, clock_timestamp()),
     completed_at = CASE WHEN status = 'queued' THEN clock_timestamp() ELSE completed_at END,

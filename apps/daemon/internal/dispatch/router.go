@@ -39,7 +39,8 @@ type Router struct {
 	applied             map[string]appliedFunctionResult // RunID and call ID → applied result
 	shutdownAttempt     *shutdownAttempt
 	shutdownCh          chan struct{} // closed by Shutdown
-	shutdownWG          dispatchWork  // waits for all pump goroutines
+	steeringReplySlots  chan struct{}
+	shutdownWG          dispatchWork // waits for all pump goroutines
 	idleTimeout         time.Duration
 	closed              bool
 	executors           map[string]*executorState
@@ -118,6 +119,7 @@ func New(cfg Config) (*Router, error) {
 		sessions:            make(map[string]*sessionState),
 		applied:             make(map[string]appliedFunctionResult),
 		shutdownCh:          make(chan struct{}),
+		steeringReplySlots:  make(chan struct{}, 64),
 		idleTimeout:         idleTimeout,
 		executors:           make(map[string]*executorState),
 		preparations:        make(map[string]*preparationState),

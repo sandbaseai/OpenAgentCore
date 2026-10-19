@@ -151,7 +151,7 @@ func (s *pendingAttemptReader) GetEnvironment(_ context.Context, _, id string) (
 }
 func TestCommittedProvisionIncludesIDsBeforeAndAfterMaintenanceCursor(t *testing.T) {
 	attempts := &pendingAttemptReader{}
-	r := &runtimeLifecycle{ctx: t.Context(), gate: make(chan struct{}, 1), pendingCursor: "m", sessions: attempts, lease: heldLease{}, reader: &strictDeploymentReader{t: t, unallocatedEnvironments: func(_ context.Context, _, after string) ([]deployment.UnallocatedEnvironment, error) {
+	r := &runtimeLifecycle{ctx: t.Context(), gate: make(chan struct{}, 1), pendingCursor: "m", config: RuntimeProvider{Mode: string(sandbox.DeploymentDirect)}, sessions: attempts, lease: heldLease{}, reader: &strictDeploymentReader{t: t, unallocatedEnvironments: func(_ context.Context, _, after string) ([]deployment.UnallocatedEnvironment, error) {
 		candidates := []deployment.UnallocatedEnvironment{{ID: "a"}, {ID: "z"}}
 		if after != "" {
 			return candidates[1:], nil

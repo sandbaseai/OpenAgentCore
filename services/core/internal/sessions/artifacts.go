@@ -3,6 +3,9 @@ package sessions
 import (
 	"archive/tar"
 	"context"
+	"errors"
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 	"io"
 	"io/fs"
 	"strings"
@@ -121,8 +124,18 @@ func (s *Service) StageTurnArtifacts(ctx context.Context, command StageTurnArtif
 		return ErrInvalidInput
 	}
 	key := ArtifactStagingKey{TenantID: command.TenantID, SessionID: command.SessionID, TurnID: command.TurnID, EnvironmentID: command.EnvironmentID}
-	return s.storage.WithArtifactStaging(ctx, key, func(ctx context.Context, tx ArtifactStagingTx) error {
+	scope, observed := textobs.Artifact(ctx)
+	observed = observed && scope.Session == command.SessionID && scope.Turn == command.TurnID
+	var loadEnvironmentMS, readExportMS, lockSessionMS, loadTurnMS, stageArtifactsMS any
+	var putDuration time.Duration
+	var putCount int
+	started := time.Now()
+	err := s.storage.WithArtifactStaging(ctx, key, func(ctx context.Context, tx ArtifactStagingTx) error {
+		boundary := time.Now()
 		environment, err := tx.LoadEnvironment(ctx)
+		if observed {
+			loadEnvironmentMS = float64(time.Since(boundary).Microseconds()) / 1000
+		}
 		if err != nil {
 			return err
 		}
@@ -132,27 +145,71 @@ func (s *Service) StageTurnArtifacts(ctx context.Context, command StageTurnArtif
 		if _, err := EnvironmentType(environment.Configuration); err != nil {
 			return ErrInvalidInput
 		}
-		if err := readArtifactExport(command.Export, func(path string, size int64, content io.Reader) error {
-			return tx.PutArtifactContent(ctx, path, size, content)
-		}); err != nil {
+		boundary = time.Now()
+		err = readArtifactExport(command.Export, func(path string, size int64, content io.Reader) error {
+			putStarted := time.Now()
+			putErr := tx.PutArtifactContent(ctx, path, size, content)
+			if observed {
+				putDuration += time.Since(putStarted)
+				putCount++
+			}
+			return putErr
+		})
+		if observed {
+			readExportMS = float64(time.Since(boundary).Microseconds()) / 1000
+		}
+		if err != nil {
 			return err
 		}
+		boundary = time.Now()
 		locked, err := tx.LockSession(ctx)
+		if observed {
+			lockSessionMS = float64(time.Since(boundary).Microseconds()) / 1000
+		}
 		if err != nil {
 			return err
 		}
 		if err := locked.Public(); err != nil {
 			return err
 		}
+		boundary = time.Now()
 		turn, err := tx.LoadTurn(ctx)
+		if observed {
+			loadTurnMS = float64(time.Since(boundary).Microseconds()) / 1000
+		}
 		if err != nil {
 			return err
 		}
 		if turn.Status != TurnInProgress || !turn.CancelRequestedAt.IsZero() {
 			return ErrTurnConflict
 		}
-		return tx.StageArtifacts(ctx)
+		boundary = time.Now()
+		err = tx.StageArtifacts(ctx)
+		if observed {
+			stageArtifactsMS = float64(time.Since(boundary).Microseconds()) / 1000
+		}
+		return err
 	})
+	if observed {
+		status, confirmation := "ok", "confirmed"
+		switch {
+		case errors.Is(err, context.Canceled):
+			status = "cancelled"
+		case errors.Is(err, context.DeadlineExceeded):
+			status = "timeout"
+		case err != nil:
+			status = "error"
+		}
+		if err != nil {
+			confirmation = "unconfirmed"
+		}
+		obslog.Ctx(ctx).Info("artifact staging", "session_id", scope.Session, "turn_id", scope.Turn, "capture_id", scope.Capture,
+			"status", status, "confirmation", confirmation, "with_staging_ms", float64(time.Since(started).Microseconds())/1000,
+			"load_environment_ms", loadEnvironmentMS, "read_export_ms", readExportMS,
+			"put_ms", float64(putDuration.Microseconds())/1000, "put_count", putCount,
+			"lock_session_ms", lockSessionMS, "load_turn_ms", loadTurnMS, "stage_artifacts_ms", stageArtifactsMS)
+	}
+	return err
 }
 
 // DeleteSessionArtifactCommand deletes one published Artifact.

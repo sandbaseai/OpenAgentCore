@@ -14,6 +14,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/modelconfiguration"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/vaults"
 )
 
@@ -55,6 +56,9 @@ type Dispatcher struct {
 	// MaxConcurrentExecutions bounds work admitted by this Core execution owner.
 	// Zero uses DefaultExecutionConcurrency. It is independent of sandbox capacity.
 	MaxConcurrentExecutions int
+	// TurnAutoRetries is how many times a Turn that failed on a recoverable model
+	// or tool error is retried automatically. Zero disables retries.
+	TurnAutoRetries int
 }
 
 // Credentials opens the bearer token of a Session's frozen MCP credential
@@ -64,8 +68,10 @@ type Credentials interface {
 }
 
 type Result struct {
+	EventStreamError string            `json:"event_stream_error,omitempty"`
 	EngineErrorCode  string            `json:"engine_error_code,omitempty"`
 	EngineHTTPStatus *int              `json:"engine_http_status,omitempty"`
+	EngineRequestID  string            `json:"engine_request_id,omitempty"`
 	Done             proto.DonePayload `json:"done"`
 	ErrorCode        string            `json:"error_code,omitempty"`
 	Error            string            `json:"error,omitempty"`
@@ -90,7 +96,7 @@ func (d *Dispatcher) Run(ctx context.Context, tenantID, sessionID, turnID string
 	if json.Unmarshal(session.Configuration, &snapshot) != nil || strings.TrimSpace(snapshot.Agent.Model) == "" {
 		return sessions.Turn{}, sessions.ErrInvalidInput
 	}
-	caps, err := d.engineCapabilities(peer, session.Engine, snapshot)
+	caps, err := d.engineCapabilities(ctx, peer, session.Engine, snapshot)
 	if err != nil {
 		return sessions.Turn{}, err
 	}
@@ -139,11 +145,24 @@ func (d *Dispatcher) finishRun(tenantID, sessionID, turnID, model string, result
 		encoded, _ = json.Marshal(result)
 		status, nativeID = sessions.TurnFailed, ""
 	}
-	turn, err := d.sessionExecution.CompleteExecution(finishCtx, tenantID, sessionID, turnID, status, encoded, nativeID, result.AppliedThrough)
+	attempt := 0
+	complete := func(status string) (sessions.Turn, error) {
+		attempt++
+		observed, mapping := textobs.BeginTerminal(finishCtx, sessionID, turnID, status)
+		started := time.Now()
+		turn, err := d.sessionExecution.CompleteExecution(observed, tenantID, sessionID, turnID, status, encoded, nativeID, result.AppliedThrough)
+		returnedStatus := ""
+		if err == nil {
+			returnedStatus = turn.Status
+		}
+		observeTerminalCommit(finishCtx, sessionID, turnID, status, returnedStatus, attempt, started, mapping.EventID(), err)
+		return turn, err
+	}
+	turn, err := complete(status)
 	if errors.Is(err, sessions.ErrUnappliedInputs) {
 		result.ErrorCode = "input_not_applied"
 		encoded, _ = json.Marshal(result)
-		turn, err = d.sessionExecution.CompleteExecution(finishCtx, tenantID, sessionID, turnID, sessions.TurnFailed, encoded, nativeID, result.AppliedThrough)
+		turn, err = complete(sessions.TurnFailed)
 	}
 	if err == nil {
 		d.observeDeploymentProvider(tenantID, sessionID, turn)

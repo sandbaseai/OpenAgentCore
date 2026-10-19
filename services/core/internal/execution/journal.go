@@ -7,9 +7,11 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 )
 
 type journal struct {
+	ctx                   context.Context
 	writer                eventWriter
 	tenant, session, turn string
 	next                  int32
@@ -17,6 +19,7 @@ type journal struct {
 	bytes                 int
 	pendingCount          int
 	observeSubagents      bool
+	firstText             journalTextObservation
 }
 
 type eventWriter interface {
@@ -45,15 +48,21 @@ func recordCancellation(ctx context.Context, journal *journal, reply cancellatio
 
 func (j *journal) observe(ctx context.Context, env proto.Envelope) error {
 	if err := j.enqueue(env); err != nil {
+		j.reportFailure("enqueue", env.Type, len(env.Payload), err)
 		return err
 	}
 	if j.bytes > 768*1024 || len(j.batch) >= 64 {
-		return j.flush(ctx)
+		return j.flushObserved(ctx, "size")
 	}
 	return nil
 }
 
 func (j *journal) enqueue(env proto.Envelope) error {
+	normalized, err := proto.NormalizeOutputText(env)
+	if err != nil {
+		return err
+	}
+	env = normalized
 	if (env.Type == proto.TypeSubagentIdentity || env.Type == proto.TypeSubagentLifecycle || env.Type == proto.TypeSubagentTurn || env.Type == proto.TypeSubagentItem || env.Type == proto.TypeSubagentCoordination) && !j.observeSubagents {
 		return sessions.ErrInvalidInput
 	}
@@ -63,20 +72,20 @@ func (j *journal) enqueue(env proto.Envelope) error {
 	default:
 		return nil
 	}
-	normalized, err := proto.NormalizeOutputText(env)
-	if err != nil {
-		return err
-	}
-	env = normalized
-	if len(env.Payload) > 512*1024 {
+	if len(env.Payload) > proto.MaxFrameBytes {
 		return sessions.ErrEventLimit
 	}
+	j.observeFirstText(env)
 	j.batch = append(j.batch, sessions.ExecutionEvent{Kind: env.Type, Payload: env.Payload})
 	j.bytes += len(env.Payload)
 	return nil
 }
 
 func (j *journal) flush(ctx context.Context) error {
+	return j.flushObserved(ctx, "deferred_final")
+}
+
+func (j *journal) flushObserved(ctx context.Context, trigger string) error {
 	if len(j.batch) == 0 {
 		return nil
 	}
@@ -98,7 +107,17 @@ func (j *journal) flush(ctx context.Context) error {
 		}
 		// An uncertain commit must retry the same batch even after more frames arrive.
 		j.pendingCount = count
-		if err := j.writer.AppendTurnEvents(ctx, j.tenant, j.session, j.turn, j.next, j.batch[:count]); err != nil {
+		appendCtx := ctx
+		var observation *textobs.Attempt
+		if j.observesTextBatch(count) {
+			j.observeTextFlush(trigger)
+			appendCtx, observation = textobs.Begin(ctx, j.turn, int64(j.firstText.sequence))
+		}
+		started := time.Now()
+		err := j.writer.AppendTurnEvents(appendCtx, j.tenant, j.session, j.turn, j.next, j.batch[:count])
+		j.observeTextCommit(count, started, err, observation.EventID())
+		if err != nil {
+			j.reportFailure("flush", j.batch[0].Kind, size, err)
 			return err
 		}
 		j.pendingCount = 0
@@ -113,13 +132,14 @@ func (j *journal) flush(ctx context.Context) error {
 // Cancellation receipts use a separate waiter; preceding frames can still be queued.
 func (j *journal) drain(upstream <-chan proto.Envelope, result *Result) error {
 	var observedErr error
-	for range 256 {
+	for range proto.ExecutionEventWindow {
 		select {
 		case env, ok := <-upstream:
 			if !ok {
 				return observedErr
 			}
 			if err := j.enqueue(env); err != nil {
+				j.reportFailure("drain", env.Type, len(env.Payload), err)
 				observedErr = err
 			}
 			if err := result.mergeObservation(env); err != nil {

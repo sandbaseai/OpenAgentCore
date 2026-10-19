@@ -2,11 +2,13 @@ package codex
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
 
 func (s *Session) onAgentDelta(raw json.RawMessage) {
+	received := time.Now()
 	var p AgentMessageDeltaNotification
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return
@@ -14,6 +16,7 @@ func (s *Session) onAgentDelta(raw json.RawMessage) {
 	if !s.isRootTurn(p.ThreadID, p.TurnID) || p.Delta == "" || p.ItemID == "" {
 		return
 	}
+	first := s.boundary.text(received, p.TurnID)
 	_ = FoldDeltaIntoBuffer(s.bufs, "agent", p.ItemID, p.Delta)
 	seq := s.deltaSeq.Add(1)
 	payload := proto.DeltaPayload{Delta: p.Delta, Sequence: seq}
@@ -24,7 +27,10 @@ func (s *Session) onAgentDelta(raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	s.trySend(env)
+	sent := s.trySend(env)
+	if first {
+		s.boundary.forward(received, sent)
+	}
 }
 
 func (s *Session) onItemStarted(raw json.RawMessage) {
@@ -45,6 +51,7 @@ func (s *Session) onItemStarted(raw json.RawMessage) {
 }
 
 func (s *Session) onItemCompleted(raw json.RawMessage) {
+	received := time.Now()
 	s.observeSubagentIdentity(raw)
 	var p ItemCompletedNotification
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -65,18 +72,26 @@ func (s *Session) onItemCompleted(raw json.RawMessage) {
 	if messageText == "" {
 		messageText = text
 	}
-	s.observeMessage(p.Item, "completed", &messageText)
+	first := false
+	if p.Item.Type == "agentMessage" && messageText != "" {
+		first = s.boundary.text(received, p.TurnID)
+	}
+	sent := s.observeMessage(p.Item, "completed", &messageText)
+	if first && s.observeMessages {
+		s.boundary.forward(received, sent)
+	}
 	if text != "" {
 		s.appendFinalText(text)
 	}
 }
 
-func (s *Session) observeMessage(item ThreadItem, status string, text *string) {
+func (s *Session) observeMessage(item ThreadItem, status string, text *string) bool {
 	if !s.observeMessages || item.Type != "agentMessage" {
-		return
+		return false
 	}
 	env, err := proto.NewEnvelope(proto.TypeOutputMessage, s.runID, proto.OutputMessagePayload{ID: item.ID, Status: status, Phase: item.Phase, Text: text})
 	if err == nil {
-		s.trySend(env)
+		return s.trySend(env)
 	}
+	return false
 }

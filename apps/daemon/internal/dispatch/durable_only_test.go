@@ -58,11 +58,8 @@ func TestPublicTextSteeringDoesNotRequireOptionalSteerer(t *testing.T) {
 	if err := router.Handle(t.Context(), mustEnv(t, proto.TypePromptSteer, "run", input)); err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range sender.snapshot() {
-		var ack proto.PromptSteerAckPayload
-		if event.Type == proto.TypePromptSteerAck && event.DecodePayload(&ack) == nil && ack.InputID == "ordinary" && ack.ErrorCode == "unsupported" {
-			return
-		}
+	if ack := lastSteeringAck(t, sender, "run", "ordinary"); ack.ErrorCode != "unsupported" {
+		t.Fatal("unimplemented optional Steerer was not rejected")
 	}
-	t.Fatal("unimplemented optional Steerer was not rejected")
+
 }

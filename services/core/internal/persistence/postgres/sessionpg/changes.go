@@ -9,6 +9,7 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/db/sqlc"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/textobs"
 )
 
 // AppendChanges journals public changes in order. Each gets a new event ID and
@@ -24,6 +25,11 @@ func AppendChanges(ctx context.Context, q *sqlc.Queries, session pgtype.UUID, ch
 		}
 		if err := q.AppendSessionEvent(ctx, sqlc.AppendSessionEventParams{ID: session, Payload: payload}); err != nil {
 			return storable(err)
+		}
+		textobs.CaptureTerminal(ctx, change.Event.SessionID, change.Event.TurnID, change.Event.Type, change.Event.EventID)
+		if change.Event.Type == "agent.session.turn.output_text.delta" && change.Event.Delta != nil && *change.Event.Delta != "" ||
+			change.Event.Type == "agent.session.turn.output_text.done" && change.Event.Text != nil && *change.Event.Text != "" {
+			textobs.Capture(ctx, change.Event.EventID)
 		}
 	}
 	return nil

@@ -1,7 +1,7 @@
 ---
 title: "沙箱部署"
 source: contracts/agents-api/sandbox-deployment.md
-source_hash: 84fd89164b02406f379720805b6d30b64746b97e5bd322459bffa88496399b91
+source_hash: 39cf0dbef5b3ec0a214625144d70393f134b5612f7664aedcf0353cc0add9bec
 ---
 
 沙箱部署为 Core 管理的 `openai_hosted` 执行选择沙箱提供商、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness。部署可以保持未配置状态，没有节点；此时它拒绝托管准入。
@@ -10,7 +10,7 @@ source_hash: 84fd89164b02406f379720805b6d30b64746b97e5bd322459bffa88496399b91
 
 ## 挂起策略 {#suspension-policy}
 
-`PATCH /core/v1/sandbox/deployment` 接受 `{"idle_seconds": 300}`。`idle_seconds` 是必填整数，范围为 30–86400 秒，默认为 300。该设置保存在 Core 的数据库中。只有已配置且声明 checkpoint 支持的提供商可修改；未配置、不支持或正在重置的部署拒绝写入。成功返回当前部署视图，`suspension.idle_seconds` 反映已保存的值。
+`PATCH /core/v1/sandbox/deployment` 接受 `{"idle_seconds": 300}`。`idle_seconds` 是必填整数，范围为 30–86400 秒，默认为 300。该设置保存在 Core 的数据库中。只有已配置且声明暂停支持的 Provider 可修改；未配置、不支持或正在重置的部署拒绝写入。成功返回当前部署视图，`suspension.idle_seconds` 反映已保存的值。
 
 变更从下一轮生命周期检查起作用于现有和新建的运行中分配，不重启 Core、不推进配置代次，也不重新部署节点。已经开始的挂起不撤销；现有快照和 24 小时快照保留期不变。[容量压力回收](../../../docs/zh/sandbox-provider.md#suspension)仍可在空闲 15 秒后提前挂起。Web 在 **设置** → **沙箱与调度** → **自动挂起** 管理此部署级策略；各节点的容量上限仍属于节点，在 **节点** 中通过 **编辑节点** 编辑。
 
@@ -100,7 +100,7 @@ E2B 使用 `template-id:build-uuid` 形式的 `configuration.template`；构建 
 GET 和成功的写入操作会返回 `installation_id`、`provider`、`core_url`（只读：安装公开 URL，即使配置前也存在）、`mode`、`generation`、`owner_epoch`、`reset`、`rollout`、`suspension`、`resources` 和 `credential_configured`。已配置的部署还会返回 `specification`、`specification_digest`、`configuration` 和 `metadata`：这是适配器对其选择器及其记录的观测结果所作的公开投影，绝不会包含原始存储值或机密。E2B 返回 `configuration.template`、`configuration.api_url`、`configuration.domain`，并在记录后返回 `metadata.template_build`。Docker 和 microsandbox 返回空的 `configuration` 和 `metadata` 对象以及 `credential_configured: false`；未配置的部署则不含这两个对象。
 
 - `metadata.template_build` 为 `{status, resources: {cpus, memory_mib, root_disk_mib}}`：这是保存选择时 Core 通过固定版本 SDK 读取的构建。GET 绝不会调用 E2B，因此 E2B 中断期间该操作仍保持低成本。验证仅接受 CPU 数量和内存与所选值一致的 `ready` 构建；`root_disk_mib` 是构建的原生磁盘大小，Core 不会强制执行该值。未知值为 null，`metadata: {}` 表示未记录任何观测，在不提供凭据的情况下提交完全相同的 PUT 也不会刷新它。
-- 所选提供商声明 checkpoint 支持时，`suspension` 为 `{idle_seconds, retention_seconds}`，即 Core 的 [suspension policy](../../../docs/zh/sandbox-provider.md#suspension)；其他部署（包括未配置的部署）返回 null。
+- 所选 Provider 声明暂停支持时，`suspension` 为 `{idle_seconds, retention_seconds}`，即 Core 的 [suspension policy](../../../docs/zh/sandbox-provider.md#suspension)；其他部署（包括未配置的部署）返回 null。
 - 请求中的 `resources` 和响应中的 `specification.resources` 是每个沙箱的限制。响应中的 `resources.allocations` 和 `resources.pending` 分别计算尚未释放的分配，以及尚未分配沙箱的待处理托管 Environment。
 - 未配置的部署具有空的提供商且没有 specification。Docker 和 microsandbox 使用 `mode: nodes`；E2B 使用 `mode: direct`，且没有合成节点。
 - `generation` 标识已保存的选择。`owner_epoch` 用于对执行所有者和节点连接进行栅栏隔离；它不能替代 `expected_generation`。
@@ -128,7 +128,7 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | `400 sandbox_configuration_invalid` | 候选构建无效或与资源不匹配 |
 | `503 sandbox_verification_unconfirmed` | 回执缺失或未结算，或读取未得到确认 |
 
-不会返回提供商文本或凭据。写入操作及其 `change` 或 `replace_credential` 审计条目共用一个事务。替换操作会短暂对提供商调用设置栅栏，即使调用方已取消，也会等待辅助进程实际退出，并在提交前再次验证；辅助进程退出并不能证明远程 Create 已结算。栅栏和读取均有时间边界，失败时会保留旧密钥和生命周期。成功响应后，所有保留代次管理都使用已提交的密钥；只有在清理完成后，才能在 E2B 中撤销旧密钥，绝不能提前撤销。模板和资源更改不会排空生命周期。
+不会返回提供商文本或凭据。写入操作及其 `change` 或 `replace_credential` 审计条目共用一个事务。Core 从已认证请求中派生管理员审计来源，并使用可选的 `X-Core-Console-Actor` 请求头作为操作者标签。替换操作会短暂对提供商调用设置栅栏，即使调用方已取消，也会等待辅助进程实际退出，并在提交前再次验证；辅助进程退出并不能证明远程 Create 已结算。栅栏和读取均有时间边界，失败时会保留旧密钥和生命周期。成功响应后，所有保留代次管理都使用已提交的密钥；只有在清理完成后，才能在 E2B 中撤销旧密钥，绝不能提前撤销。模板和资源更改不会排空生命周期。
 
 ## 代次所有权与推出 {#generation-ownership-and-rollout}
 
@@ -209,7 +209,7 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | 部署 `specification.resources` | `cpus`、`memory_mib`、`root_disk_mib` 和 `environment_disk_mib` | `cpus` 和 `memory_mib`，必须等于就绪模板构建中的值；省略时取自该构建；无磁盘字段 | `cpus` 和 `memory_mib`；无磁盘配额 |
 | 部署 `specification.runtime` | 完整的[发行版](#runtime-release)；节点必须与 `microsandbox_ref`、`runtime_sha256` 和 `firmware_sha256` 匹配 | 不存在；`configuration.template` 用于选择构建 | 完整的[发行版](#runtime-release)；节点必须与 `image_id` 或 `image_manifest_digest` 匹配 |
 | 部署 `metadata.template_build` | 不存在：`metadata` 为空 | Core 保存选择时读取到的构建 | 不存在：`metadata` 为空 |
-| 部署 `suspension` | `{idle_seconds, retention_seconds}` | `null`；Core 不暂停 E2B 沙箱 | `null` |
+| 部署 `suspension` | `{idle_seconds, retention_seconds}` | `{idle_seconds, retention_seconds}` | `null` |
 | 部署 `resources.allocations`、`resources.pending` | 所有节点的总数 | Core 中尚未释放的 E2B 沙箱，以及正在等待沙箱的托管 Environment | 所有节点的总数 |
 | 注册令牌 `max_active`、`max_retained` | 两个限制均适用 | 先执行 400 容量检查，然后返回 409 `sandbox_deployment_conflict`；E2B 没有节点 | `max_retained` 始终等于 `max_active` |
 | 节点列表和详情 | 已注册节点 | 空列表；详情返回 404 | 已注册节点 |
@@ -218,7 +218,7 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | 分配 `compute_phase`、`compute_phase_changed_at` | 包含 `suspended`；时间表示当前阶段的起点，不是快照到期时间 | 不适用：没有节点分配 | 始终为 `disabled`，在释放前计为运行中；该时间为分配创建时间 |
 | Runtime 观测 `cpu`、`memory` | 来自 VM：`cpu.usage_seconds_total`、CPU 和内存限制、内存使用量 | 来自 E2B 指标：`cpu.utilization_ratio` 和 `capacity_cores`、内存使用量和限制；无累计 CPU 时间 | 来自 Docker stats：`cpu.usage_seconds_total`、CPU 和内存限制、内存使用量 |
 | Runtime 观测 `disk` | `null` | E2B `diskUsed` 和 `diskTotal`；模板未报告时为 `null` | `null`：无磁盘配额 |
-| Runtime 观测 `lifecycle_state: sleeping` | 暂停期间 | 从不 | 从不 |
+| Runtime 观测 `lifecycle_state: sleeping` | 暂停期间 | 原生暂停期间 | 从不 |
 | Runtime 历史 CPU | 根据累计 CPU 时间派生 | 每个时间桶中 E2B 所报告使用率比值的平均值 | 根据累计 CPU 时间派生 |
 
 ## 错误 {#errors}

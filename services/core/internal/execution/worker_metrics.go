@@ -90,6 +90,8 @@ func (w *Worker) observeSchedulerPoll(processed int, err error) {
 func (w *Worker) observeWorkerStop(runErr, contextErr error) {
 	w.metrics.mu.Lock()
 	defer w.metrics.mu.Unlock()
+	w.metrics.closed = true
+	w.metrics.value.ExecutionOwner = nil
 	w.metrics.value.Scheduler.Status = coremetrics.JobStopped
 	if runErr != nil && (contextErr == nil || !errors.Is(runErr, contextErr)) {
 		w.metrics.value.Scheduler.Status = coremetrics.JobFailing

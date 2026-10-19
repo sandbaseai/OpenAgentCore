@@ -6,16 +6,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/jsonobject"
 )
 
 // A Turn's journal holds its execution observations in order. One batch holds
-// at most 64 observations of at most 512 KiB each and 1 MiB together, and one
-// Turn's journal at most 65,536 observations and 32 MiB. The terminal outcome
-// is recorded beyond those limits, in the one entry they reserve for it.
+// at most 64 observations and 1 MiB together, or one observation up to the
+// transport frame ceiling. A Turn holds at most 65,536 observations and
+// 32 MiB. The terminal outcome is recorded beyond those limits, in the one
+// entry they reserve for it.
 const (
 	journalBatchEvents  = 64
-	journalPayloadBytes = 512 * 1024
+	journalPayloadBytes = proto.MaxFrameBytes
 	journalBatchBytes   = 1024 * 1024
 	journalTurnEvents   = 65536
 	journalTurnBytes    = 32 * 1024 * 1024
@@ -51,7 +53,7 @@ func NewJournalBatch(turn string, first int32, events []ExecutionEvent) (Journal
 		batch.events[i] = ExecutionEvent{Kind: event.Kind, Payload: payload}
 		batch.bytes += int64(len(payload))
 	}
-	if batch.bytes > journalBatchBytes {
+	if len(batch.events) > 1 && batch.bytes > journalBatchBytes {
 		return JournalBatch{}, ErrEventLimit
 	}
 	return batch, nil

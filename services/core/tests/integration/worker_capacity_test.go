@@ -21,6 +21,9 @@ func capacityWorkerFrames(t *testing.T, h *dispatchHarness) <-chan proto.Envelop
 			if h.conn.ReadJSON(&frame) != nil {
 				return
 			}
+			if frame.Type == proto.TypeExecutionEventsAck || frame.Type == proto.TypeExecutionEventsStop {
+				continue
+			}
 			select {
 			case frames <- frame:
 			case <-t.Context().Done():

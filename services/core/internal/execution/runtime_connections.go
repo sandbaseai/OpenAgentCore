@@ -7,6 +7,8 @@ import (
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 
+	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
+
 	"github.com/google/uuid"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
@@ -78,6 +80,8 @@ func observeRuntimeConnection(ctx context.Context, operations *sessions.Executio
 		return err
 	}
 	current.connected = connected
+	obslog.Ctx(ctx).Info("runtime connection observed", "environment_id", environment, "connected", connected,
+		"connection_generation", current.generation, "connection_revision", current.revision)
 	return nil
 }
 

@@ -1,15 +1,16 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 32f03a96fa327e830d810024da912ed4a2f866eec8d789513b13373717a5bd17
+source_hash: ed661e1a73a2a96d7a5d654e79be78ae3a36378a20b182c8c6165e1e804aaa5b
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
 
 托管和自托管 Runtime 使用同一协议。Harness 通过 [Harness adapter 契约](../../contracts/agents-api/zh/harness-onboarding.md)接入，该契约负责 Runtime registry 后的 Executor 和 Turn 生命周期义务。
 
-命令输出按文本处理：`command_output.delta`、`tool_call.result` 的字符串值及 `tool_call.observation.output` 的字符串值将每个 NUL（U+0000）表示为四个可打印字符 `\x00`。Runtime 创建信封、最终 WebSocket 发送与 Core 日志入库应用同一条幂等规则，包括输出中嵌套的数组和对象。已有的字面反斜杠序列、对象键、命令参数、标识符和元数据保持不变。这使来自二进制的输出可读且可存入 PostgreSQL JSONB；此机制不用于二进制传输。
+连接帧受 `proto.MaxFrameBytes` 的 4 MiB 上限约束。Core 会完整记录传输范围内的事件，不截断 payload。普通 journal 批次最多包含 64 个事件、合计 1 MiB；更大的单个事件独立存储。每个 Turn 仍限制为 65,536 个事件和 32 MiB，并在限制之外预留一条终态记录。journal 失败会使 Turn 失败并保留已提交的 Items。`execution journal failed` 日志记录 Project、Session、Turn ID、追踪上下文、阶段、事件类型、字节数、journal 位置以及有限的失败分类或 SQLSTATE；不记录事件 payload 或原始错误文本。
 
+命令输出按文本处理：`command_output.delta`、`tool_call.result` 的字符串值及 `tool_call.observation.output` 的字符串值将每个 NUL（U+0000）表示为四个可打印字符 `\x00`。Runtime 创建信封、最终 WebSocket 发送与 Core 日志入库应用同一条幂等规则，包括输出中嵌套的数组和对象。已有的字面反斜杠序列、对象键、命令参数、标识符和元数据保持不变。这使来自二进制的输出可读且可存入 PostgreSQL JSONB；此机制不用于二进制传输。
 
 ## 所有权与连接 {#ownership-and-connection}
 
@@ -23,7 +24,7 @@ Runtime 按以下顺序连接：
 4. 立即发送 heartbeat，之后按 bootstrap 返回的间隔发送。每个 heartbeat 声明 `supported_agent_kinds`、其可用性和[能力](#capability-declarations)。第一个 heartbeat 之前能力未知；heartbeat 中缺失的 kind 视为未声明。两者都不允许推断。
 5. 交换有序 JSON [envelope](#envelope-and-identity)。Heartbeat 仅证明存活，不证明执行进度，也不充当此前消息的回执。
 
-wire 版本为 [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/version.go)，独立于 heartbeat 报告的 Runtime 构建版本。Core 仅接受精确匹配，包括 patch 部分。不匹配时，在任何 dispatch 前返回 HTTP 426 `incompatible_version`；daemon 将其视为永久错误并停止重连。应一起部署版本匹配的两端。
+wire 版本为 [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/version.go)，独立于 heartbeat 报告的 Runtime 构建版本。Core 仅接受精确匹配，包括 patch 部分。不匹配时，在任何 dispatch 前返回 HTTP 426 `incompatible_version`；daemon 将其视为永久错误并停止重连。破坏性变更仍要求两端版本匹配。新增的传输能力可通过本文定义的显式、带版本的协商启用，无需改变基础 wire 版本。
 
 每条物理连接拥有新的路由、admission handle 和传输状态。同一设备的新连接替代旧连接：Core 隔离 owner lease，移除旧 Run 路由，新连接不继承这些状态。有效凭据和连接不授权选择其他 Session 或 Environment 绑定。
 
@@ -134,6 +135,18 @@ Executor 空闲到期属于 Runtime 资源策略，与 Core 的活动 Turn 并�
 
 挂起先关闭准入、排空已接纳工作与回执，同时保留已结算的空闲 Executor，随后才确认 `environment_quiesced`。活动、准备中、失效或其他未结算的所有者会阻止挂起。整个挂起期间停止空闲到期计时并隔离其回调；精确匹配且已认证的 `environment_resume` 为同一批所有者恢复一个新的空闲计时间隔。只有这种计划性重连跨 socket 保留 Router 与原生所有者；普通断连、shutdown 和连接生命周期取消仍要求确认清理完成。排空失败后，准入保持关闭直到 shutdown。恢复后的准备仍检查相同的原生身份与不可变配置，包括凭据冲突；绝不静默替换配置冲突的驻留 Executor。沙箱提供商仍负责其 checkpoint 实现的文件系统刷新和计算停止保证；Runtime 静止本身既不证明这些保证，也不证明原生 RAM 或外部网络连接已恢复。
 
+## 执行事件流控 {#execution-event-flow-control}
+
+本可选扩展保持基础 wire 协议为 `0.16.0`。支持流控的 Runtime 在经过认证的 WebSocket upgrade 中发送且仅发送一个 `X-Oac-Execution-Flow: credit-v1` header。Core 在 101 响应中返回同一 header 表示选择；两端在该物理连接内固定选择结果。缺少请求声明或响应选择时，明确使用基础协议，不发送事件额度消息，也不等待额度。未知、空值或重复声明返回 HTTP 400；响应选择无效属于永久握手失败。重连时重新协商。只有新 Runtime 连接到选择了该能力的 Core 才启用流控。旧 Runtime 连接保持原有 256 帧订阅上限和溢出行为；单独升级 Core 不能修复其生产者行为。
+
+先升级 Core，再选择新的不可变 Runtime 模板。现存 allocation 保留旧 Runtime，并继续按基础协议连接；新 allocation 使用新模板。新 Runtime 连接旧 Core 时也使用基础协议，因此回滚 Core 不会仅因本扩展而使 Session 无法连接。模板变更不改写保留的沙箱、文件或原生历史。这是本扩展明确约定的升级契约，不代表接受任意基础版本。
+
+选择事件额度后，每个 `execution_start` 为一个 Run 打开连接内窗口：最多 256 条未消费执行帧和 4 MiB + 64 字节的计量存储（保证最大合法 wire 帧仍可容纳）。同一活动 Run 的重复 start 不重置额度。Runtime transport 每条连接最多接纳 1024 个活动窗口；终结 `done` 或 `execution_events_stop` 释放窗口。共享的[流控定义](../../internal/agentdaemon/proto/event_flow.go)声明覆盖的帧类型和字节算法，包括规范化 JSON wire 编码及 envelope 元数据。所有覆盖帧，包括 `error`、`done`、function call 和输入回执，进入共享 socket writer 前都消耗额度。阻塞的生产者只暂停自己的 Run；heartbeat、preparation status 以及取消/function-result 应用回执保持独立。
+
+Core 处理一条帧后，发送带 Run ID 及累计 `count`、`bytes` 的 `execution_events_ack`。重复确认不增加额度；倒退或超前的值终止连接。确认只代表 transport 已消费，不代表 journal 已提交或原生执行成功。Core 仍须具备有序 journal 与终结回执才能完成 Turn。因此数据库暂停会暂停事件生产，而不是使订阅溢出。Core 拒绝超出任一窗口上限的生产者，并保留流不完整结果。
+
+Core 离开 delivery 时，发送带 Run ID 的 `execution_events_stop`，释放等待额度的生产者。该消息停止事件投递，不停止原生执行；取消仍遵循独立的应用回执契约。连接关闭和调用方取消也会释放额度等待。窗口与额度不跨重连保留，也不授权重放。Core 仅向已选择事件额度的连接发送 ACK/STOP，包括归档后正在排空的精确 Run。即时输入回执在共享控制循环之外发送，最多并发 64 个发送任务，生命周期可被 shutdown 中断；超过容量的回执任务会被拒绝，不阻塞其他控制消息。
+
 ## 活动输入回执 {#active-input-receipts}
 
 Core 通过 `prompt_steer` 交付活动输入，设置 `durable_receipt: true`，每个 Run 一次交付一个输入，并等待回执后再发送下一个：
@@ -142,9 +155,9 @@ Core 通过 `prompt_steer` 交付活动输入，设置 `durable_receipt: true`�
 | --- | --- |
 | 原生写入 | Runtime 将 adapter 原生写入限制为 10 秒；写入完成后停止计时 |
 | `written` 确认 | Core 从交付开始最多等待 30 秒取得 `written`；否则输入结果未知 |
-| 回执发送 | 每次发送回执都有独立的 5 秒预算，并感知 shutdown |
+| 回执发送 | 输入回执在 Run/连接生命周期内等待事件额度；shutdown、STOP 或连接关闭会终止等待 |
 | 原生接受 | `accepted` 在 Turn 生命周期内到达，不自动重新交付 |
-| Done | Runtime 在原生 Turn 结算完成、且正在处理的输入的回执发送结束后才发送 `done`；该输入受原生写入与回执发送预算限制 |
+| Done | Runtime 在原生 Turn 结算完成、且正在处理的输入的回执发送结束后才发送 `done`；原生写入仍有时间限制，回执投递遵循事件流量控制 |
 
 `written` 和发送失败都不会推进 Core 的 input cursor。取消发出后，即使输入先变为未知，终结结果也由取消回执负责；15 秒内没有取消确认时，Core 记录 `cancel_unconfirmed`。未发出 `done` 时，取消回执携带已停止 Turn 的已确认 continuity snapshot。
 
@@ -186,9 +199,9 @@ transport 与 execution 结果分开。Core 唯一 Run 订阅入口是 `Subscrib
 
 adapter 可以给 Run 的 `error` frame 添加 `code` 和 `http_status`。它们是可选的中性元数据，不是终结事件或公开错误契约；frame 文本、Usage、`done`、原生 Session 身份和取消回执保持原顺序与含义。
 
-接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy` 和 `connection_failed`（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。仅 `connection_failed` 保留 `http_status`，且只能是 100 到 599 的整数；其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
+接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy`、`provider_billing_unavailable` 和 `connection_failed`（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。`connection_failed` 保留 100 到 599 的整数 `http_status`；402 归一为 `provider_billing_unavailable`，此分类仅保留状态 402。它表示模型端点的计费拒绝，不代表应用用户余额不足，也不授权自动重试。其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
 
-Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engine_http_status`。一个 Run 可以有多个 `error` frame，例如 adapter 的分类失败之后跟着 Runtime 自己的结算失败；没有接受 code 的 frame 不改变已保存的分类，后来接受的 code 会替换它。分类从属于终结状态和 Core 的 `error_code`：不能将已完成或已取消 Turn 变成失败、隐藏不完整事件流，或覆盖持久化或取消回执失败。正常 delivery 和 terminal journal draining 使用同一提取逻辑。[Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)仅为 Core error 为 `engine_failed` 的失败 Turn 暴露类别。[Codex](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/README.md) 和 [Claude Code](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/claude/README.md) adapter 指南给出各 Harness 的映射。adapter 只依据结构化错误数据分类：Harness 自身的错误类型或状态，或 Harness 原样转交的模型提供商 JSON 错误 body，其 `error.code` 或 `error.type` 可以给出接受的 code。adapter 不依据错误文字分类。
+Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engine_http_status`。同一 Turn 内，后续有效分类会替换此前分类及其状态码；未分类的 error frame 不会清空它们。分类不会沿用到其他 Turn。可选 `upstream_request_id` 仅接受 UUID，并私有保存为 `engine_request_id`；不得进入 Project 诊断、公开 Session/Turn 响应或 SSE。分类从属于终结状态和 Core 的 `error_code`：不能将已完成或已取消 Turn 变成失败、隐藏不完整事件流，或覆盖持久化或取消回执失败。正常 delivery 和 terminal journal draining 使用同一提取逻辑。[Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)仅为 Core error 为 `engine_failed` 的失败 Turn 暴露类别。[Codex](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/README.md) 和 [Claude Code](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/claude/README.md) adapter 指南给出各 Harness 的映射；adapter 根据结构化 Harness 错误及模型提供商 JSON 错误体中受支持的 `error.code` 或 `error.type` 分类，不依据任意错误文字。仅 Codex 在结构化信息缺失或为 `other` 时识别准确的终态 HTTP 402 封装；严格边界见该适配器指南。
 
 ## 工作区操作 {#workspace-operations}
 
@@ -201,6 +214,8 @@ Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engin
 Core 在 Worker 的 Session 调度预约上运行空闲目录读取，活动执行时针对精确 Run。它在有限时 read 与 release 期间保留预约，仅在确认 close 后返回数据（不完整读取或不确定清理返回 unavailable，不包含数据），在交付结果前释放预约，并在完成或失败后撤销限定作用域的读取凭据。Runtime 保留不确定清理的所有权和容量。[Environment Files 契约](../../contracts/agents-api/zh/environment-files.md)负责公开授权、路径和分页。
 
 `workspace_write` 在原生 writer 运行前，通过已确认的 64 KiB frame 传输完整且有界的 body，验证声明的 digest，不运行模型。私有 transfer 限制为 50 MiB，与公开 API 在任何 Runtime 工作前检查的 5 MiB decoded inline 限制独立。Runtime 在接收或应用写入时排除执行；格式错误、不完整或到期的 transfer 不会到达 installer。精确的 commit 或拒绝回执释放 mutation owner。缺失或有歧义的回执保留不确定性：observer 取消和本地进程退出不能证明没有改变任何内容。公开准入前，Core 在 Session lock 下持久预约写入，跨重启阻止后继 mutation，直到精确结算；请求不重放。各平台都使用 daemon 的 Go 实现进行有界读取、目录列举、文件创建与输出导出，不使用外部 helper 或 staging directory。
+
+`workspace_export` 从已授权的 preparation 拉取一条有界归档流。daemon 将 exporter 的短写聚合为 64 KiB 分块，最后一块可以不足 64 KiB；只有源端正常 EOF 才允许完成。gateway 在消费者存储当前分块时最多请求下一块，只保留当前数据和一个有界回执。消费者失败、取消或断连会停止传输；即使归档内容完整，发布前仍必须收到 exporter 的完成回执。Core 采集（包括准备和存储）、gateway 导出与 daemon 导出共用十分钟预算；更早的父级取消或期限仍优先。导出获准后，其拥有的 preparation 暂停空闲过期计时，避免空闲准备上限截断传输；已开始过期的 preparation 不允许发起导出。导出结算后恢复原空闲期限，不续期 handle。随后的只读 release 将通过身份校验、无 Run 且无错误的 `expired` 回执视为已确认清理，仍保留导出自身的失败；显式 release 与 daemon shutdown 仍会取消活跃导出。整个传输仍受归档大小上限约束。
 
 ## MCP 连接权限 {#mcp-connection-authority}
 

@@ -81,3 +81,77 @@ func TestClassifiedErrorCannotOverrideCancellationReceipt(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingFailureOutcomePreservesSafeCorrelation(t *testing.T) {
+	status := 402
+	failure, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Code: "connection_failed", HTTPStatus: &status, UpstreamRequestID: "88a8d808-59c1-4bf3-8950-b34ce57e028b"})
+	result := Result{ErrorCode: "engine_failed"}
+	if err := result.mergeObservation(failure); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(result)
+	var saved Result
+	if json.Unmarshal(raw, &saved) != nil || saved.EngineErrorCode != "provider_billing_unavailable" || saved.EngineRequestID == "" || saved.EngineHTTPStatus == nil || *saved.EngineHTTPStatus != 402 {
+		t.Fatal(string(raw))
+	}
+}
+
+func TestEngineClassificationSurvivesUnclassifiedSettlement(t *testing.T) {
+	for _, drain := range []bool{false, true} {
+		result := Result{ErrorCode: "engine_failed"}
+		failure, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "claudesdk: execution_failed", Code: "resource_not_found"})
+		settlement, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "executor Turn settlement failed"})
+		done, _ := proto.NewEnvelope(proto.TypeDone, "turn", proto.DonePayload{Usage: proto.Usage{InputTokens: 7}})
+		events := []proto.Envelope{failure, settlement, done}
+		if drain {
+			queued := make(chan proto.Envelope, len(events))
+			for _, event := range events {
+				queued <- event
+			}
+			close(queued)
+			j := journal{writer: &recoveringWriter{}, next: 1}
+			if err := j.drain(queued, &result); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			for _, event := range events {
+				if err := result.mergeObservation(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if result.EngineErrorCode != "resource_not_found" || result.EngineHTTPStatus != nil || result.ErrorCode != "engine_failed" || result.Done.Usage.InputTokens != 7 {
+			t.Fatalf("drain=%v: %+v", drain, result)
+		}
+		// Each delivery creates its own Result; generic errors in another Turn stay unknown.
+		next := Result{}
+		settlement.ID = "next-turn"
+		if err := next.mergeObservation(settlement); err != nil || next.EngineErrorCode != "" || next.EngineHTTPStatus != nil {
+			t.Fatalf("classification crossed Turns: %v %+v", err, next)
+		}
+	}
+}
+
+func TestEngineClassificationUpdatesOnlyFromAcceptedMetadata(t *testing.T) {
+	status := 502
+	result := Result{}
+	for _, step := range []struct {
+		payload string
+		code    string
+		status  *int
+	}{
+		{`{"code":"connection_failed","http_status":502}`, "connection_failed", &status},
+		{`{"error":"settlement failed"}`, "connection_failed", &status},
+		{`{"code":"unknown_code","http_status":401}`, "connection_failed", &status},
+		{`{"code":{"invalid":true},"http_status":"invalid"}`, "connection_failed", &status},
+		{`{"code":"resource_not_found","http_status":404}`, "resource_not_found", nil},
+		{`{"code":"authentication_error"}`, "authentication_error", nil},
+	} {
+		if err := result.mergeObservation(proto.Envelope{Type: proto.TypeError, Payload: json.RawMessage(step.payload)}); err != nil {
+			t.Fatal(err)
+		}
+		if result.EngineErrorCode != step.code || (result.EngineHTTPStatus == nil) != (step.status == nil) || (step.status != nil && *result.EngineHTTPStatus != *step.status) {
+			t.Fatalf("payload=%s: %+v", step.payload, result)
+		}
+	}
+}

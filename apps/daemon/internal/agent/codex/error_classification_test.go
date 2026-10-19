@@ -94,6 +94,32 @@ func TestClassificationOnlyFromRootTerminalError(t *testing.T) {
 	}
 }
 
+func TestTerminalProviderBillingEnvelope(t *testing.T) {
+	const id = "88a8d808-59c1-4bf3-8950-b34ce57e028b"
+	message := "unexpected status 402 Payment Required: secret-body-canary, url: https://example.invalid/v1/responses, request id: " + id
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"other"`), json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":402}}`)} {
+		got := classifyTurnError(&TurnError{Message: message, CodexErrorInfo: raw})
+		if got.Code != "provider_billing_unavailable" || got.HTTPStatus == nil || *got.HTTPStatus != 402 || got.UpstreamRequestID != id {
+			t.Fatalf("%s: %+v", raw, got)
+		}
+	}
+	for _, message := range []string{"quoted: " + message, "unexpected status 402 Payment Requiredish", "insufficient credits", "unexpected status 402 Payment Required\nquoted next line"} {
+		got := classifyTurnError(&TurnError{Message: message, CodexErrorInfo: json.RawMessage(`"other"`)})
+		if got.Code != "" || got.UpstreamRequestID != "" {
+			t.Fatal("non-native envelope classified", got)
+		}
+	}
+	for _, raw := range []string{`"unauthorized"`, `"unknownFuture"`, `{"httpConnectionFailed":{"httpStatusCode":"402"}}`, `{"other":true}`} {
+		got := classifyTurnError(&TurnError{Message: message, CodexErrorInfo: json.RawMessage(raw)})
+		if got.Code == "provider_billing_unavailable" {
+			t.Fatal("overrode typed error", got)
+		}
+	}
+	if nativeRequestID(message+" secret-token") != "" || nativeRequestID("quoted: "+message) != "" {
+		t.Fatal("unsafe request ID")
+	}
+}
+
 // Codex 0.153.4 reports a provider HTTP 400 as "other" with the verbatim body and
 // repeats it on the error notification stream.
 func TestProviderRejectionClassifiedOnce(t *testing.T) {

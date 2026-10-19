@@ -264,7 +264,7 @@ func run(config processconfig.Config) error {
 		Credentials: vaultService, Observer: modelConfigurationStore, Deployment: deploymentService, DeploymentReader: deploymentStore,
 		Sessions:        sessionService,
 		SessionsReader:  sessionStore,
-		ManagedRuntimes: managedNodes.runtime, MaxConcurrentExecutions: config.ExecutionConcurrency}
+		ManagedRuntimes: managedNodes.runtime, MaxConcurrentExecutions: config.ExecutionConcurrency, TurnAutoRetries: config.TurnAutoRetries}
 	lease, err := pgunit.AcquireLease(ctx, pool)
 	if err != nil {
 		return err
@@ -295,15 +295,16 @@ func run(config processconfig.Config) error {
 			<-workerDone
 		}
 	}()
-	// The Worker owns every sampling sweep.
-	sampler, err := runtimeobs.NewSampler(observationResolver, observationService, worker, runtimeobs.SamplerOptions{})
+	// Sampling observes ownership without borrowing the execution lease connection.
+	historyOwner := runtimeHistoryOwnership{snapshot: worker.MetricsSnapshot}
+	sampler, err := runtimeobs.NewSampler(observationResolver, observationService, historyOwner, runtimeobs.SamplerOptions{})
 	if err != nil {
 		return err
 	}
 	sampling := coremetrics.Periodic{ID: "runtime_sampler", Every: history.SampleInterval, Run: func(ctx context.Context) (*int64, int64, error) {
 		result := sampler.Sweep(ctx)
 		sampleCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := worker.CheckOwnership(sampleCtx)
+		err := historyOwner.CheckOwnership(sampleCtx)
 		if err == nil {
 			_, err = deploymentStore.SampleHostHistory(sampleCtx)
 		}

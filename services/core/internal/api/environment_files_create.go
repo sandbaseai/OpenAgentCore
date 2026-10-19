@@ -23,6 +23,7 @@ import (
 )
 
 func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) {
+	environmentFileDiagnostic(w, r.Context(), rejectionUnknown)
 	const maxJSON = int64(((proto.WorkspaceWriteMaxBytes+2)/3)*4 + (16 << 10))
 	raw, ok := readJSONObjectLimit(w, r, maxJSON, "Inline upload exceeds this service's bounded file limit.")
 	if !ok {
@@ -36,6 +37,7 @@ func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) 
 	var request v1.EnvironmentFileCreateRequest
 	fields := []string{"type", "path", "data", "file_id"}
 	if field, found := unknownBodyField(raw, fields...); found {
+		environmentFileDiagnostic(w, nil, rejectionUnknownField)
 		if !echoableField(field) {
 			writeFieldError(w, errUnknownEnvironmentFileField)
 			return
@@ -44,6 +46,7 @@ func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := decodeInputObject(raw, &request, fields...); err != nil || request.Path == nil {
+		environmentFileDiagnostic(w, nil, rejectionInvalidPayload)
 		writeSessionsError(w, r, sessions.ErrInvalidInput)
 		return
 	}
@@ -51,24 +54,29 @@ func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) 
 	case "inline":
 		fields = []string{"type", "path", "data"}
 		if request.Data == nil {
+			environmentFileDiagnostic(w, nil, rejectionInvalidPayload)
 			writeSessionsError(w, r, sessions.ErrInvalidInput)
 			return
 		}
 	case "file_id":
 		fields = []string{"type", "path", "file_id"}
 		if request.FileID == nil || *request.FileID == "" {
+			environmentFileDiagnostic(w, nil, rejectionInvalidPayload)
 			writeSessionsError(w, r, sessions.ErrInvalidInput)
 			return
 		}
 	default:
+		environmentFileDiagnostic(w, nil, rejectionInvalidPayload)
 		writeSessionsError(w, r, sessions.ErrInvalidInput)
 		return
 	}
 	if decodeInputObject(raw, &request, fields...) != nil {
+		environmentFileDiagnostic(w, nil, rejectionInvalidPayload)
 		writeSessionsError(w, r, sessions.ErrInvalidInput)
 		return
 	}
 	if err := environmentFileCreatePathError(*request.Path); err != nil {
+		environmentFileDiagnostic(w, nil, rejectionInvalidPath)
 		writeFieldError(w, err)
 		return
 	}
@@ -76,10 +84,12 @@ func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) 
 	if request.Type == "inline" {
 		data, err = base64.StdEncoding.Strict().DecodeString(*request.Data)
 		if err != nil {
+			environmentFileDiagnostic(w, nil, rejectionInvalidBase64)
 			writeSessionsError(w, r, sessions.ErrInvalidInput)
 			return
 		}
 		if len(data) > maxInlineEnvironmentFileBytes {
+			environmentFileDiagnostic(w, nil, rejectionInlineTooLarge)
 			writeFieldError(w, errEnvironmentFileInlineTooLarge)
 			return
 		}
@@ -115,6 +125,12 @@ func (h *Handler) createEnvironmentFile(w http.ResponseWriter, r *http.Request) 
 	}
 	size, err := h.Execution.Workspaces.WriteEnvironmentFile(r.Context(), environment, strings.TrimPrefix(*request.Path, "/workspace/"), data)
 	if err != nil {
+		switch {
+		case errors.Is(err, execution.ErrEnvironmentFileDirectory):
+			environmentFileDiagnostic(w, nil, rejectionDestinationDirectory)
+		case errors.Is(err, execution.ErrEnvironmentFileUnsafe):
+			environmentFileDiagnostic(w, nil, rejectionDestinationUnsafe)
+		}
 		if !writeFieldError(w, environmentFileWriteError(err)) {
 			writeSessionsError(w, r, err)
 		}

@@ -56,7 +56,7 @@ On a shared host, `-H @<(printf 'Authorization: Bearer %s\n' "$OPENAI_API_KEY")`
 | [Vaults](#vaults) | `/vaults` | Write-only credentials for MCP servers |
 | Subagents | `/agents/sessions/{id}/subagents` | Read-only child work; see [subagents](../../contracts/agents-api/subagents.md) |
 
-Core has exactly the routes of the pinned SDK, listed in [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json). It adds no route; its additions live in [`x_agents_core`](#core-extensions-x_agents_core).
+Core preserves the pinned SDK routes listed in [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json). Configuration additions live in [`x_agents_core`](#core-extensions-x_agents_core). The Project-key [input receipt extension](../../contracts/agents-api/sessions-events.md#input-receipts) identifies the exact user Items admitted by a batch without changing the official events response.
 
 ## Common tasks
 
@@ -534,9 +534,9 @@ The HTTP path is `/vaults`, with the Beta header. A Session selects credentials 
 ## Diagnose a failure
 
 1. Read the Session's `status` and `error`, and the latest Turn's `error`. A failed Turn reports only a generic `internal_error`.
-2. Check that the Environment is connected and its Harness is available.
-3. Check the Harness, model and tool combination in [Harness capabilities](../../contracts/agents-api/harness-capabilities.md).
-4. Ask the administrator for the Session's [diagnostics](../../contracts/agents-api/session-diagnostics.md), which name the failure category, and to check [troubleshooting](../getting-started/operations.md#troubleshooting) for service logs, credentials and node readiness.
+2. Check that the Environment is connected and its harness is available.
+3. Check the harness, model and tool combination in [Harness capabilities](../../contracts/agents-api/harness-capabilities.md).
+4. Read the Session's [Project diagnostics extension](../../contracts/agents-api/session-diagnostics.md#project-diagnostics-extension) for its safe failure category; ask the administrator to check [troubleshooting](../getting-started/operations.md#troubleshooting) for service logs, credentials and node readiness.
 
 A 401 usually means a key from another namespace; see [API namespaces and credentials](./index.md).
 

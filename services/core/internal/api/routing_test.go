@@ -328,7 +328,7 @@ func TestEveryRouteAuthenticatesItsCanonicalPath(t *testing.T) {
 			t.Errorf("self-authenticated route %s is no longer registered", route)
 		}
 	}
-	// /v1 serves exactly the pinned official method and path set.
+	// /v1 serves the pinned official method and path set plus explicit Core extensions.
 	var pinned struct {
 		Routes []string `json:"routes"`
 	}
@@ -336,6 +336,7 @@ func TestEveryRouteAuthenticatesItsCanonicalPath(t *testing.T) {
 	if err != nil || json.Unmarshal(raw, &pinned) != nil || len(pinned.Routes) == 0 {
 		t.Fatal("read pinned routes", err)
 	}
+	pinned.Routes = append(pinned.Routes, "GET /agents/sessions/{}/diagnostics", "GET /agents/sessions/{}/turns/{}/diagnostics")
 	served := []string{}
 	for route := range walked {
 		method, path, _ := strings.Cut(route, " ")
@@ -344,6 +345,7 @@ func TestEveryRouteAuthenticatesItsCanonicalPath(t *testing.T) {
 		}
 	}
 	slices.Sort(served)
+	pinned.Routes = append(pinned.Routes, "GET /agents/sessions/{}/input-receipts")
 	slices.Sort(pinned.Routes)
 	if !slices.Equal(served, pinned.Routes) {
 		t.Errorf("/v1 routes differ from the pinned set:\nserved %v\npinned %v", served, pinned.Routes)

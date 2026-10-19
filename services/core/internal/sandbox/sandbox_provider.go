@@ -52,6 +52,7 @@ type Reference struct{ TenantID, EnvironmentID, AllocationID string }
 
 type Bootstrap struct {
 	Workspace *workspacefs.Binding `json:",omitempty"`
+	Harness   string
 	Reference
 	SessionID, DeviceID, CoreURL, Credential string
 	NetworkAccess                            string
@@ -108,14 +109,15 @@ type SandboxProvider interface {
 	// The checkpoint lifecycle supplies exact-incarnation operations; Worker and
 	// Store remain the lifecycle owner. Its operations share one declaration.
 	Initial(context.Context, Reference) (Compute, error)
-	NewCompute(context.Context, Reference, uint64, *SnapshotIdentity) (Compute, error)
+	NewCompute(context.Context, Reference, uint64, *RetainedState) (Compute, error)
 	// GetCompute returns ErrNotFound only after the owning node verified that
 	// the exact incarnation no longer exists.
 	GetCompute(context.Context, Reference, Compute) (ComputeState, error)
+	RenewCompute(context.Context, Reference, Compute) (ComputeState, error)
 	Suspend(context.Context, SuspendRequest) (ComputeState, error)
 	Resume(context.Context, ResumeRequest) (ComputeState, error)
 	KillCompute(context.Context, Reference, Compute) error
-	DeleteSnapshot(context.Context, Reference, SnapshotIdentity) error
+	DeleteRetained(context.Context, Reference, RetainedState) error
 	RunCommandCompute(context.Context, Reference, Compute, Command) (CommandResult, error)
 	// ResumeCompute thaws only the same resident instance after an aborted pause.
 	ResumeCompute(context.Context, Reference, Compute) (ComputeState, error)
@@ -128,9 +130,20 @@ type SandboxProvider interface {
 // requiredOperations are supported by every Provider.
 var requiredOperations = []string{"Create", "GetInfo", "Renew", "Kill", "RunCommand"}
 
-// checkpointOperations are all supported or all unsupported: partial cleanup or
+// suspensionOperations are all supported or all unsupported: partial cleanup or
 // restore support cannot safely own a compute incarnation.
-var checkpointOperations = []string{"Initial", "NewCompute", "GetCompute", "Suspend", "Resume", "KillCompute", "DeleteSnapshot", "RunCommandCompute", "ResumeCompute"}
+var suspensionOperations = []string{"Initial", "NewCompute", "GetCompute", "RenewCompute", "Suspend", "Resume", "KillCompute", "DeleteRetained", "RunCommandCompute", "ResumeCompute"}
+
+// ValidateRetained checks the shared envelope; only its adapter interprets Data.
+func ValidateRetained(s RetainedState) error {
+	if s.Compatibility != (CheckpointCompatibility{}) && s.Compatibility.Validate() != nil {
+		return ErrInvalid
+	}
+	if s.Reference == "" || s.ID == "" || s.OperationID == "" || s.SourceID == "" || s.SourceName == "" || len(s.Data) == 0 || len(s.Data) > 64*1024 {
+		return ErrInvalid
+	}
+	return nil
+}
 
 // Compute identifies one incarnation of an allocation. Name is provider-derived.
 // ID is empty only until the original create or restore result is observed.
@@ -138,7 +151,7 @@ type Compute struct {
 	Generation   uint64
 	Name         string
 	ID           string
-	RestoredFrom *SnapshotIdentity
+	RestoredFrom *RetainedState
 }
 
 // CheckpointCompatibility identifies an adapter-verified private archive domain
@@ -155,16 +168,13 @@ func (c CheckpointCompatibility) Validate() error {
 	return nil
 }
 
-// SnapshotIdentity is provider evidence from a verified full snapshot. Core
-// persists it unchanged and records consumption separately; it never invents
-// paths, checksums, native checkpoint fields, or source identity.
-type SnapshotIdentity struct {
-	Compatibility    CheckpointCompatibility
+// RetainedState is adapter-owned recoverable state; Data stays opaque to Core.
+// Optional Compatibility declares portable checkpoint qualification.
+type RetainedState struct {
+	Compatibility    CheckpointCompatibility `json:",omitzero"`
 	Reference        string
 	ID               string
-	Digest           string
-	CheckpointID     string
-	CheckpointRoot   string
+	Data             string
 	OperationID      string
 	SourceGeneration uint64
 	SourceName       string
@@ -172,19 +182,15 @@ type SnapshotIdentity struct {
 }
 
 type ComputeState struct {
-	Compute Compute
-	// Status is the native state of Compute. "stopped" and "crashed" mean the
-	// adapter verified that the exact incarnation's process no longer exists;
-	// its record or disks can remain until KillCompute removes them.
-	Status            string
-	BootstrapComplete bool
-	Snapshot          *SnapshotIdentity
-	// SourceStopped proves the archive is durable and all source-local compute
-	// and capture obligations have settled, so another node can own restoration.
-	SourceStopped bool
-	// RestoreAttemptClosed echoes the exact Resume OperationID only after a
-	// never-dispatched attempt is durably closed against late native execution.
 	RestoreAttemptClosed string
+	Compute              Compute
+	Status               string
+	BootstrapComplete    bool
+	Retained             *RetainedState
+	ResourcesReleased    bool
+	// SuspendSettled without Retained also durably fences every late dispatch
+	// of this exact source and operation; native absence alone is insufficient.
+	SuspendSettled bool
 }
 
 // Terminated reports a verified stopped or crashed incarnation.
@@ -193,29 +199,68 @@ func (s ComputeState) Terminated() bool { return s.Status == "stopped" || s.Stat
 // ClosesRestoreAttempt validates a never-executed closure against the exact
 // persisted request. Absence without this operation-bound evidence is unknown.
 func (s ComputeState) ClosesRestoreAttempt(q ResumeRequest) bool {
-	return q.ObserveOnly && q.OperationID != "" && s.RestoreAttemptClosed == q.OperationID && s.Status == "absent" &&
-		s.Compute.ID == "" && q.Target.ID == "" && s.Compute.Name == q.Target.Name && s.Compute.Generation == q.Target.Generation &&
-		s.Compute.RestoredFrom != nil && q.Target.RestoredFrom != nil && *s.Compute.RestoredFrom == q.Snapshot && *q.Target.RestoredFrom == q.Snapshot &&
-		!s.BootstrapComplete && !s.SourceStopped && s.Snapshot == nil
+	return q.ReconcileOnly && q.OperationID != "" && s.RestoreAttemptClosed == q.OperationID && s.Status == "absent" &&
+		s.Compute.ID == q.Target.ID && s.Compute.Name == q.Target.Name && s.Compute.Generation == q.Target.Generation &&
+		s.Compute.RestoredFrom != nil && q.Target.RestoredFrom != nil && *s.Compute.RestoredFrom == q.Retained && *q.Target.RestoredFrom == q.Retained &&
+		!s.BootstrapComplete && !s.ResourcesReleased && s.Retained == nil
 }
 
 type SuspendRequest struct {
 	Reference   Reference
 	OperationID string
 	Source      Compute
-	Snapshot    *SnapshotIdentity
-	// Recovery observes the previous attempt and never starts a new capture.
-	ObserveOnly bool
+	Retained    *RetainedState
+	// Recovery settles the previous attempt without another capture.
+	// Ownership-verified cleanup of a durable retained artifact may complete.
+	ReconcileOnly bool
 }
 type ResumeRequest struct {
 	Workspace   *workspacefs.Binding `json:",omitempty"`
 	Reference   Reference
 	OperationID string
-	Snapshot    SnapshotIdentity
+	Retained    RetainedState
 	Target      Compute
 	// Recovery observes the previous target and never starts a new restore.
-	ObserveOnly bool
+	ReconcileOnly bool
 }
+
+// ValidateComputeResult binds an observation to its precommitted incarnation.
+func ValidateComputeResult(want, got Compute) error {
+	if got.ID == "" || got.Name != want.Name || got.Generation != want.Generation || (want.ID != "" && got.ID != want.ID) || (want.RestoredFrom == nil) != (got.RestoredFrom == nil) {
+		return ErrOwnership
+	}
+	if want.RestoredFrom != nil && *want.RestoredFrom != *got.RestoredFrom {
+		return ErrOwnership
+	}
+	return nil
+}
+
+// ValidateSuspendResult distinguishes settled rollback from uncertain native work.
+func ValidateSuspendResult(q SuspendRequest, s ComputeState) error {
+	if ValidateComputeResult(q.Source, s.Compute) != nil {
+		return ErrOwnership
+	}
+	if s.Retained == nil {
+		if !s.SuspendSettled || !s.BootstrapComplete {
+			return ErrComputeUnconfirmed
+		}
+		if !q.ReconcileOnly || s.ResourcesReleased || (s.Status != "running" && s.Status != "paused") {
+			return ErrComputeUnconfirmed
+		}
+		return nil
+	}
+	v := s.Retained
+	if ValidateRetained(*v) != nil || v.OperationID != q.OperationID || v.SourceID != q.Source.ID || v.SourceName != q.Source.Name || v.SourceGeneration != q.Source.Generation || (q.Retained != nil && *q.Retained != *v) {
+		return ErrOwnership
+	}
+	if !s.SuspendSettled || !s.BootstrapComplete || !s.ResourcesReleased || s.Status != "suspended" {
+		return ErrComputeUnconfirmed
+	}
+	return nil
+}
+
+// SuspensionStateVersion fences incompatible durable lifecycle shapes.
+const SuspensionStateVersion = "1"
 
 // ValidateProvider checks a constructed Provider's declaration.
 func ValidateProvider(p SandboxProvider) error {
@@ -251,15 +296,15 @@ func ValidateOperations(operations providercontract.Operations) error {
 			return fmt.Errorf("%w: required operation %s", providercontract.ErrContract, name)
 		}
 	}
-	for _, name := range checkpointOperations {
+	for _, name := range suspensionOperations {
 		if operations[name].State != operations["Initial"].State {
-			return fmt.Errorf("%w: incomplete checkpoint lifecycle", providercontract.ErrContract)
+			return fmt.Errorf("%w: incomplete suspension lifecycle", providercontract.ErrContract)
 		}
 	}
 	return nil
 }
 
-func SupportsCheckpoint(p SandboxProvider) bool {
+func SupportsSuspension(p SandboxProvider) bool {
 	return providercontract.Require(p, "Initial") == nil
 }
 

@@ -64,3 +64,17 @@ func TestIdlePolicyRejectsUnsupportedAndUnconfiguredDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Direct native suspension uses the same mutable idle policy as node checkpoints.
+func TestIdlePolicySupportsDirectNativeSuspension(t *testing.T) {
+	f := newFixture(t)
+	changes, _ := f.execution(t)
+	_, before := f.initialize(t, changes, setupE2BSelection())
+	if before.Mode != sandbox.DeploymentDirect || before.Suspension == nil || before.Suspension.IdleSeconds != 300 {
+		t.Fatal("direct suspension policy unavailable", before)
+	}
+	after, err := f.service.UpdateIdleSeconds(admin(t), 60)
+	if err != nil || after.Suspension == nil || after.Suspension.IdleSeconds != 60 || after.Generation != before.Generation || after.SpecificationDigest != before.SpecificationDigest {
+		t.Fatal("direct idle policy change rolled out or was rejected", after, err)
+	}
+}

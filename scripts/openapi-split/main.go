@@ -33,8 +33,7 @@ func main() {
 }
 
 // run exports Go-owned definitions for the public extension overlay and the
-// Core client types, and emits the two internal contracts. Public operations
-// come only from official OpenAPI.
+// Core client types, and emits the two internal contracts. Explicit extension operations are exported separately.
 func run(input, extensionOutput, coreJSONOutput, coreOutput, runtimeOutput string, check bool) error {
 	raw, err := os.ReadFile(input)
 	if err != nil {
@@ -44,7 +43,25 @@ func run(input, extensionOutput, coreJSONOutput, coreOutput, runtimeOutput strin
 	if err := yaml.Unmarshal(raw, &source); err != nil {
 		return err
 	}
-	if err := writeJSON(field(source.Content[0], "definitions"), extensionOutput); err != nil {
+	var definitions map[string]any
+	if err := field(source.Content[0], "definitions").Decode(&definitions); err != nil {
+		return err
+	}
+	var paths map[string]any
+	if err := field(source.Content[0], "paths").Decode(&paths); err != nil {
+		return err
+	}
+	projectPaths := map[string]any{}
+	for path, item := range paths {
+		if strings.HasPrefix(path, "/v1/") {
+			projectPaths[strings.TrimPrefix(path, "/v1")] = item
+		}
+	}
+	extensionJSON, err := json.Marshal(map[string]any{"definitions": definitions, "paths": projectPaths})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(extensionOutput, extensionJSON, 0644); err != nil {
 		return err
 	}
 	for _, output := range []struct {
