@@ -157,6 +157,11 @@ func (c *Conn) DeviceID() string { return c.deviceID }
 // / conn closes). Safe for concurrent callers — the write goroutine is
 // the only thing touching the underlying ws write path.
 func (c *Conn) Send(ctx context.Context, env proto.Envelope) error {
+	normalized, err := proto.NormalizeOutputText(env)
+	if err != nil {
+		return err
+	}
+	env = normalized
 	ack := make(chan error, 1)
 	wrapped := envelopeWithAck{env: env, ack: ack}
 	select {

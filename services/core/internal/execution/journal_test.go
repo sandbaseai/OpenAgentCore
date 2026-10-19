@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -157,5 +158,29 @@ func TestCancellationReceiptContinuitySurvivesFlushFailure(t *testing.T) {
 	}
 	if len(writer.events) != 64 {
 		t.Fatal("receipt or partial text lost")
+	}
+}
+
+func TestJournalNormalizesRawRuntimeOutput(t *testing.T) {
+	writer := &recoveringWriter{}
+	j := journal{writer: writer, next: 1}
+	for _, env := range []proto.Envelope{
+		{Type: proto.TypeCommandOutput, Payload: json.RawMessage(`{"id":"tool","delta":"a\u0000b"}`)},
+		{Type: proto.TypeToolCall, Payload: json.RawMessage(`{"id":"tool","stage":"after","result":{"output":"a\u0000b"},"observation":{"kind":"command","output":"a\u0000b"}}`)},
+	} {
+		if err := j.enqueue(env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := j.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 2 {
+		t.Fatal("lost events")
+	}
+	for _, event := range writer.events {
+		if strings.Contains(string(event.Payload), `\u0000`) || !strings.Contains(string(event.Payload), `a\\x00b`) {
+			t.Fatalf("unsafe output: %s", event.Payload)
+		}
 	}
 }

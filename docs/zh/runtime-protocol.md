@@ -1,12 +1,15 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 2daf6711170282ee521509c9305c25f3286ab6de48f84f589ad33f95768eabc3
+source_hash: 32f03a96fa327e830d810024da912ed4a2f866eec8d789513b13373717a5bd17
 ---
 
 此协议在 Runtime daemon 获取机器凭据后连接 Core 与 daemon，定义 daemon 连接上消息的含义和顺序。wire 类型、限制和验证器仅在 [`internal/agentdaemon/proto`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/internal/agentdaemon/proto) 中定义一次；Core 的 [gateway](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/runtimegateway) 与参考 Runtime 的 [dispatcher](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/apps/daemon/internal/dispatch) 都使用它们，因此无需同步第二套 payload schema。签发凭据和打开连接的 HTTP 路由见[机器连接 API](../../contracts/agents-api/zh/machine-api.md)。
 
 托管和自托管 Runtime 使用同一协议。Harness 通过 [Harness adapter 契约](../../contracts/agents-api/zh/harness-onboarding.md)接入，该契约负责 Runtime registry 后的 Executor 和 Turn 生命周期义务。
+
+命令输出按文本处理：`command_output.delta`、`tool_call.result` 的字符串值及 `tool_call.observation.output` 的字符串值将每个 NUL（U+0000）表示为四个可打印字符 `\x00`。Runtime 创建信封、最终 WebSocket 发送与 Core 日志入库应用同一条幂等规则，包括输出中嵌套的数组和对象。已有的字面反斜杠序列、对象键、命令参数、标识符和元数据保持不变。这使来自二进制的输出可读且可存入 PostgreSQL JSONB；此机制不用于二进制传输。
+
 
 ## 所有权与连接 {#ownership-and-connection}
 

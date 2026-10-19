@@ -6,6 +6,8 @@ This protocol connects Core to a Runtime daemon after the daemon has its machine
 
 Hosted and self-hosted Runtimes use the same protocol. A Harness joins through the [Harness adapter contract](../contracts/agents-api/harness-onboarding.md), which owns the Executor and Turn lifecycle obligations behind the Runtime registry.
 
+Command output is text: `command_output.delta`, `tool_call.result` string values and `tool_call.observation.output` string values render each NUL (U+0000) as the four printable characters `\x00`. Runtime envelope creation, final WebSocket sending and Core journal ingestion apply the same idempotent rule, including nested output arrays and objects. Existing literal backslash sequences, object keys, command arguments, identifiers and metadata are unchanged. This keeps binary-derived output readable and persistable in PostgreSQL JSONB; it is not a binary transport.
+
 ## Ownership and connection
 
 Core owns durable Session, Turn, input and Environment records, scheduling and reconciliation. Runtime owns native Executors, active Turns, transfer state and cleanup until settlement. A Sandbox Provider owns placement and the surrounding compute. Releasing an execution admission or closing an Executor never deletes, suspends or reclaims a sandbox. The daemon is not an isolation boundary; see [Runtime and outer isolation](./concepts.md#runtime-and-outer-isolation).

@@ -102,3 +102,65 @@ func TestExecutionDoesNotCompleteAfterEventPersistenceFailure(t *testing.T) {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }
+
+// Write raw envelopes to exercise Core's defense independently of NewEnvelope.
+func TestExecutionPersistsNULOutputAndCompletes(t *testing.T) {
+	h := newDispatchHarness(t)
+	ctx := context.Background()
+	for _, key := range []string{"binary-output", "next-turn"} {
+		input := h.message(key, "Read output safely")
+		result := h.run(ctx, input.TurnID)
+		h.read(testExecutionRequest)
+		h.write(input.TurnID, proto.TypeToolCall, proto.ToolCallPayload{ID: "tool", Name: "Bash", Stage: "before", Observation: &proto.ToolObservation{Kind: "command", Status: "in_progress", Command: "read"}})
+		for _, env := range []proto.Envelope{
+			{Type: proto.TypeCommandOutput, ID: input.TurnID, Payload: json.RawMessage(`{"id":"tool","delta":"中\u0000文\\u0000"}`)},
+			{Type: proto.TypeToolCall, ID: input.TurnID, Payload: json.RawMessage(`{"id":"tool","name":"Bash","stage":"after","result":{"output":"中\u0000文\\u0000"},"observation":{"kind":"command","status":"completed","command":"read","output":"中\u0000文\\u0000"}}`)},
+		} {
+			h.writeMu.Lock()
+			err := h.conn.WriteJSON(env)
+			h.writeMu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.write(input.TurnID, proto.TypeDone, proto.DonePayload{Content: "Done"})
+		h.finished(result, sessions.TurnCompleted)
+		events, err := h.s.ListTurnEvents(ctx, h.tenant, h.session.ID, input.TurnID, 0, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		for _, event := range events {
+			switch event.Kind {
+			case proto.TypeCommandOutput:
+				var output proto.CommandOutputPayload
+				if err := json.Unmarshal(event.Payload, &output); err != nil {
+					t.Fatal(err)
+				}
+				if output.Delta != `中\x00文\u0000` {
+					t.Fatalf("stream=%q", output.Delta)
+				}
+				found++
+			case proto.TypeToolCall:
+				var tool proto.ToolCallPayload
+				if err := json.Unmarshal(event.Payload, &tool); err != nil {
+					t.Fatal(err)
+				}
+				if tool.Stage == "before" {
+					continue
+				}
+				var output string
+				if err := json.Unmarshal(tool.Observation.Output, &output); err != nil {
+					t.Fatal(err)
+				}
+				if output != `中\x00文\u0000` || tool.Result["output"] != output {
+					t.Fatalf("snapshot=%q", output)
+				}
+				found++
+			}
+		}
+		if found != 2 {
+			t.Fatalf("missing output events: %d", found)
+		}
+	}
+}

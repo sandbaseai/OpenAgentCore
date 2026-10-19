@@ -63,6 +63,11 @@ func (j *journal) enqueue(env proto.Envelope) error {
 	default:
 		return nil
 	}
+	normalized, err := proto.NormalizeOutputText(env)
+	if err != nil {
+		return err
+	}
+	env = normalized
 	if len(env.Payload) > 512*1024 {
 		return sessions.ErrEventLimit
 	}
