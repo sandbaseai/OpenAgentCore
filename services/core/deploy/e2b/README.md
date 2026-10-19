@@ -27,7 +27,7 @@ The output file records `template` (the immutable `templateID:build_UUID`), the 
 
 ## Launch an application-managed Runtime
 
-For browser and video Skills, first build the [Creative Runtime tools image](../creative/README.md). The builder detects its bundled installer and restores system libraries and fonts in the E2B base after extraction; the pinned browser and npm payload stay under `/opt`. Its output records `creative_tools: true`. The resulting template still needs Runtime and Skill qualification before activation.
+For browser and video Skills, first build the [Creative Runtime tools image](../creative/README.md). The `e2b-template-build` workflow defaults to `tool_profile: creative` and wraps the combined Runtime from the selected source revision before packaging it. Select `base` explicitly when building a revision without these tools. The builder detects the bundled installer and restores system libraries and fonts in the E2B base after extraction; the pinned browser and npm payload stay under `/opt`. Its output records `creative_tools: true`. The resulting template still needs Runtime and Skill qualification before activation.
 
 1. Create a `self_hosted` Environment through Core and keep its ID and the exact returned `remote_url` (`wss://…/api/v1/agent-daemon/ws`). The VM must reach it. Set `workspace_directory` to `/workspace`, which the template binds to `/environment/workspace`.
 2. Obtain a connect-only executor key for that Environment; [Environment executor credentials](../../../../contracts/agents-api/environment-executor-credentials.md) owns issuance. The key file is `{"key_id":"UUID","executor_token":"SECRET"}`, with an optional `environment_id` restriction. Store it and the E2B API key in private files with mode `0600`.

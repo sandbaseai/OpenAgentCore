@@ -2,14 +2,16 @@
 
 Use this image for browser-based visual Skills. It adds Python with venv support, curl, ZIP tools, FFmpeg/ffprobe, Noto Latin/CJK/emoji fonts and a lockfile-pinned Playwright Chromium to a qualified Debian Bookworm Runtime. Skill-specific npm/Python packages remain project dependencies; this image does not choose their versions or install every Skill.
 
-Build from the repository root with an immutable qualified Linux amd64 Runtime image:
+Build from the repository root with a qualified Linux amd64 Runtime image pinned by its registry manifest digest:
 
 ```sh
 docker build --platform linux/amd64 \
-  --build-arg RUNTIME_IMAGE=sha256:QUALIFIED_RUNTIME_IMAGE_DIGEST \
+  --build-arg RUNTIME_IMAGE=registry.example/runtime@sha256:QUALIFIED_MANIFEST_DIGEST \
   -f deploy/distribution/CreativeRuntime.Dockerfile -t your-creative-runtime .
 docker run --rm --entrypoint oac-creative-check your-creative-runtime
 ```
+
+For a local build, use a unique source-revision tag and verify its configuration ID before building. A bare `sha256:` configuration ID is not a registry image reference for Dockerfile `FROM`.
 
 `OAC_RUNTIME_TOOL_ENV_FILE` points to the Runtime-owned tool environment containing browser paths for Playwright, HyperFrames and Puppeteer. The image owns this file; Session preparation reads it using the existing explicit tool-environment contract. If an operator needs additional tool variables, create one combined private file and select it instead. Never put credentials into the image.
 
