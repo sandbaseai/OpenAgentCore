@@ -71,3 +71,28 @@ func TestConfigurationInputRejectsUnknownAndPrivateFields(t *testing.T) {
 		t.Fatal("explicit replacement lost")
 	}
 }
+
+func TestCredentialAccessComparison(t *testing.T) {
+	a := ConfigurationAdapter{}
+	original := &DeploymentConfiguration{APIKey: "fixture", Template: "old"}
+	for _, tc := range []struct {
+		name           string
+		config         *DeploymentConfiguration
+		equal, invalid bool
+	}{
+		{"defaults normalized", &DeploymentConfiguration{APIKey: "fixture", Template: "new", APIURL: OfficialAPIURL, Domain: OfficialDomain}, true, false},
+		{"key differs", &DeploymentConfiguration{APIKey: "other"}, false, false},
+		{"API URL differs", &DeploymentConfiguration{APIKey: "fixture", APIURL: "https://other.e2b.app", Domain: OfficialDomain}, false, false},
+		{"domain differs", &DeploymentConfiguration{APIKey: "fixture", APIURL: OfficialAPIURL, Domain: "api.e2b.app"}, false, false},
+		{"invalid endpoint", &DeploymentConfiguration{APIKey: "fixture", APIURL: "http://invalid"}, false, true},
+		{"missing credential", &DeploymentConfiguration{}, false, true},
+		{"nil configuration", nil, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			equal, err := a.CredentialAccessEqual(original, tc.config)
+			if equal != tc.equal || (err != nil) != tc.invalid {
+				t.Fatalf("equal=%v, err=%v", equal, err)
+			}
+		})
+	}
+}

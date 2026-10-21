@@ -58,7 +58,7 @@ print(json.dumps(out))
 			}
 			current := deployment.Setup{InstallationID: uuid.NewString(), Provider: "e2b", Mode: "direct", Generation: 3, UsesCredential: true,
 				Specification: sandbox.DeploymentSpec{Resources: sandbox.Resources{CPUs: 2, MemoryMiB: 2048}},
-				Configuration: &e2b.DeploymentConfiguration{APIKey: "PRIVATE-KEY", Template: "PRIVATE-TEMPLATE:" + uuid.NewString()}}
+				Configuration: &e2b.DeploymentConfiguration{CredentialSupplied: true, APIKey: "PRIVATE-KEY", Template: "PRIVATE-TEMPLATE:" + uuid.NewString()}}
 			retained := current
 			retained.Generation = 1
 			ref := deployment.Allocation{ID: uuid.NewString(), TenantID: uuid.NewString(), EnvironmentID: uuid.NewString(), DeploymentGeneration: 1}

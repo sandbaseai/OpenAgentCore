@@ -218,3 +218,7 @@ func (nodeConfigurationAdapter) DiscoverSelection(context.Context, sandbox.Direc
 func (nodeConfigurationAdapter) VerifyCredential(context.Context, sandbox.DirectConfig, []sandbox.Reference) error {
 	return &providercontract.UnsupportedError{Operation: "VerifyCredential", Reason: "credentials_not_required"}
 }
+
+func (a nodeConfigurationAdapter) CredentialAccessEqual(x, y sandbox.Configuration) (bool, error) {
+	return a.Equal(x, y)
+}

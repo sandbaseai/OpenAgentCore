@@ -210,3 +210,7 @@ func (l leaseSetup) CancelSandboxReset(context.Context, uint64) (deployment.View
 	l.t.Fatal("unexpected call to CancelSandboxReset")
 	return deployment.View{}, nil
 }
+
+func (a regionalCodec) CredentialAccessEqual(x, y sandbox.Configuration) (bool, error) {
+	return a.Equal(x, y)
+}

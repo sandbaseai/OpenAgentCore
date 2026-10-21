@@ -157,7 +157,7 @@ print(json.dumps(result))
 				t.Fatal(err)
 			}
 			next := current
-			next.Configuration = &e2b.DeploymentConfiguration{APIKey: tc.candidateKey, Template: tc.candidateTemplate + build}
+			next.Configuration = &e2b.DeploymentConfiguration{CredentialSupplied: true, APIKey: tc.candidateKey, Template: tc.candidateTemplate + build}
 			candidate, err := s.prepare(t.Context(), next)
 			if err != nil {
 				t.Fatal(err)

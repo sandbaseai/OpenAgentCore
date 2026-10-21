@@ -146,6 +146,18 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 			}
 			return err
 		}
+		adapter, err := s.registry.Lookup(setup.Provider)
+		if err != nil {
+			return err
+		}
+		sameAccess, err := adapter.Configuration.CredentialAccessEqual(current.Configuration, setup.Configuration)
+		if err != nil {
+			return err
+		}
+		if sameAccess && !setup.Configuration.ReplacesCredential() {
+			phase, generation = "candidate_selection", setup.Generation
+			return verify(setup, nil)
+		}
 		withCandidateKey := func(value deployment.Setup, refs []sandbox.Reference) error {
 			value, err := s.deployment.WithCredential(value, setup)
 			if err != nil {
