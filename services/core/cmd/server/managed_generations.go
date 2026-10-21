@@ -6,6 +6,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
@@ -114,7 +115,13 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 		}
 		return release, nil
 	}
-	candidate.VerifyCredential = func(ctx context.Context) error {
+	candidate.VerifyCredential = func(ctx context.Context) (verificationErr error) {
+		phase, generation, refsCount := "load_current", uint64(0), 0
+		defer func() {
+			if verificationErr != nil {
+				log.Warn(ctx, "sandbox credential verification failed", "phase", phase, "generation", generation, "refs_count", refsCount, "error_class", credentialVerificationErrorClass(verificationErr))
+			}
+		}()
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		// Preserve the committed credential until its ownership anchor is verified.
@@ -127,6 +134,7 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 		if err != nil {
 			return err
 		}
+		phase, generation = "committed_anchor", current.Generation
 		if current.Provider != setup.Provider {
 			return &deployment.ResetRequiredError{CurrentProvider: current.Provider, RequestedProvider: setup.Provider}
 		}
@@ -145,20 +153,24 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 			}
 			return verify(value, refs)
 		}
+		phase = "candidate_current"
 		if err := withCandidateKey(current, nil); err != nil {
 			return err
 		}
+		phase, generation = "candidate_selection", setup.Generation
 		if err := verify(setup, nil); err != nil {
 			return err
 		}
 		generations := map[uint64]deployment.Setup{current.Generation: current}
 		for after := int64(-1); ; {
+			phase, generation = "load_generations", 0
 			page, err := s.deployment.GenerationPage(ctx, after)
 			if err != nil {
 				return err
 			}
 			for _, g := range page {
 				generations[g.Generation] = g
+				phase, generation = "retained_generation", g.Generation
 				if err := withCandidateKey(g, nil); err != nil {
 					return err
 				}
@@ -169,6 +181,7 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 			}
 		}
 		for after := ""; ; {
+			phase, generation, refsCount = "load_allocations", 0, 0
 			page, err := s.allocations.CredentialAllocations(ctx, after)
 			if err != nil {
 				return err
@@ -178,8 +191,9 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 				refsByGeneration[a.DeploymentGeneration] = append(refsByGeneration[a.DeploymentGeneration], sandbox.Reference{TenantID: a.TenantID, EnvironmentID: a.EnvironmentID, AllocationID: a.ID})
 				after = a.ID
 			}
-			for generation, refs := range refsByGeneration {
-				owner, ok := generations[generation]
+			for ownerGeneration, refs := range refsByGeneration {
+				phase, generation, refsCount = "allocation_references", ownerGeneration, len(refs)
+				owner, ok := generations[ownerGeneration]
 				if !ok {
 					return sandbox.ErrConfigurationUnconfirmed
 				}
@@ -194,4 +208,25 @@ func (s *managedSetup) routeGenerations(candidate execution.PreparedRuntimeDeplo
 		return nil
 	}
 	return candidate, nil
+}
+
+// Keep diagnostic classes bounded; provider errors may contain private text.
+func credentialVerificationErrorClass(err error) string {
+	var reset *deployment.ResetRequiredError
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.As(err, &reset):
+		return "reset_required"
+	case errors.Is(err, sandbox.ErrCredentialRejected):
+		return "credential_rejected"
+	case errors.Is(err, sandbox.ErrCredentialOwnership):
+		return "credential_ownership"
+	case errors.Is(err, sandbox.ErrConfigurationUnconfirmed):
+		return "verification_unconfirmed"
+	default:
+		return "internal_error"
+	}
 }

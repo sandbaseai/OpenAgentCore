@@ -1,7 +1,7 @@
 ---
 title: "沙箱部署"
 source: contracts/agents-api/sandbox-deployment.md
-source_hash: 39cf0dbef5b3ec0a214625144d70393f134b5612f7664aedcf0353cc0add9bec
+source_hash: 3f24f44e53649f44dbd91addeafdcbcdd3cb3ba82679aacff822ebc757809729
 ---
 
 沙箱部署为 Core 管理的 `openai_hosted` 执行选择沙箱提供商、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness。部署可以保持未配置状态，没有节点；此时它拒绝托管准入。
@@ -129,6 +129,8 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 | `503 sandbox_verification_unconfirmed` | 回执缺失或未结算，或读取未得到确认 |
 
 不会返回提供商文本或凭据。写入操作及其 `change` 或 `replace_credential` 审计条目共用一个事务。Core 从已认证请求中派生管理员审计来源，并使用可选的 `X-Core-Console-Actor` 请求头作为操作者标签。替换操作会短暂对提供商调用设置栅栏，即使调用方已取消，也会等待辅助进程实际退出，并在提交前再次验证；辅助进程退出并不能证明远程 Create 已结算。栅栏和读取均有时间边界，失败时会保留旧密钥和生命周期。成功响应后，所有保留代次管理都使用已提交的密钥；只有在清理完成后，才能在 E2B 中撤销旧密钥，绝不能提前撤销。模板和资源更改不会排空生命周期。
+
+凭据验证失败会输出结构化 `sandbox credential verification failed` 日志，字段包括固定的 `phase` 与 `error_class`、数字 `generation` 和 `refs_count`。阶段区分读取当前选择、验证已提交的所有权锚点、使用候选密钥检查当前选择、检查候选选择、读取保留代次、检查某个保留代次、读取分配，以及检查分配引用。读取尚未选定代次时 generation 为零；候选选择报告其输入代次，不代表新提交的代次。日志不包含提供商错误文本、配置、模板、端点或凭据。
 
 ## 代次所有权与推出 {#generation-ownership-and-rollout}
 
