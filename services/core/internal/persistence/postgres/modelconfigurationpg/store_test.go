@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
@@ -28,7 +29,7 @@ func TestDefaultsAreEncryptedAuditedAndReplaced(t *testing.T) {
 	if listed := f.list(t); len(listed) != 1 || listed[0].Provider != *provider.SafeView() {
 		t.Fatal("safe fields not listed", listed)
 	}
-	if got := f.resolve(t); got == nil || *got.Provider != provider {
+	if got := f.resolve(t); got == nil || !reflect.DeepEqual(*got.Provider, provider) {
 		t.Fatal("default did not open", got)
 	}
 	if got, err := f.service.Resolve(t.Context(), "mcode"); err != nil || got != nil {
@@ -37,7 +38,7 @@ func TestDefaultsAreEncryptedAuditedAndReplaced(t *testing.T) {
 	before := f.resolve(t).Revision
 	replacement := v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://replacement.example/v1", APIKey: "replacement-key"}
 	f.replace(t, replacement)
-	if got := f.resolve(t); *got.Provider != replacement || got.Revision == before {
+	if got := f.resolve(t); !reflect.DeepEqual(*got.Provider, replacement) || got.Revision == before {
 		t.Fatal("replacement not complete", got)
 	}
 	for range 2 {

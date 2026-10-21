@@ -74,9 +74,9 @@ func TestWriteCodexProviderConfig_FullProvider(t *testing.T) {
 		`name = "mygw"`,
 		`base_url = "https://platform-api.example.com/v1"`,
 		`env_key = "OAC_CODEX_PROVIDER_API_KEY"`,
-		`[model_providers.oac.http_headers]`,
-		`"X-Sub-Module" = "codex-internal"`,
-		`"X-Request-ID" = "abc"`,
+		`[model_providers.oac.env_http_headers]`,
+		`"X-Sub-Module" = "OAC_CODEX_MODEL_HEADER_1"`,
+		`"X-Request-ID" = "OAC_CODEX_MODEL_HEADER_0"`,
 		`[model_providers.oac.query_params]`,
 		`"api-version" = "2025-04-01-preview"`,
 	} {
@@ -286,5 +286,33 @@ func TestExplicitStateRootSurvivesRuntimeReplacement(t *testing.T) {
 	}
 	if _, err = allocCodexHome(unavailable, "stable-session"); err == nil {
 		t.Fatal("unavailable explicit root fell back")
+	}
+}
+
+func TestProviderHeadersRebuiltForEveryTurn(t *testing.T) {
+	root := t.TempDir()
+	opts := map[string]any{"model": "fixture", "model_provider": map[string]any{"protocol": "responses", "base_url": "https://example.test/v1", "api_key": "fixture", "headers": map[string]string{"X-Activity": "private-header-canary"}}}
+	for range 3 {
+		plan, err := BuildSessionPlan(root, "persistent", opts, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := mustReadFile(t, filepath.Join(nativeHomeFromPlan(plan), "config.toml"))
+		if strings.Contains(body, "private-header-canary") || !strings.Contains(body, "env_http_headers") {
+			t.Fatal("unsafe header projection")
+		}
+		if !slices.Contains(plan.Env, "OAC_CODEX_MODEL_HEADER_0=private-header-canary") {
+			t.Fatal("missing header environment")
+		}
+		found := false
+		for _, option := range plan.ExtraConfig {
+			if option[0] == "shell_environment_policy.exclude" && strings.Contains(option[1], "OAC_CODEX_MODEL_HEADER_0") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("header exposed to tools")
+		}
+		plan.Cleanup()
 	}
 }

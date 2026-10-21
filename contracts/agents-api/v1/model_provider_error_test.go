@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +42,41 @@ func TestModelProviderErrorMessagesAndPrecedence(t *testing.T) {
 	}
 	if err := valid.ValidateHarness("codex"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestModelProviderHeadersAreWriteOnly(t *testing.T) {
+	provider := &ModelProviderInput{Protocol: "responses", BaseURL: "https://example.test", APIKey: "fixture", Headers: map[string]string{"X-Secret": "private-header-canary"}}
+	if err := provider.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(provider.SafeView())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "X-Secret") || strings.Contains(string(body), "private-header-canary") || strings.Contains(string(body), "headers") {
+		t.Fatal("safe view disclosed headers")
+	}
+	for _, raw := range []string{`{"protocol":"responses","base_url":"https://example.test","api_key":"fixture","headers":{"X-A":null}}`, `{"protocol":"responses","base_url":"https://example.test","api_key":"fixture","headers":{"X-A":"a","X-A":"b"}}`} {
+		var input ModelProviderInput
+		if json.Unmarshal([]byte(raw), &input) == nil {
+			t.Fatal("invalid headers decoded")
+		}
+	}
+}
+
+func TestClaudeProviderHeadersAdmission(t *testing.T) {
+	provider := &ModelProviderInput{Protocol: "anthropic", BaseURL: "https://example.test", APIKey: "fixture", Headers: map[string]string{"X-Activity": "daily-free"}}
+	if err := provider.ValidateHarness("claude_sdk"); err != nil {
+		t.Fatal(err)
+	}
+	provider.Headers = nil
+	if err := provider.ValidateHarness("claude_sdk"); err != nil {
+		t.Fatal(err)
+	}
+	provider.Headers = map[string]string{"Authorization": "override"}
+	var typed *ModelProviderError
+	if err := provider.ValidateHarness("claude_sdk"); !errors.As(err, &typed) || typed.Code != "model_provider_headers_invalid" {
+		t.Fatal("authentication override accepted")
 	}
 }
