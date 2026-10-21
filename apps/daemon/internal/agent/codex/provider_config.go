@@ -33,8 +33,7 @@ type providerConfig struct {
 	BaseURL string
 	// BearerToken is supplied only through the native env_key mechanism.
 	BearerToken string
-	// HTTPHeaders is forwarded as `[model_providers.oac.http_headers]`.
-	// Keys / values rendered as TOML basic strings.
+	// HTTPHeaders are supplied through native environment references.
 	HTTPHeaders map[string]string
 	// QueryParams is forwarded as `[model_providers.oac.query_params]`,
 	// used by Azure (api-version=2025-04-01-preview).
@@ -109,11 +108,11 @@ func writeCodexProviderConfig(codexHome string, cfg providerConfig) error {
 		sort.Strings(keys)
 		b.WriteString("\n[model_providers.")
 		b.WriteString(oacProviderSlug)
-		b.WriteString(".http_headers]\n")
-		for _, k := range keys {
+		b.WriteString(".env_http_headers]\n")
+		for i, k := range keys {
 			b.WriteString(tomlQuoteString(k))
 			b.WriteString(" = ")
-			b.WriteString(tomlQuoteString(cfg.HTTPHeaders[k]))
+			b.WriteString(tomlQuoteString(providerHeaderEnv(i)))
 			b.WriteByte('\n')
 		}
 	}
@@ -160,3 +159,5 @@ func appendConfigTOML(path string, body string) error {
 	}
 	return nil
 }
+
+func providerHeaderEnv(index int) string { return fmt.Sprintf("OAC_CODEX_MODEL_HEADER_%d", index) }

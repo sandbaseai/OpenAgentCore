@@ -221,3 +221,15 @@ test("workspace discovery preserves native file tools and the function boundary"
   assert.equal((await profile.canUseTool("ToolSearch", {}, {...context, agentID:"child"})).behavior,"deny");
   assert.equal((await profile.canUseTool("ToolSearch", {}, {...context, signal:AbortSignal.abort()})).behavior,"deny");
 });
+
+test("workspace forwards selected activity headers and preserves explicit empty selection", t => {
+  const { dirs, config } = fixture(t);
+  config.env_names.push("ANTHROPIC_CUSTOM_HEADERS");
+  config.tool_env = { ANTHROPIC_CUSTOM_HEADERS: "X-Stale: tool-env" };
+  for (const selected of ["X-Activity: daily-free\nX-Empty: ", ""]) {
+    process.env.ANTHROPIC_CUSTOM_HEADERS = selected;
+    assert.equal(new WorkspaceProfile(dirs.workspace, config).options.env.ANTHROPIC_CUSTOM_HEADERS, selected);
+  }
+  delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+  assert.throws(() => new WorkspaceProfile(dirs.workspace, config), /invalid_request/);
+});

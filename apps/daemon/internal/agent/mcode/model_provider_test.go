@@ -15,6 +15,7 @@ func TestOptionsModelProviderProtocols(t *testing.T) {
 		t.Run(tc.protocol, func(t *testing.T) {
 			req := testRequest(t)
 			req.AgentOptions["model_provider"].(map[string]any)["protocol"] = tc.protocol
+			req.AgentOptions["model_provider"].(map[string]any)["headers"] = map[string]string{"X-Activity": "private-header"}
 			req.AgentOptions["model"] = "chosen-model"
 			opts, err := prepareOptions(testStateRoot(t), req)
 			if err != nil {
@@ -30,7 +31,7 @@ func TestOptionsModelProviderProtocols(t *testing.T) {
 			}
 			want := map[string]any{"oac": map[string]any{
 				"name": "Configured provider", "kind": "custom", "enabled": true, "api": tc.api,
-				"options": map[string]any{"baseURL": "https://provider.example/v1", "apiKey": "fixture-key"},
+				"options": map[string]any{"baseURL": "https://provider.example/v1", "apiKey": "fixture-key", "headers": map[string]any{"X-Activity": "private-header"}},
 				"models": map[string]any{"chosen-model": map[string]any{
 					"name": "chosen-model", "tool_call": true,
 					"limit": map[string]any{"context": float64(64000), "output": float64(4096)},

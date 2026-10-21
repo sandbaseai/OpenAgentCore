@@ -1,7 +1,7 @@
 ---
 title: "模型执行"
 source: contracts/agents-api/model-execution.md
-source_hash: d26140f4fdaa6d0c68dbeff52a2318ed213799966b224302eb04b9ec718f5fc3
+source_hash: 1d10a63348861b53281f173f58dacc682b79453c8ea282b768e31d7ef475e1dd
 ---
 
 每个 Session 都运行一个 Harness，并使用一个模型提供商。Core 通过三个固定版本上游协议未定义的 Core 扩展来选择它们：`x_agents_core.harness` 选择 Harness，`x_agents_core.model_provider` 提供端点和密钥，`x_agents_core.harness_config` 携带原生模型参数。Core 没有提供商目录、模型别名解析或产品权限模型；除 Session 和已保存 Agent 配置包外，唯一存储的配置包是每个 Harness 的一个 [deployment default](#deployment-defaults)。本文档定义 Harness—模型提供商协议：[`internal/modelprovider/config.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/modelprovider/config.go) 负责验证冻结的提供商连接，每个 Harness 则通过 [`internal/harnessconfig/harness.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/harnessconfig/harness.go) 声明其协议和原生参数。
@@ -142,3 +142,11 @@ Harness 和默认模型读取结果包含可空的 `last_used_at`、`last_error_
 ## 验收 {#acceptance}
 
 `TestNativeModelProtocolPublicExecution`（`services/core/tests/integration/model_protocol_native_test.go`）结合 `services/core/tests/official_model_protocol_native.py`，通过固定版本的官方客户端针对真实提供商 API 运行每个 Harness。当 `OAC_TEST_OFFICIAL_SDK_PYTHON`、`OAC_TEST_NATIVE_DAEMON_BIN`、`OAC_TEST_NATIVE_PROOF_DIR` 和 `OAC_TEST_MODEL_PROTOCOL_OPTIONS` 均已设置时运行；最后一项指定一个私有模型设置文件。绝不提交这些设置或打印其值。
+
+## Model request headers
+
+可选的只写 `model_provider.headers` 对象为模型请求提供字面 HTTP Header。它只能用于活动标识等非敏感元数据；不得放入凭据、令牌或机密内容。原生工具可能读取这些值，也可能在工具输出中包含它们。它属于完整的 Provider 配置：Core 将它与 API Key 一起加密，在 Session 创建时冻结，并在每次调度（包括恢复后的 Session）中传递。后续消息继承这一冻结配置，不能覆盖 Header。保存的 Agent 和部署默认配置的响应均不返回 Header 名称或值。修改 Agent 或部署默认配置只影响新 Session。
+
+Header 最多包含 32 项。名称遵循 HTTP token 语法，最多 128 字节；值只能包含可打印 ASCII，最多 4096 字节，且首尾不能有空格。允许空值。所有名称和值的总长度不能超过 16384 字节。不区分大小写的重复名称会被拒绝；接受的名称保留原始拼写。以下认证、传输和 SDK 管理的 Header 为保留项：`anthropic-version`, `anthropic-beta`, `openai-beta`, `authorization`、`proxy-authorization`、`x-api-key`、`api-key`、`x-goog-api-key`、`host`、`connection`、`proxy-connection`、`keep-alive`、`proxy-authenticate`、`te`、`trailer`、`transfer-encoding`、`upgrade`、`content-length`、`content-type`、`accept`、`accept-encoding`、`cookie`、`set-cookie` 和 `user-agent`。无效输入返回 `model_provider_headers_invalid`，不会回显提交的值。
+
+Codex 使用原生 `env_http_headers` 环境变量引用，并将值排除在 Shell 环境之外。MiniMax 使用私有 Runtime 配置中的 Provider `options.headers`。Claude SDK 使用原生 `ANTHROPIC_CUSTOM_HEADERS`，该变量也会进入 Bash 工具。当冻结配置不含 Header 时，显式空值会清除环境中或之前 Provider 的 Header。各适配器通过 `harnessconfig.Configuration.AcceptsProviderHeaders` 声明支持情况，Core 不按 Harness 名称分支。原生模型客户端在每次模型调用（包括重试和工具续调）中应用 Header。Core 不会自动将这些 Header 附加到 MCP、工具 HTTP 请求或其他目标。工具可能读取元数据后自行转发或放入输出。Header 不代表授权或在 Core 中选择计费规则；这些决策由应用和模型服务端负责。

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"maps"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
@@ -19,8 +20,12 @@ func resolvedSessionModelOptions(provider *v1.ModelProviderInput, engine string)
 	if err := provider.ValidateHarness(engine); err != nil {
 		return nil, err
 	}
-	return map[string]any{"model_provider": map[string]any{
+	bundle := map[string]any{
 		"protocol": string(provider.Protocol), "base_url": provider.BaseURL, "api_key": provider.APIKey,
 		"context_window": provider.ContextWindow, "max_output_tokens": provider.MaxOutputTokens,
-	}}, nil
+	}
+	if len(provider.Headers) != 0 {
+		bundle["headers"] = maps.Clone(provider.Headers)
+	}
+	return map[string]any{"model_provider": bundle}, nil
 }
