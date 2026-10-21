@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -123,7 +124,18 @@ func BuildSessionPlan(stateRoot, agentStateKey string, opts map[string]any, cont
 		// shell_environment_policy is applied. Do not persist provider credentials.
 		plan.DisableFeatures = append(plan.DisableFeatures, "shell_snapshot")
 		env = append(env, providerAPIKeyEnv+"="+provider.BearerToken)
-		plan.ExtraConfig = append(plan.ExtraConfig, [2]string{"shell_environment_policy.exclude", "[" + strconv(providerAPIKeyEnv) + "]"})
+		excluded := []string{strconv(providerAPIKeyEnv)}
+		names := make([]string, 0, len(provider.HTTPHeaders))
+		for name := range provider.HTTPHeaders {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for i, name := range names {
+			reference := providerHeaderEnv(i)
+			env = append(env, reference+"="+provider.HTTPHeaders[name])
+			excluded = append(excluded, strconv(reference))
+		}
+		plan.ExtraConfig = append(plan.ExtraConfig, [2]string{"shell_environment_policy.exclude", "[" + strings.Join(excluded, ",") + "]"})
 	}
 
 	plan.Env = env
@@ -203,7 +215,7 @@ func normaliseProviderConfig(raw any) (providerConfig, bool, error) {
 	if err != nil {
 		return providerConfig{}, false, err
 	}
-	return providerConfig{BaseURL: provider.BaseURL, BearerToken: provider.APIKey, WireAPI: "responses"}, true, nil
+	return providerConfig{BaseURL: provider.BaseURL, BearerToken: provider.APIKey, WireAPI: "responses", HTTPHeaders: provider.Headers}, true, nil
 }
 
 func stringOpt(opts map[string]any, key string) string {

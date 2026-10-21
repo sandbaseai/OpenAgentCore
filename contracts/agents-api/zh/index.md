@@ -1,7 +1,7 @@
 ---
 title: "Agents API 覆盖台账"
 source: contracts/agents-api/index.md
-source_hash: cea3a2dc0e4fab5ef4891531d1111a74531fe10b6e21209f27b572b28b9a8d79
+source_hash: 001be7cc7060c4591d1fe053b8de6fd3eea31eccaa4ed9f9fe246fb5efae8298
 ---
 
 Core 旨在以下方固定版本为准支持完整的 OpenAI Agents API（[public API rule](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/AGENTS.md#public-api)）。本台账记录 Core 对各项资源实现了哪些内容、哪些契约保存其详细信息，并列出相对于 OpenAI 服务的所有已知差异和所有未解决缺口。[API namespaces and credentials](../../../docs/zh/api/index.md) 说明谁调用哪些 API；[Agents API guide](../../../docs/zh/api/public-agent-api.md) 介绍使用方法。
@@ -165,3 +165,7 @@ Core 自身字段位于 `x_agents_core` 中（[Core extensions](../../../docs/zh
 - Environment file 列表的默认值（limit 为 20、默认路径为工作区根目录、不递归、page-token 失效）、50 MiB 的 `file_id` 复制上限，以及创建时的检查顺序。
 - Artifact 对硬链接、特殊文件和链接形式的 `outputs` 目录的捕获，内容字节变化后的重新发布，以及内容标头和范围。
 - Vault 和 Credential 的错误与重试语义、并发写入下的分页、删除后的可见性、依据官方规范化处理进行精确 URL 匹配、OAuth 刷新的时机和错误，以及受限密钥范围。
+
+## Model header qualification
+
+[模型请求 Header 协议](./model-execution.md#model-request-headers) 通过原生客户端配置传递非敏感元数据。可选的 synthetic HTTP 捕获测试覆盖固定版本 Codex 0.153.4、Claude SDK 0.3.269 和 MiniMax Chat Completions 的重试、工具续调、同一 executor/query 内的多条消息，以及关闭后恢复。Claude 的 Go 准备阶段测试验证冻结 Header 投影、workspace 允许项及旧环境值清除；原生 SDK 捕获同时确认模型请求传递与 Bash 可读性。这里不构成工具保密边界。MiniMax Anthropic 捕获测试覆盖重试、executor 复用与关闭后恢复；Responses 传输有配置测试和源码证据，尚未完成原生 HTTP 捕获。这些测试使用模拟响应，不代表真实模型服务或已部署 Runtime 的验收。

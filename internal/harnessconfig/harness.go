@@ -51,6 +51,8 @@ type Provider struct {
 // only for direct adapters whose model connection remains native-owned.
 type Configuration struct {
 	Providers []Provider
+	// AcceptsProviderHeaders declares native delivery of non-sensitive model request metadata.
+	AcceptsProviderHeaders bool
 	// ValidateNativeConfig belongs to the selected adapter, never Core.
 	ValidateNativeConfig func(proto.HarnessConfig) bool
 }

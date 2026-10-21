@@ -46,7 +46,7 @@ func TestPublicSchemaPreservesOfficialDefinitions(t *testing.T) {
 	owners := map[string]bool{"AgentResource": true, "CreateAgentParams": true, "UpdateAgentParams": true, "SessionAgentConfigParam": true, "SessionAgentResource": true, "CreateAgentSessionParams": true, "SessionResource": true}
 	// Extension dependencies retain their producing Go package names.
 	for name, value := range schemas {
-		if strings.HasPrefix(name, "v1.") || name == "modelprovider.Protocol" {
+		if strings.HasPrefix(name, "v1.") || name == "modelprovider.Protocol" || name == "modelprovider.Headers" {
 			continue
 		}
 		schema := value.(map[string]any)
@@ -130,5 +130,46 @@ func TestPublicOperationsPreserveOfficialContract(t *testing.T) {
 	}
 	if count != 58 || len(published) != 0 {
 		t.Fatalf("expected pinned 58 operations, got %d, extra paths %v", count, published)
+	}
+}
+
+func TestModelHeadersSchemaIsExplicitCoreExtension(t *testing.T) {
+	upstream := contractDocument(t, "upstream/openapi.json")["components"].(map[string]any)["schemas"].(map[string]any)
+	public := contractDocument(t, "openapi.yaml")["components"].(map[string]any)["schemas"].(map[string]any)
+	if _, exists := upstream["modelprovider.Headers"]; exists {
+		t.Fatal("Core extension collides with official schema")
+	}
+	want := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
+	if !reflect.DeepEqual(public["modelprovider.Headers"], want) {
+		t.Fatal("Core header extension must remain a string map")
+	}
+}
+
+func TestModelHeadersSchemaPreservesNullableInput(t *testing.T) {
+	schemas := contractDocument(t, "openapi.yaml")["components"].(map[string]any)["schemas"].(map[string]any)
+	input := schemas["v1.ModelProviderInput"].(map[string]any)["properties"].(map[string]any)
+	variants, ok := input["headers"].(map[string]any)["anyOf"].([]any)
+	if !ok || len(variants) != 2 {
+		t.Fatal("headers input must accept its map type or null")
+	}
+	nullable, ref := false, false
+	for _, raw := range variants {
+		variant := raw.(map[string]any)
+		if variant["type"] == "null" {
+			nullable = true
+		}
+		if all, ok := variant["allOf"].([]any); ok && len(all) == 1 && all[0].(map[string]any)["$ref"] == "#/components/schemas/modelprovider.Headers" {
+			ref = true
+		}
+	}
+	if !nullable || !ref {
+		t.Fatal("nullable headers lost its string-map reference")
+	}
+	generated, err := os.ReadFile("../../../packages/agents-client/src/generated/public-api.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(generated), "headers?: Headers | null;") {
+		t.Fatal("TypeScript client must accept omitted, null, and map headers")
 	}
 }

@@ -17938,6 +17938,12 @@
         "additionalProperties": false,
         "description": "Confirmation that a vault credential was deleted."
       },
+      "modelprovider.Headers": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
       "modelprovider.Protocol": {
         "enum": [
           "anthropic",
@@ -18085,6 +18091,21 @@
           },
           "context_window": {
             "type": "integer"
+          },
+          "headers": {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/modelprovider.Headers"
+                  }
+                ],
+                "description": "Headers carry non-sensitive metadata. Resource responses omit them, but tools may read them."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "max_output_tokens": {
             "type": "integer"

@@ -27,11 +27,13 @@ type SessionExecutionInput struct {
 }
 
 type ModelProviderInput struct {
-	Protocol        modelprovider.Protocol `json:"protocol" binding:"required"`
-	BaseURL         string                 `json:"base_url" binding:"required"`
-	APIKey          string                 `json:"api_key" binding:"required"`
-	ContextWindow   int32                  `json:"context_window,omitempty"`
-	MaxOutputTokens int32                  `json:"max_output_tokens,omitempty"`
+	Protocol modelprovider.Protocol `json:"protocol" binding:"required"`
+	BaseURL  string                 `json:"base_url" binding:"required"`
+	APIKey   string                 `json:"api_key" binding:"required"`
+	// Headers carry non-sensitive metadata. Resource responses omit them, but tools may read them.
+	Headers         modelprovider.Headers `json:"headers,omitempty" extensions:"x-nullable"`
+	ContextWindow   int32                 `json:"context_window,omitempty"`
+	MaxOutputTokens int32                 `json:"max_output_tokens,omitempty"`
 }
 
 func (p *ModelProviderInput) Validate() error {
@@ -50,6 +52,9 @@ func (p *ModelProviderInput) validate(registry harnessconfig.Registry) error {
 	}
 	if strings.TrimSpace(p.APIKey) == "" || len(p.APIKey) > 16384 || strings.ContainsAny(p.APIKey, "\x00\r\n") {
 		return &ModelProviderError{Code: "model_provider_api_key_invalid", Param: "api_key", message: "invalid model provider API key"}
+	}
+	if modelprovider.ValidateHeaders(p.Headers) != nil {
+		return &ModelProviderError{Code: "model_provider_headers_invalid", Param: "headers", message: "invalid model provider headers"}
 	}
 	if p.ContextWindow < 0 || p.MaxOutputTokens < 0 || (p.MaxOutputTokens > p.ContextWindow) {
 		param := "max_output_tokens"
@@ -72,6 +77,9 @@ func (p *ModelProviderInput) ValidateHarnessWithRegistry(harness string, registr
 		return err
 	}
 	configuration, _ := registry.Lookup(harness)
+	if err := configuration.ValidateProviderHeaders(p.Headers); err != nil {
+		return &ModelProviderError{Code: "model_provider_headers_unsupported", Param: "headers", message: err.Error()}
+	}
 	if err := configuration.ValidateProtocol(string(p.Protocol)); err != nil {
 		return &ModelProviderError{Code: "model_provider_protocol_unsupported", Param: "protocol", message: err.Error()}
 	}

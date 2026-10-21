@@ -345,7 +345,7 @@ func TestAgentModelExecutionAtomicEncryptedSnapshot(t *testing.T) {
 		}
 		return current, inherited
 	}
-	if _, inherited := snapshot(store); inherited == nil || *inherited != *provider {
+	if _, inherited := snapshot(store); inherited == nil || !reflect.DeepEqual(inherited, provider) {
 		t.Fatal("provider snapshot mismatch")
 	}
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: []byte(`{"model":"new-model"}`)}); err != nil {
@@ -361,7 +361,7 @@ func TestAgentModelExecutionAtomicEncryptedSnapshot(t *testing.T) {
 	if _, err := service.Update(ctx, replace(uuid.NewString())); !errors.Is(err, agents.ErrNotFound) {
 		t.Fatal("foreign tenant replacement accepted", err)
 	}
-	if current, inherited := snapshot(store); inherited == nil || *inherited != *provider || !bytes.Contains(current.Configuration, []byte("new-model")) {
+	if current, inherited := snapshot(store); inherited == nil || !reflect.DeepEqual(inherited, provider) || !bytes.Contains(current.Configuration, []byte("new-model")) {
 		t.Fatal("failed replacement changed snapshot")
 	}
 	// A database rejection after secret replacement rolls both writes back.
@@ -369,7 +369,7 @@ func TestAgentModelExecutionAtomicEncryptedSnapshot(t *testing.T) {
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: invalidPatch, ModelProvider: &agents.ModelProviderChange{Provider: replacement}}); !errors.Is(err, textvalue.ErrUnstorable) {
 		t.Fatal("unstorable configuration accepted", err)
 	}
-	if current, inherited := snapshot(store); inherited == nil || *inherited != *provider || !bytes.Contains(current.Configuration, []byte("new-model")) {
+	if current, inherited := snapshot(store); inherited == nil || !reflect.DeepEqual(inherited, provider) || !bytes.Contains(current.Configuration, []byte("new-model")) {
 		t.Fatal("database rejection left a partial replacement")
 	}
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: []byte(`{"x_agents_core":{"harness":"claude_sdk"}}`)}); !errors.Is(err, agents.ErrInvalidInput) {
@@ -380,13 +380,13 @@ func TestAgentModelExecutionAtomicEncryptedSnapshot(t *testing.T) {
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: patch, ModelProvider: &agents.ModelProviderChange{Provider: replacement}}); err != nil {
 		t.Fatal(err)
 	}
-	if current, inherited := snapshot(store); inherited == nil || *inherited != *replacement || !bytes.Contains(current.Configuration, []byte(`"harness": "codex"`)) {
+	if current, inherited := snapshot(store); inherited == nil || !reflect.DeepEqual(inherited, replacement) || !bytes.Contains(current.Configuration, []byte(`"harness": "codex"`)) {
 		t.Fatal("provider-only replacement failed")
 	}
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: []byte(`{"x_agents_core":{"harness":"codex"}}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, inherited := snapshot(store); inherited == nil || *inherited != *replacement {
+	if _, inherited := snapshot(store); inherited == nil || !reflect.DeepEqual(inherited, replacement) {
 		t.Fatal("harness-only update lost provider")
 	}
 	if _, err := service.Update(ctx, agents.UpdateCommand{TenantID: tenant, AgentID: agent.ID, Configuration: []byte(`{"x_agents_core":{"model_provider":null}}`), ModelProvider: &agents.ModelProviderChange{}}); err != nil {
