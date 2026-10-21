@@ -16,11 +16,13 @@ import (
 type coreProviderValidationStore struct {
 	t      testing.TB
 	writes int
+	record modelconfiguration.Record
 }
 
-func (s *coreProviderValidationStore) Replace(context.Context, modelconfiguration.Record) (modelconfiguration.Configuration, error) {
+func (s *coreProviderValidationStore) Replace(_ context.Context, record modelconfiguration.Record) (modelconfiguration.Configuration, error) {
 	s.writes++
-	return modelconfiguration.Configuration{}, nil
+	s.record = record
+	return modelconfiguration.Configuration{Harness: record.Harness, Provider: record.Provider, Model: record.Model, HarnessConfig: record.HarnessConfig}, nil
 }
 
 func (s *coreProviderValidationStore) Delete(context.Context, string) error {

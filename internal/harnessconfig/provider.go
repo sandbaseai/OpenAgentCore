@@ -1,6 +1,18 @@
 package harnessconfig
 
-import "github.com/MiniMax-AI/OpenAgentCore/internal/modelprovider"
+import (
+	"errors"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/modelprovider"
+)
+
+var ErrProviderHeadersUnsupported = errors.New("selected harness does not support model request headers")
+
+func (c Configuration) ValidateProviderHeaders(headers map[string]string) error {
+	if len(headers) > 0 && !c.AcceptsProviderHeaders {
+		return ErrProviderHeadersUnsupported
+	}
+	return nil
+}
 
 func (c Configuration) AcceptsHarnessConfig() bool { return c.ValidateNativeConfig != nil }
 
@@ -12,6 +24,9 @@ func (c Configuration) ParseProvider(raw any) (modelprovider.Provider, error) {
 		return modelprovider.Provider{}, err
 	}
 	if err := c.Validate(string(provider.Protocol), provider.ContextWindow, provider.MaxOutputTokens); err != nil {
+		return modelprovider.Provider{}, err
+	}
+	if err := c.ValidateProviderHeaders(provider.Headers); err != nil {
 		return modelprovider.Provider{}, err
 	}
 	return provider, nil

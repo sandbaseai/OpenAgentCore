@@ -1,7 +1,10 @@
 package modelprovider
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +16,7 @@ func TestParseProviderValidatesFrozenBundle(t *testing.T) {
 			raw["protocol"] = string(protocol)
 			got, err := ParseProvider(raw)
 			want := Provider{Protocol: protocol, BaseURL: "https://model.example/v1", APIKey: "fixture-upstream-key", ContextWindow: 64000, MaxOutputTokens: 4096}
-			if err != nil || got != want {
+			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("bundle changed or rejected: %v", err)
 			}
 		})
@@ -52,4 +55,44 @@ func copyBundle(raw map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func TestHeadersValidation(t *testing.T) {
+	for _, headers := range []map[string]string{nil, {}, {"X-Sandbase-Benefit": "daily-free", "X-Empty": "", "X-Literal": "${literal}:a"}} {
+		if err := ValidateHeaders(headers); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invalid := []map[string]string{{"X-A": "a", "x-a": "b"}, {"X-A": "\r\nInjected: true"}, {"X-A": " spaced"}, {"X-A": "tail "}, {"X-A": "非ASCII"}, {"Bad:Name": "x"}, {"": "x"}, {strings.Repeat("X", 129): "x"}, {"X-A": strings.Repeat("a", 4097)}}
+	for _, name := range []string{"Authorization", "X-API-Key", "X-Goog-Api-Key", "Proxy-Connection", "Host", "Cookie", "Content-Type", "Accept", "Transfer-Encoding", "User-Agent"} {
+		invalid = append(invalid, map[string]string{name: "private-canary"})
+	}
+	many := map[string]string{}
+	for i := 0; i < 33; i++ {
+		many["X-"+strings.Repeat("a", i)] = "x"
+	}
+	invalid = append(invalid, many)
+	large := map[string]string{}
+	for i := 0; i < 5; i++ {
+		large["X-"+strings.Repeat("a", i)] = strings.Repeat("a", 4096)
+	}
+	invalid = append(invalid, large)
+	for _, headers := range invalid {
+		if err := ValidateHeaders(headers); err != ErrConfiguration {
+			t.Fatal("invalid headers accepted or disclosed")
+		}
+	}
+}
+
+func TestHeadersJSONRejectsLossyInput(t *testing.T) {
+	for _, raw := range []string{`{"X-A":null}`, `{"X-A":3}`, `{"X-A":[]}`, `{"X-A":"a","X-A":"b"}`, `{"X-A":"a","x-a":"b"}`, `[]`} {
+		var headers Headers
+		if json.Unmarshal([]byte(raw), &headers) == nil {
+			t.Fatal("lossy headers JSON accepted")
+		}
+	}
+	var headers Headers
+	if json.Unmarshal([]byte(`{"X-A":""}`), &headers) != nil || headers["X-A"] != "" {
+		t.Fatal("explicit empty string must remain valid")
+	}
 }

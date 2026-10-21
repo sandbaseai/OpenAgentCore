@@ -110,7 +110,7 @@ func workspaceEnvironment(config Config) (*workspaceProfile, []string, error) {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name != "ANTHROPIC_API_KEY" && name != "ANTHROPIC_AUTH_TOKEN" && name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "CLAUDE_CONFIG_DIR" && name != "HOME" && name != "TMPDIR" {
+		if name != "ANTHROPIC_API_KEY" && name != "ANTHROPIC_AUTH_TOKEN" && name != "ANTHROPIC_CUSTOM_HEADERS" && name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "CLAUDE_CONFIG_DIR" && name != "HOME" && name != "TMPDIR" {
 			env = append(env, entry)
 		}
 	}
@@ -130,7 +130,7 @@ func workspaceEnvironment(config Config) (*workspaceProfile, []string, error) {
 
 func workspaceEnvName(name string) bool {
 	switch name {
-	case "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+	case "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
 		"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 		"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY":
 		return true

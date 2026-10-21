@@ -505,6 +505,7 @@ export type FunctionCallOutputParam = string | InputContentParam[];
 export type FunctionCallOutputResource = string | InputContentResource[];
 export const functionCallStatusResourceValues = ["in_progress", "completed", "failed", "incomplete"] as const;
 export type FunctionCallStatusResource = (typeof functionCallStatusResourceValues)[number];
+export type Headers = Record<string, string>;
 export type HostedEnvironmentFileParam = HostedEnvironmentFileParamFileId | HostedEnvironmentFileParamInline;
 export interface HostedEnvironmentFileParamFileId {
   type: "file_id";
@@ -777,10 +778,11 @@ export interface ModelProviderInput {
   api_key: string;
   base_url: string;
   context_window?: number;
+  headers?: Headers | null;
   max_output_tokens?: number;
   protocol: Protocol;
 }
-export const modelProviderInputFields = ["api_key", "base_url", "context_window", "max_output_tokens", "protocol"] as const;
+export const modelProviderInputFields = ["api_key", "base_url", "context_window", "headers", "max_output_tokens", "protocol"] as const;
 export const modelProviderInputRequired = ["api_key", "base_url", "protocol"] as const;
 export interface ModelProviderView {
   api_key_configured: boolean;

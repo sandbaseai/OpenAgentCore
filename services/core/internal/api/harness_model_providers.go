@@ -144,6 +144,7 @@ func (h *Handler) getHarnessModelConfiguration(w http.ResponseWriter, r *http.Re
 
 var modelProviderInputShape = shape{kind: objectValue, members: []member{
 	{"protocol", requiredString}, {"base_url", requiredString}, {"api_key", requiredString},
+	{"headers", shape{kind: mapValue, nullable: true, items: &shape{kind: stringValue}}},
 	{"context_window", shape{kind: integerValue, minimum: 0}},
 	{"max_output_tokens", shape{kind: integerValue, minimum: 0}},
 }}

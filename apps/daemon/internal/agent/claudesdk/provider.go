@@ -1,6 +1,7 @@
 package claudesdk
 
 import (
+	"sort"
 	"strings"
 
 	harnessconfiguration "github.com/MiniMax-AI/OpenAgentCore/internal/harnessconfig/claudesdk"
@@ -12,7 +13,17 @@ func providerEnvironment(value any) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{"ANTHROPIC_BASE_URL=" + provider.BaseURL, "ANTHROPIC_AUTH_TOKEN=" + provider.APIKey}, nil
+	names := make([]string, 0, len(provider.Headers))
+	for name := range provider.Headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	headers := make([]string, 0, len(names))
+	for _, name := range names {
+		headers = append(headers, name+": "+provider.Headers[name])
+	}
+	// An explicit empty value clears any previous native header selection.
+	return []string{"ANTHROPIC_BASE_URL=" + provider.BaseURL, "ANTHROPIC_AUTH_TOKEN=" + provider.APIKey, "ANTHROPIC_CUSTOM_HEADERS=" + strings.Join(headers, "\n")}, nil
 }
 
 func withProvider(env, provider []string) []string {
@@ -22,7 +33,7 @@ func withProvider(env, provider []string) []string {
 	out := make([]string, 0, len(env)+len(provider))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
-		if key != "ANTHROPIC_API_KEY" && key != "ANTHROPIC_AUTH_TOKEN" && key != "ANTHROPIC_BASE_URL" {
+		if key != "ANTHROPIC_API_KEY" && key != "ANTHROPIC_AUTH_TOKEN" && key != "ANTHROPIC_BASE_URL" && key != "ANTHROPIC_CUSTOM_HEADERS" {
 			out = append(out, entry)
 		}
 	}
