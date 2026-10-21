@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
@@ -90,7 +91,7 @@ func TestSessionCreationKeepsItsResolvedDeploymentRevision(t *testing.T) {
 		t.Fatal("tuple revision changed during insertion")
 	}
 	frozen, err := sessionAdapter(s).SessionModelExecution(t.Context(), tenant, stale.ID)
-	if err != nil || frozen == nil || *frozen != *before.Provider {
+	if err != nil || frozen == nil || !reflect.DeepEqual(frozen, before.Provider) {
 		t.Fatal("frozen tuple bundle changed", err)
 	}
 	observe(stale.ID, sessions.TurnFailed, "engine_failed", "authentication_error")
@@ -110,7 +111,7 @@ func TestSessionCreationKeepsItsResolvedDeploymentRevision(t *testing.T) {
 		t.Fatal("revision reused")
 	}
 	frozenProvider, err := sessionAdapter(s).SessionModelExecution(t.Context(), tenant, session.ID)
-	if err != nil || frozenProvider == nil || *frozenProvider != *input.ModelProvider {
+	if err != nil || frozenProvider == nil || !reflect.DeepEqual(frozenProvider, input.ModelProvider) {
 		t.Fatal("replacement changed the Session bundle", err)
 	}
 	observe(session.ID, sessions.TurnCompleted, "", "")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -335,7 +336,7 @@ func TestDeploymentProviderResolutionPairsRevisionDuringReplacement(t *testing.T
 		t.Fatal("tuple revision changed", err)
 	}
 	frozen, err := sessionAdapter(st).SessionModelExecution(t.Context(), tenant, session.ID)
-	if err != nil || frozen == nil || *frozen != provider {
+	if err != nil || frozen == nil || !reflect.DeepEqual(*frozen, provider) {
 		t.Fatal("tuple bundle changed", err)
 	}
 	for _, private := range []string{"original-fixture-key", "replacement-fixture-key", revision.String(), "deployment_provider_revision"} {
