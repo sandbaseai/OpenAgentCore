@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
@@ -20,7 +21,7 @@ func TestSessionModelExecutionStoresOnlyProviderBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	flat, err := sessionAdapter(st).SessionModelExecution(ctx, tenant, session.ID)
-	if err != nil || flat == nil || *flat != *provider {
+	if err != nil || flat == nil || !reflect.DeepEqual(flat, provider) {
 		t.Fatal("new Session did not store a flat provider bundle", err)
 	}
 	options := map[string]any{"codex_provider": map[string]any{
