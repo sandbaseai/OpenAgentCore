@@ -127,3 +127,20 @@ func (ConfigurationAdapter) Equal(a, b sandbox.Configuration) (bool, error) {
 	xc.CredentialSupplied, yc.CredentialSupplied = false, false
 	return reflect.DeepEqual(xc, yc), nil
 }
+
+func (ConfigurationAdapter) CredentialAccessEqual(a, b sandbox.Configuration) (bool, error) {
+	x, ok := a.(*DeploymentConfiguration)
+	y, ok2 := b.(*DeploymentConfiguration)
+	if !ok || !ok2 || x == nil || y == nil || !x.HasCredential() || !y.HasCredential() {
+		return false, sandbox.ErrInvalid
+	}
+	xURL, xDomain, err := NormalizeEndpoint(x.APIURL, x.Domain)
+	if err != nil {
+		return false, err
+	}
+	yURL, yDomain, err := NormalizeEndpoint(y.APIURL, y.Domain)
+	if err != nil {
+		return false, err
+	}
+	return x.APIKey == y.APIKey && xURL == yURL && xDomain == yDomain, nil
+}

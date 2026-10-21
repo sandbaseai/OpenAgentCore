@@ -448,6 +448,10 @@ type ConfigurationAdapter interface {
 	ResolveChange(next, previous Selection) (Selection, error)
 	WithCredential(owner, candidate Configuration) (Configuration, error)
 	Equal(a, b Configuration) (bool, error)
+	// CredentialAccessEqual compares normalized credentials and all connection
+	// selectors that determine resource access, excluding templates and capacity.
+	// Callers must also preserve explicit credential-submission intent.
+	CredentialAccessEqual(a, b Configuration) (bool, error)
 	// DiscoverConfiguration lists the native catalog a credential can use,
 	// without a saved deployment.
 	DiscoverConfiguration(context.Context, ConfigurationDiscoveryInput, ProcessPaths) (json.RawMessage, error)
