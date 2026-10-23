@@ -164,24 +164,10 @@ type UserInput struct {
 }
 
 type TurnStartParams struct {
-	ThreadID          string             `json:"threadId"`
-	Input             []UserInput        `json:"input"`
-	CollaborationMode *CollaborationMode `json:"collaborationMode,omitempty"`
-}
-
-type CollaborationModeKind string
-
-const CollaborationModeDefault CollaborationModeKind = "default"
-
-type CollaborationMode struct {
-	Mode     CollaborationModeKind     `json:"mode"`
-	Settings CollaborationModeSettings `json:"settings"`
-}
-
-type CollaborationModeSettings struct {
-	ReasoningEffort       string  `json:"reasoning_effort,omitempty"`
-	Model                 string  `json:"model"`
-	DeveloperInstructions *string `json:"developer_instructions"`
+	ThreadID string      `json:"threadId"`
+	Input    []UserInput `json:"input"`
+	// OutputSchema constrains this Turn's final assistant message natively.
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 type TurnInterruptParams struct {
@@ -230,11 +216,10 @@ type ThreadItem struct {
 	ID   string `json:"id,omitempty"`
 
 	// agentMessage / reasoning
-	Phase       string   `json:"phase,omitempty"`
-	Text        string   `json:"text,omitempty"`
-	Summary     []string `json:"summary,omitempty"`
-	Content     []string `json:"content,omitempty"`
-	SummaryText string   `json:"summary_text,omitempty"`
+	Phase   string   `json:"phase,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	Summary []string `json:"summary,omitempty"`
+	Content []string `json:"content,omitempty"`
 
 	// commandExecution
 	Command  string `json:"command,omitempty"`
@@ -297,7 +282,12 @@ type AgentMessageDeltaNotification struct {
 	Delta    string `json:"delta"`
 }
 
-type ReasoningDeltaNotification = AgentMessageDeltaNotification
+// ReasoningDeltaNotification is a summaryTextDelta (SummaryIndex) or a textDelta (ContentIndex).
+type ReasoningDeltaNotification struct {
+	AgentMessageDeltaNotification
+	SummaryIndex int `json:"summaryIndex"`
+	ContentIndex int `json:"contentIndex"`
+}
 
 type ThreadTokenUsageUpdatedNotification struct {
 	ThreadID   string     `json:"threadId"`

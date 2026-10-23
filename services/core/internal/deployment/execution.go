@@ -7,7 +7,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/harnessconfig"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
@@ -16,18 +16,18 @@ import (
 // execution lease and repeats its checks there; provider work runs between
 // transactions, never inside one.
 type ExecutionOperations struct {
-	service *Service
-	storage ExecutionStorage
-	engines engine.Catalog
+	service   *Service
+	storage   ExecutionStorage
+	harnesses harnessconfig.Registry
 }
 
 // NewExecutionOperations binds the deployment changes to the lease-bound
 // storage of one execution owner.
-func NewExecutionOperations(service *Service, storage ExecutionStorage, engines engine.Catalog) (*ExecutionOperations, error) {
+func NewExecutionOperations(service *Service, storage ExecutionStorage, harnesses harnessconfig.Registry) (*ExecutionOperations, error) {
 	if service == nil || storage == nil {
 		return nil, errors.New("deployment execution operations require the deployment service and execution storage")
 	}
-	return &ExecutionOperations{service: service, storage: storage, engines: engines}, nil
+	return &ExecutionOperations{service: service, storage: storage, harnesses: harnesses}, nil
 }
 
 // Claim reserves the installation for Web setup, once per execution owner
@@ -287,7 +287,7 @@ func (e *ExecutionOperations) saveSelection(tx DeploymentTx, d Record, input san
 		if err != nil {
 			return err
 		}
-		profiles[name] = ComputeProfileRecord{Generation: d.Generation + uint64(i) + 1, Specification: sandbox.DeploymentSpec{Resources: p.Resources, Runtime: input.Runtime, Workspace: input.Workspace}, Configuration: configurationJSON(record.Public), Metadata: configurationJSON(record.Metadata)}
+		profiles[name] = ComputeProfileRecord{Generation: d.Generation + uint64(i) + 1, Specification: sandbox.DeploymentSpec{Resources: p.Resources, Workspace: input.Workspace}, Configuration: configurationJSON(record.Public), Metadata: configurationJSON(record.Metadata)}
 	}
 	return tx.SaveSelection(SelectionRecord{ComputeProfiles: profiles, InstallationID: d.InstallationID, Provider: input.Provider, BackendFingerprint: description.BackendFingerprint, Mode: string(description.Mode),
 		Generation: d.Generation + uint64(len(profiles)) + 1, Specification: specification,

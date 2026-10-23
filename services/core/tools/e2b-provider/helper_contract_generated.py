@@ -2,15 +2,14 @@
 """Adapter-private wire declarations. No SDK or repository dependency."""
 COMPUTE_FIELDS = ["Generation","Name","ID","RestoredFrom"]
 ERROR_CODES = ["","invalid","ownership","exists","not_found","command_unconfirmed","unconfirmed","template_invalid","team_mismatch","unauthorized"]
-MANAGED_BOOTSTRAP_FIELDS = ["Workspace","TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","NetworkAccess","AllowedDomains","InstallationID","RuntimeBootstrap"]
-MANAGED_BOOTSTRAP_REQUIRED_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","NetworkAccess","AllowedDomains","InstallationID","RuntimeBootstrap"]
+MANAGED_BOOTSTRAP_FIELDS = ["Workspace","TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","InstallationID","RuntimeBootstrap"]
+MANAGED_BOOTSTRAP_REQUIRED_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","InstallationID","RuntimeBootstrap"]
 MANAGED_IDENTITY_FIELDS = ["TenantID","EnvironmentID","AllocationID","SessionID","DeviceID","InstallationID"]
 MAX_COMMAND_INPUT = 52428832
 MAX_CREDENTIAL_REFERENCES = 32
 MAX_OUTPUT = 1048576
 MAX_REQUEST = 75497472
 MAX_RESPONSE = 16777216
-NETWORK_ACCESS = ["enabled","disabled","restricted"]
 OPERATIONS = ["create","inspect","renew","kill","command","validate_deployment","observe","list_templates","list_builds","verify_credential","compute_info","compute_renew","suspend","resume","compute_kill","delete_retained","compute_command","resume_compute"]
 PROTOCOL_VERSION = 4
 REFERENCE_FIELDS = ["TenantID","EnvironmentID","AllocationID"]

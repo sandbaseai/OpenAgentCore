@@ -233,7 +233,6 @@ type fakeNodeTx struct {
 	deleteGenerationStatus      func(string, uint64) error
 	upsertGenerationStatus      func(GenerationStatusRecord) error
 	promoteServingGeneration    func(string, uint64) error
-	refreshServingReadiness     func(string, int) error
 }
 
 func (f *fakeNodeTx) LoadDeployment() (Record, error) {
@@ -339,13 +338,6 @@ func (f *fakeNodeTx) PromoteServingGeneration(nodeID string, generation uint64) 
 		unexpected(f.t, "PromoteServingGeneration")
 	}
 	return f.promoteServingGeneration(nodeID, generation)
-}
-
-func (f *fakeNodeTx) RefreshServingReadiness(nodeID string, protocol int) error {
-	if f.refreshServingReadiness == nil {
-		unexpected(f.t, "RefreshServingReadiness")
-	}
-	return f.refreshServingReadiness(nodeID, protocol)
 }
 
 type fakeDeploymentTx struct {

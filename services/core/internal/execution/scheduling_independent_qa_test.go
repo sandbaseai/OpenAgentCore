@@ -249,7 +249,7 @@ func TestQASchedulerActualReadinessHintsAndPollFallback(t *testing.T) {
 	if len(scan(true)) != 0 || scope.times[5].IsZero() {
 		t.Fatal("unknown capabilities did not block/classify")
 	}
-	heartbeat, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{SupportedAgentKinds: []proto.SupportedAgentKind{{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{Streaming: proto.CapabilitySupported, Steering: proto.CapabilitySupported, DurableTurns: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, Preparation: proto.CapabilitySupported, ExecutionControls: proto.CapabilitySupported, WebSearchControl: proto.CapabilitySupported, TextVerbosity: proto.CapabilitySupported, ToolObservations: proto.CapabilitySupported, SubagentControl: proto.CapabilitySupported, LocalEnvironment: proto.CapabilitySupported, WorkspaceReadPreparation: proto.CapabilitySupported, WorkspaceOutputExport: proto.CapabilitySupported})}}})
+	heartbeat, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{SupportedAgentKinds: []proto.SupportedAgentKind{{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{Streaming: proto.CapabilitySupported, DurableTurns: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, Preparation: proto.CapabilitySupported, ExecutionControls: proto.CapabilitySupported, ToolObservations: proto.CapabilitySupported, SubagentControl: proto.CapabilitySupported, LocalEnvironment: proto.CapabilitySupported, WorkspaceReadPreparation: proto.CapabilitySupported, WorkspaceOutputExport: proto.CapabilitySupported})}}})
 	if err = conn.WriteJSON(heartbeat); err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,6 @@ func TestPreparationFreezesLocalContentsAcrossReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconnect.networkAccess = b.networkAccess
 	again, err := reconnect.Prepare(t.Context(), configured)
 	if err != nil || len(again.LocalEnvironment.Skills) != 1 {
 		t.Fatalf("reconnection: %v", err)
@@ -67,19 +66,19 @@ func TestPreparationFreezesLocalContentsAcrossReconnect(t *testing.T) {
 	if err != nil || string(fresh[len(fresh)-6:]) != "second" {
 		t.Fatal("new Session did not capture new source", err)
 	}
-	// Reusing a snapshot under another identity or selection cannot start native work.
-	reconnect.stateKey = "agents-api-" + uuid.NewString()
-	changed := configured
-	changed.AgentStateKey = reconnect.stateKey
-	if _, err = reconnect.Prepare(t.Context(), changed); err == nil {
-		t.Fatal("foreign snapshot accepted")
-	}
-	changed = configured
+	// Reusing a snapshot under another selection cannot start native work, even
+	// for another Session.
 	local := *configured.LocalEnvironment
 	local.CapabilitySources = &agentcapabilities.Input{}
+	changed := configured
 	changed.LocalEnvironment = &local
 	if _, err = b.Prepare(t.Context(), changed); err == nil {
 		t.Fatal("changed selection accepted")
+	}
+	reconnect.stateKey = uuid.NewString()
+	changed.AgentStateKey = reconnect.stateKey
+	if _, err = reconnect.Prepare(t.Context(), changed); err == nil {
+		t.Fatal("foreign snapshot accepted")
 	}
 }
 
@@ -209,7 +208,6 @@ func TestPreparationFreezesToolOnlyEnvironmentAcrossReconnect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reconnect.networkAccess = b.networkAccess
 			if _, err := reconnect.Prepare(t.Context(), configured); err != nil {
 				t.Fatal(err)
 			}

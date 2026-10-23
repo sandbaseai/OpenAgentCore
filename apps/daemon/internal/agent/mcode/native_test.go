@@ -62,6 +62,7 @@ func testNativeMCodeHeaders(t *testing.T, protocol string, workspace bool) {
 		mu.Unlock()
 		if protocol == "chat_completions" {
 			tool := ""
+			arguments := ""
 			if !toolSent.Load() {
 				for _, raw := range body["tools"].([]any) {
 					function, ok := raw.(map[string]any)["function"].(map[string]any)
@@ -69,14 +70,26 @@ func testNativeMCodeHeaders(t *testing.T, protocol string, workspace bool) {
 						function = raw.(map[string]any)
 					}
 					name, _ := function["name"].(string)
-					if strings.HasSuffix(name, "workspace_read") && toolSent.CompareAndSwap(false, true) {
+					if name == "read" && toolSent.CompareAndSwap(false, true) {
 						tool = name
+						parameters, _ := function["parameters"].(map[string]any)
+						properties, _ := parameters["properties"].(map[string]any)
+						for _, key := range []string{"file_path", "filePath", "path"} {
+							if _, ok := properties[key]; ok {
+								raw, _ := json.Marshal(map[string]string{key: "fixture.txt"})
+								arguments = string(raw)
+								break
+							}
+						}
+						if arguments == "" {
+							t.Error("native read tool has no supported file path parameter")
+						}
 						break
 					}
 				}
 
 			}
-			writeNativeChatResponse(w, tool)
+			writeNativeChatResponse(w, tool, arguments)
 		} else {
 			writeNativeResponse(w)
 		}
@@ -92,6 +105,9 @@ func testNativeMCodeHeaders(t *testing.T, protocol string, workspace bool) {
 	defer cancel()
 	var config *WorkspaceConfig
 	if workspace {
+		if os.Getenv("OAC_RUNTIME_MCODE_COMPANION") == "" {
+			t.Skip("set OAC_RUNTIME_MCODE_COMPANION for native workspace test")
+		}
 		root := t.TempDir()
 		if err := os.WriteFile(filepath.Join(root, "fixture.txt"), []byte("HEADER-TOOL-CONTINUATION"), 0600); err != nil {
 			t.Fatal(err)
@@ -100,9 +116,9 @@ func testNativeMCodeHeaders(t *testing.T, protocol string, workspace bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		config = &WorkspaceConfig{Binary: binary, Node: node, Bridge: filepath.Join(filepath.Dir(filepath.Dir(binary)), "bridge.mjs"), Directory: root, Network: "enabled", Scratch: t.TempDir()}
+		config = &WorkspaceConfig{Binary: binary, Node: node, Companion: os.Getenv("OAC_RUNTIME_MCODE_COMPANION"), Directory: root}
 		req.DisableExecutionEnvironment = false
-		req.LocalEnvironment = &proto.LocalEnvironment{ID: "headers-workspace", WorkspaceRoot: root, NetworkAccess: "enabled"}
+		req.LocalEnvironment = &proto.LocalEnvironment{ID: "headers-workspace", WorkspaceRoot: root}
 	}
 	factory := NewExecutorFactory(stateRoot, config)
 	owner, err := factory(ctx, req)
@@ -197,12 +213,12 @@ func writeNativeResponse(w http.ResponseWriter) {
 	send("message_stop", map[string]string{"type": "message_stop"})
 }
 
-func writeNativeChatResponse(w http.ResponseWriter, tool string) {
+func writeNativeChatResponse(w http.ResponseWriter, tool, arguments string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	delta := map[string]any{"role": "assistant", "content": "OAC-MCODE-OK"}
 	finish := "stop"
 	if tool != "" {
-		delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "call_fixture", "type": "function", "function": map[string]any{"name": tool, "arguments": `{"path":"fixture.txt"}`}}}}
+		delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "call_fixture", "type": "function", "function": map[string]any{"name": tool, "arguments": arguments}}}}
 		finish = "tool_calls"
 	}
 	for _, choice := range []map[string]any{{"index": 0, "delta": delta, "finish_reason": nil}, {"index": 0, "delta": map[string]any{}, "finish_reason": finish}} {

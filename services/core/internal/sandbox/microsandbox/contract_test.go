@@ -13,7 +13,7 @@ import (
 func TestProviderContract(t *testing.T) {
 	contracttest.RunFailures(t, func(t *testing.T, s contracttest.Scenario, cancel context.CancelFunc) contracttest.Fixture {
 		c, r := testConfig(), testRef()
-		b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "synthetic", Harness: "codex", NetworkAccess: "enabled"}
+		b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "synthetic", Harness: "codex", Workspace: workspaceBinding()}
 		var calls []string
 		p, err := NewWithCaller(c, callerFunc(func(ctx context.Context, q Request) (Response, error) {
 			calls = append(calls, q.Operation)
@@ -40,6 +40,7 @@ func TestProviderContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		resolveTo(p)
 		nativeOperation := s.Operation
 		if nativeOperation == "renew" || nativeOperation == "inspect" {
 			nativeOperation = "initial_info"
@@ -63,7 +64,8 @@ func TestProviderContractObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "synthetic", Harness: "codex", NetworkAccess: "enabled"}
+	resolveTo(p)
+	b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "synthetic", Harness: "codex", Workspace: workspaceBinding()}
 	got, err := p.Create(deadline(t), b)
 	contracttest.AssertObservation(t, got, err, r, "native-owned", "running")
 	got, err = p.GetInfo(deadline(t), r)
@@ -74,8 +76,8 @@ func TestProviderContractObservation(t *testing.T) {
 
 func TestBootstrapWireRejectsSupersededVersion(t *testing.T) {
 	c, r := testConfig(), testRef()
-	b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "fixture", Harness: "codex", NetworkAccess: "enabled"}
-	q := Request{Version: ProtocolVersion, Operation: "create", Config: c, Reference: r, Bootstrap: &b, Deadline: time.Now().Add(time.Minute)}
+	b := sandbox.Bootstrap{Reference: r, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "fixture", Harness: "codex"}
+	q := Request{Version: ProtocolVersion, Operation: "create", Config: c, Reference: r, Bootstrap: &b, Workspace: &WorkspaceDirectory{Path: "/resolved/environment", ObjectID: workspaceBinding().Attachment.Reference.ObjectID}, Deadline: time.Now().Add(time.Minute)}
 	if err := ValidateRequest(q); err != nil {
 		t.Fatal(err)
 	}

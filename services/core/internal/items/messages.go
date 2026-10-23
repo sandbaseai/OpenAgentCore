@@ -14,8 +14,10 @@ type Update struct {
 	Item               v1.Item
 	AppendText         bool
 	CommandOutputDelta *string
-	// A legacy aggregate is used only when no native message identity was recorded.
-	LegacyFinal bool
+	// SummaryIndex is the reasoning summary part an appended fragment extends.
+	SummaryIndex int
+	// An aggregate answer is used only when no native message identity was recorded.
+	AggregateFinal bool
 }
 
 func Identity(turn, key string) string {
@@ -42,7 +44,7 @@ func Project(turn, kind string, sequence int64, raw json.RawMessage) ([]Update, 
 		}
 		key := "message:" + p.ItemID
 		if p.ItemID == "" {
-			key = "legacy-message"
+			key = "aggregate-message"
 		}
 		return []Update{{Item: message(turn, key, "assistant", p.Delta, "in_progress"), AppendText: true}}, nil
 	case proto.TypeOutputMessage:
@@ -62,8 +64,21 @@ func Project(turn, kind string, sequence int64, raw json.RawMessage) ([]Update, 
 			item.Phase = p.Phase
 		}
 		return []Update{{Item: item, AppendText: p.Text == nil}}, nil
+	case proto.TypeReasoning:
+		var p proto.ReasoningPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		if !p.Valid() {
+			return nil, errors.New("invalid reasoning observation")
+		}
+		item := v1.Item{ID: Identity(turn, "reasoning:"+p.ID), TurnID: turn, Type: "reasoning", Status: p.Status}
+		if p.Delta != "" {
+			item.Summary = []v1.SummaryText{{Type: "summary_text", Text: p.Delta}}
+		}
+		return []Update{{Item: item, AppendText: true, SummaryIndex: p.Index}}, nil
 	case proto.TypeDone, "execution_failed":
-		// Legacy Done may contain adapter diagnostics. Only a successful Turn
+		// Done may contain adapter diagnostics. Only a successful Turn
 		// confirms aggregate answer text; failures retain observed message deltas.
 		return nil, nil
 	case "cancel_receipt", "execution_completed", "execution_cancelled":
@@ -89,7 +104,7 @@ func Project(turn, kind string, sequence int64, raw json.RawMessage) ([]Update, 
 		if kind == "execution_completed" {
 			status = "completed"
 		}
-		return []Update{{Item: message(turn, "legacy-message", "assistant", final.Content, status), LegacyFinal: true}}, nil
+		return []Update{{Item: message(turn, "aggregate-message", "assistant", final.Content, status), AggregateFinal: true}}, nil
 	case proto.TypeToolCall:
 		return projectTool(turn, raw)
 	case proto.TypeCommandOutput:
@@ -99,15 +114,22 @@ func Project(turn, kind string, sequence int64, raw json.RawMessage) ([]Update, 
 	}
 }
 
+// Reasoning parts advance in order: a fragment extends the current part or
+// starts the next one.
+var errReasoningPart = errors.New("reasoning part out of order")
+
 func Merge(update Update, previous v1.Item) (v1.Item, error) {
 	if update.CommandOutputDelta != nil {
 		return mergeCommandOutput(update, previous)
 	}
 	item := update.Item
 	if previous.ID == "" {
+		if update.SummaryIndex != 0 {
+			return previous, errReasoningPart
+		}
 		return item, nil
 	}
-	if previous.Status != "in_progress" && !(update.LegacyFinal && previous.Status == "incomplete") {
+	if previous.Status != "in_progress" && !(update.AggregateFinal && previous.Status == "incomplete") {
 		return previous, nil
 	}
 	if (item.Type == "function_call") && (item.Arguments == nil || string(encoded(item.Arguments)) == "null") {
@@ -117,8 +139,19 @@ func Merge(update Update, previous v1.Item) (v1.Item, error) {
 		item.Output = previous.Output
 	}
 	if update.AppendText {
-		if previous.Status != "in_progress" {
-			return previous, nil
+		if item.Type == "reasoning" {
+			parts, index := slices.Clone(previous.Summary), update.SummaryIndex
+			switch {
+			case len(item.Summary) == 0:
+			case index == len(parts):
+				parts = append(parts, item.Summary[0])
+			case index == len(parts)-1:
+				parts[index].Text += item.Summary[0].Text
+			default:
+				return previous, errReasoningPart
+			}
+			item.Summary = parts
+			return item, nil
 		}
 		text := *previous.Content[0].Text + *item.Content[0].Text
 		item.Content = slices.Clone(item.Content)

@@ -3,7 +3,6 @@ package codex
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -29,24 +28,9 @@ func (s *Session) startNative(ctx context.Context, plan SessionPlan, req proto.P
 		return err
 	}
 	turnParams := TurnStartParams{
-		ThreadID: s.currentThreadID(),
-		Input:    input,
-	}
-	model := strings.TrimSpace(s.resolvedModel)
-	if model == "" {
-		return fmt.Errorf("codex: collaboration mode requires a resolved model")
-	}
-	var developerInstructions *string
-	if plan.SystemPrompt != "" {
-		developerInstructions = &plan.SystemPrompt
-	}
-	turnParams.CollaborationMode = &CollaborationMode{
-		Mode: CollaborationModeDefault,
-		Settings: CollaborationModeSettings{
-			ReasoningEffort:       plan.ModelReasoningEffort,
-			Model:                 model,
-			DeveloperInstructions: developerInstructions,
-		},
+		ThreadID:     s.currentThreadID(),
+		Input:        input,
+		OutputSchema: plan.OutputSchema,
 	}
 	turnCtx, turnCancel := context.WithTimeout(ctx, 10*time.Second)
 	_, ackErr := s.rpc.requestWithResult(withNativeBoundary(turnCtx, s.boundary), "turn/start", turnParams, s.bindTurnResult)

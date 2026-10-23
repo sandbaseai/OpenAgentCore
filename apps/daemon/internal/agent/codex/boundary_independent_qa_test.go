@@ -85,7 +85,6 @@ func TestQANativeBoundaryActualLifecycle(t *testing.T) {
 func TestQANativeFirstTextFiltering(t *testing.T) {
 	var logs bytes.Buffer
 	s := boundaryTestSession(&logs)
-	s.observeMessages = true
 	for _, raw := range []string{
 		`{"threadId":"root","turnId":"stale","itemId":"i","delta":"SECRET_CANARY"}`,
 		`{"threadId":"root","turnId":"55555555-5555-4555-8555-555555555555","itemId":"i","delta":""}`,

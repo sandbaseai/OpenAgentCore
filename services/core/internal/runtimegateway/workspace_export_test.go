@@ -93,7 +93,7 @@ func TestWorkspaceExportRoundTripFixture(t *testing.T) {
 		{"coalesced_prefetch", proto.WorkspaceExportChunkBytes, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+			s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 			defer s.Close("test")
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
@@ -163,7 +163,7 @@ func TestWorkspaceExportRoundTripFixture(t *testing.T) {
 }
 
 func TestWorkspaceExportPrefetchesOneReplyAndRequiresCompletion(t *testing.T) {
-	s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer s.Close("test")
 	consumed, resume := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
@@ -209,7 +209,7 @@ func TestWorkspaceExportPrefetchesOneReplyAndRequiresCompletion(t *testing.T) {
 }
 
 func TestWorkspaceExportConsumerFailureCancelsPendingPrefetch(t *testing.T) {
-	s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer s.Close("test")
 	want := errors.New("consumer failed")
 	done := make(chan error, 1)
@@ -257,7 +257,7 @@ func TestWorkspaceExportRejectsInvalidReceiptScopeAndMaximum(t *testing.T) {
 		{"overflow", proto.WorkspaceExportMaxBytes, "export", proto.TypeWorkspaceExportResult, proto.WorkspaceExportResultPayload{Outcome: "chunk", Offset: proto.WorkspaceExportMaxBytes, Data: []byte("x")}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+			s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 			defer s.Close("test")
 			replies := make(chan workspaceExportReceipt, 1)
 			env, err := proto.NewEnvelope(test.typ, test.id, test.result)
@@ -274,7 +274,7 @@ func TestWorkspaceExportRejectsInvalidReceiptScopeAndMaximum(t *testing.T) {
 }
 
 func TestWorkspaceExportPrefetchStaysOneChunkAheadOfSlowConsumer(t *testing.T) {
-	s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer s.Close("test")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -314,7 +314,7 @@ func TestWorkspaceExportRejectsInvalidChunksAndNativeFailure(t *testing.T) {
 		{Outcome: "completed", Data: []byte("x")},
 		{Outcome: "failed", ErrorCode: "export_failed"},
 	} {
-		s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+		s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 		done := make(chan error, 1)
 		go func() {
 			done <- s.ExportWorkspaceOutputs(t.Context(), proto.WorkspaceExportPayload{Handle: "prepared", EnvironmentID: "env"}, func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
@@ -335,7 +335,7 @@ func TestWorkspaceExportRejectsInvalidChunksAndNativeFailure(t *testing.T) {
 
 func TestWorkspaceExportDisconnectAndCancellationSettleRead(t *testing.T) {
 	for _, disconnect := range []bool{false, true} {
-		s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+		s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {

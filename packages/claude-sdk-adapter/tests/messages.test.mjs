@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { MessageObserver } from "../dist/messages.js";
-import { parseStart } from "../dist/adapter.js";
 
 const stream = (event, parent = null) => ({
   type: "stream_event", uuid: randomUUID(), session_id: "session", parent_tool_use_id: parent, event,
@@ -92,9 +91,17 @@ test("unmatched text cannot acquire an invented identity", () => {
   assert.throws(() => observer.consume(snapshot("other", "wrong")), /unmatched/);
 });
 
-test("observation opt-in is an optional boolean", () => {
-  const request = { type: "start", input: [{ content: [{ type: "input_text", text: "hello" }] }], model: "model", system_prompt: "", cwd: "/tmp" };
-  assert.equal(parseStart(JSON.stringify(request)).observe_messages, undefined);
-  assert.equal(parseStart(JSON.stringify({ ...request, observe_messages: true })).observe_messages, true);
-  assert.throws(() => parseStart(JSON.stringify({ ...request, observe_messages: "true" })), /invalid_request/);
+test("thinking blocks with text are reasoning only when summaries are requested", () => {
+  const think = [start("native"), stream({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }),
+    stream({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "hmm " } }),
+    stream({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), blockStop(0),
+    stream({ type: "content_block_start", index: 1, content_block: { type: "thinking", thinking: "" } }),
+    stream({ type: "content_block_delta", index: 1, delta: { type: "signature_delta", signature: "sig" } }), blockStop(1), stop()];
+  const off = new MessageObserver();
+  assert.deepEqual(think.flatMap(message => off.consume(message)), []);
+  const observer = new MessageObserver(true);
+  assert.deepEqual(think.flatMap(message => observer.consume(message)), [
+    { type: "reasoning", reasoning: { id: "native:0", status: "in_progress", delta: "hmm " } },
+    { type: "reasoning", reasoning: { id: "native:0", status: "completed" } },
+  ]);
 });

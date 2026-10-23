@@ -23,7 +23,7 @@ func TestWorkspaceExportObservationBoundaries(t *testing.T) {
 			prior := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			defer slog.SetDefault(prior)
-			s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+			s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 			defer s.Close("test")
 			deadline := 3 * time.Second
 			if mode == "missing_completed" {

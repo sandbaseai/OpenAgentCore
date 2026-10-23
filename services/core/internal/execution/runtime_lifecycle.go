@@ -68,6 +68,8 @@ type runtimeLifecycle struct {
 	wakeHints       chan struct{}
 	pendingWake     chan struct{}
 	hintDestination func(string)
+	placementWake   chan<- struct{}
+	scheduleWake    chan<- struct{}
 }
 
 func newRuntimeManager(owner Owner, deployments *deployment.Service, deploymentReader deployment.Reader, sessionReader sessions.Reader, registry *runtimegateway.Registry, config *RuntimeProvider) (*runtimeManager, error) {
@@ -304,7 +306,7 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	started := time.Now()
 	info, err := provider.Create(ctx, sandbox.Bootstrap{
 		Reference: runtimeReference(owner), SessionID: owner.SessionID, DeviceID: owner.DeviceID,
-		Workspace: workspace, Harness: session.Engine, CoreURL: r.config.CoreURL, Credential: token, NetworkAccess: placement.NetworkAccess, AllowedDomains: placement.AllowedDomains,
+		Workspace: workspace, Harness: session.Engine, CoreURL: r.config.CoreURL, Credential: token,
 	})
 	observeExecutionStage(ctx, "provider_create", started, err, "allocation_id", owner.ID,
 		"session_id", owner.SessionID, "environment_id", environment, "device_id", owner.DeviceID, "node_id", r.nodeID)
@@ -488,6 +490,9 @@ func (r *runtimeLifecycle) observe(ctx context.Context, owner deployment.Allocat
 			return nil // Keep scanning unknown creation; absence is not a final receipt.
 		}
 		_, err = r.deployment.ReleaseAllocation(ctx, owner)
+		if err == nil {
+			r.freedSlot()
+		}
 		return err
 	}
 	// A stopped or missing container does not authorize destroying retained

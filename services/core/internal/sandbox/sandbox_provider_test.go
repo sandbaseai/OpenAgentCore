@@ -16,7 +16,7 @@ func TestOperationGroupsPartitionTheInterface(t *testing.T) {
 			methods = append(methods, name)
 		}
 	}
-	groups := slices.Concat(requiredOperations, suspensionOperations, []string{"Observe"})
+	groups := slices.Concat(requiredOperations, suspensionOperations, preparationOperations, []string{"Observe"})
 	slices.Sort(groups)
 	if !slices.Equal(methods, groups) {
 		t.Fatalf("SandboxProvider operations %v, groups %v", methods, groups)

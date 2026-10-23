@@ -31,7 +31,7 @@ func TestArtifactTransportActualLoopsAndSnapshot(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			defer slog.SetDefault(previous)
 			conn := &artifactSlowConn{fakeConn: newFakeConn(), entered: make(chan struct{}), release: make(chan struct{})}
-			s := NewSession(conn, "device", "tenant", "test", nil, nil)
+			s := newTestSession(conn, "device", "tenant", "test", nil, nil)
 			defer s.Close("test")
 			ctx := textobs.WithArtifact(t.Context(), "session", "turn")
 			finish := s.ObserveArtifactTransport(ctx, "prepare")
@@ -107,7 +107,7 @@ func TestArtifactTransportScopeClaimAndBound(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
-	s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer s.Close("test")
 	s.ObserveArtifactTransport(context.Background(), "outside")()
 	if logs.Len() != 0 {
@@ -115,7 +115,7 @@ func TestArtifactTransportScopeClaimAndBound(t *testing.T) {
 	}
 	ctx := textobs.WithArtifact(t.Context(), "s", "t")
 	finish := s.ObserveArtifactTransport(ctx, "one")
-	other := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	other := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer other.Close("test")
 	other.ObserveArtifactTransport(ctx, "two")()
 	finish()

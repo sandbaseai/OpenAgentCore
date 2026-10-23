@@ -304,9 +304,10 @@ func TestProviderHeadersRebuiltForEveryTurn(t *testing.T) {
 		if !slices.Contains(plan.Env, "OAC_CODEX_MODEL_HEADER_0=private-header-canary") {
 			t.Fatal("missing header environment")
 		}
+		excludeFromShellEnvironment(&plan, "OAC_CODEX_MCP_HEADER_*")
 		found := false
 		for _, option := range plan.ExtraConfig {
-			if option[0] == "shell_environment_policy.exclude" && strings.Contains(option[1], "OAC_CODEX_MODEL_HEADER_0") {
+			if option[0] == "shell_environment_policy.exclude" && strings.Contains(option[1], "OAC_CODEX_MODEL_HEADER_0") && strings.Contains(option[1], providerAPIKeyEnv) && strings.Contains(option[1], "OAC_CODEX_MCP_HEADER_*") {
 				found = true
 			}
 		}

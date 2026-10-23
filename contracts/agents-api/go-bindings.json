@@ -206,7 +206,7 @@
     "order": ["id", "turn_id", "type", "status", "role", "phase", "content", "command", "cwd", "duration_ms", "exit_code", "name", "call_id", "server_label", "arguments", "output", "error", "action", "agent_id", "sender_agent_id", "recipient_agent_id", "recipient_agent_ids", "model", "reasoning_effort", "summary"]
   },
   "ItemContent": {
-    "sources": ["#/components/schemas/MessageContentResource", "#/components/schemas/EncryptedContentResource"],
+    "sources": ["#/components/schemas/MessageContentResource", "#/components/schemas/EncryptedContentResource", "#/components/schemas/SummaryTextResource"],
     "fields": {
       "image_url": {"type": "string"}
     }
@@ -215,19 +215,25 @@
     "sources": ["#/components/schemas/SessionItemListResource"],
     "order": ["object", "first_id", "last_id", "data", "has_more"]
   },
-  "MCPHTTPTransport": {
-    "sources": ["#/components/schemas/PersistedMcpTransportConfigParamHttp"],
-    "fields": {
-      "headers": {"type": "*map[string]string"}
-    }
-  },
   "MCPTool": {
     "sources": ["#/components/schemas/AgentToolResourceMcp"],
     "fields": {
-      "transport": {"type": "MCPHTTPTransport"},
+      "transport": {"type": "MCPTransport"},
       "allowed_tools": {"type": "*[]string"}
     },
     "order": ["type", "server_label", "transport", "allowed_tools", "connection_origin", "credential_id", "request_metadata", "required"]
+  },
+  "MCPTransport": {
+    "marshal_union": true,
+    "sources": ["#/components/schemas/PersistedMcpTransportConfigParam"],
+    "fields": {
+      "server_url": {"type": "string"},
+      "headers": {"type": "*map[string]string"},
+      "command": {"type": "string"},
+      "args": {"type": "*[]string"},
+      "cwd": {"type": "string"},
+      "env_vars": {"type": "*[]string"}
+    }
   },
   "MCPToolInput": {
     "sources": ["#/components/schemas/AgentToolConfigParamMcp"]

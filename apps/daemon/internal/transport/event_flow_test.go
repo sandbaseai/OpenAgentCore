@@ -178,3 +178,23 @@ func TestOversizedExecutionEventClosesConnection(t *testing.T) {
 		t.Fatalf("connection failure: %v", c.Err())
 	}
 }
+
+// Reasoning is the upstream replacement for thinking; it must consume the same
+// negotiated window without starving control receipts on a saturated Run.
+func TestReasoningCreditPreservesControlReceipt(t *testing.T) {
+	c := flowConn(t, "run")
+	event := proto.Envelope{Type: proto.TypeReasoning, ID: "run"}
+	for range proto.ExecutionEventWindow {
+		if err := reserveCredit(c, t.Context(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err := reserveCredit(c, ctx, event); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("reasoning bypassed credit: %v", err)
+	}
+	if err := reserveCredit(c, t.Context(), proto.Envelope{Type: proto.TypeInteractionDecisionAck, ID: "run"}); err != nil {
+		t.Fatal(err)
+	}
+}

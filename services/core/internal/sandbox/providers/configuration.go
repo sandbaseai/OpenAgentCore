@@ -85,7 +85,7 @@ func (r *Registry) Normalize(s sandbox.Selection) (sandbox.Selection, error) {
 		if !sandbox.ValidComputeProfile(name) || profile.Resources.CPUs == 0 || profile.Resources.MemoryMiB == 0 {
 			return s, sandbox.ErrInvalid
 		}
-		owner := sandbox.Selection{Provider: s.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: profile.Resources, Runtime: normalized.Runtime, Workspace: normalized.Workspace}, Configuration: profile.Configuration}
+		owner := sandbox.Selection{Provider: s.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: profile.Resources, Workspace: normalized.Workspace}, Configuration: profile.Configuration}
 		if normalized.HasCredential() {
 			owner, err = r.WithCredential(owner, normalized)
 			if err != nil {
@@ -277,7 +277,7 @@ func (r *Registry) PrepareSelection(ctx context.Context, c sandbox.DirectConfig)
 	profiles := make(map[string]sandbox.ComputeProfile, len(selection.ComputeProfiles))
 	for name, p := range selection.ComputeProfiles {
 		variant := c
-		variant.Selection = sandbox.Selection{Provider: selection.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: p.Resources, Runtime: selection.Runtime, Workspace: selection.Workspace}, Configuration: p.Configuration}
+		variant.Selection = sandbox.Selection{Provider: selection.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: p.Resources, Workspace: selection.Workspace}, Configuration: p.Configuration}
 		resolved := variant.Selection
 		if discovery {
 			resolved, err = r.DiscoverSelection(ctx, variant)
