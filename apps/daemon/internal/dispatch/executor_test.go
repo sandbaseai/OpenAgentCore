@@ -71,7 +71,7 @@ func (t *reusableTurn) AwaitSettlement(ctx context.Context) (agent.TurnSettlemen
 
 // noEnvironmentPreparation prepares config for session without an execution environment.
 func noEnvironmentPreparation(session string, config proto.PromptRequestPayload) proto.ExecutionPreparePayload {
-	config.AgentStateKey, config.DisableExecutionEnvironment = session, true
+	config.AgentStateKey, config.DisableExecutionEnvironment = proto.SessionStateKey(session), true
 	return proto.ExecutionPreparePayload{SessionID: session, Configuration: config}
 }
 func executorRequest() proto.ExecutionPreparePayload {
@@ -247,7 +247,7 @@ func poolRouter(t *testing.T, factory agent.ExecutorFactory) (*dispatch.Router, 
 func poolRequest(id string) proto.ExecutionPreparePayload {
 	req := executorRequest()
 	req.SessionID = id
-	req.Configuration.AgentStateKey = id
+	req.Configuration.AgentStateKey = proto.SessionStateKey(id)
 	return req
 }
 

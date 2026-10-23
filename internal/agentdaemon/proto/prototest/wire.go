@@ -27,7 +27,7 @@ const (
 // Correlation values the scenarios use.
 const (
 	SessionID        = "session"
-	StateKey         = "session"
+	StateKey         = "agents-api-session"
 	PreparationID    = "prepare"
 	RunID            = "run"
 	CancelDeliveryID = "cancel"

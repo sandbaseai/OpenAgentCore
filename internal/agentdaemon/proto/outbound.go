@@ -111,3 +111,7 @@ func (r PromptRequestPayload) ValidateAgentOptions() error {
 	}
 	return nil
 }
+
+// SessionStateKey names persisted native history. Its prefix is a storage identity,
+// independent of product naming and the Runtime wire version.
+func SessionStateKey(sessionID string) string { return "agents-api-" + sessionID }

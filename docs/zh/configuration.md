@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: f59a53edb908b1a7e884e598fbb6eb85d40941110e0de60014c14de3b929aaf9
+source_hash: 00ca99dc2f53357520a0d23b4950ec4bfb63a3a6bb6ef8b57cb752781ca1e8e4
 ---
 
 Core 安装的每项设置、其归属位置以及修改方式。安装程序写入初始值；之后请使用本参考。每项设置都恰好只有一个归属位置，分属以下三类：
@@ -113,6 +113,8 @@ Session 创建可以在异步工作区准入之前成功。容量耗尽时，Cor
 | `node-payload/` | 已验证的节点安装元数据 | Web |
 
 初始化会准备该目录；应用服务以只读方式接收各自的机密目录。`docker compose exec web oac-web core-key` 把 Core 密钥打印到运维人员终端，不写入容器日志。数据库密码和凭据加密密钥绝不打印。
+
+凭据加密域、带密钥指纹的派生域和请求指纹用途标识属于持久化格式，不随产品名称变化；修改它们会使已有密文、幂等身份或签名授权失效。
 
 上述路径位于 Docker 命名卷 `<project>_data` 中。所有主机平台都由 Docker 管理 Linux 文件权限；每个服务只挂载需要的子目录。数据卷必须和项目定义、公共 URL 一同保留。仅删除机密目录不会重置安装；数据库已存在时初始化会拒绝重建。Core 也会校验安装 ID 与数据库的绑定。运行时设置仍保存在 [Core 数据库](#runtime-settings-web)中。
 

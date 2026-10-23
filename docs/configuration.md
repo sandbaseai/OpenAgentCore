@@ -110,6 +110,8 @@ The initialization service generates secrets and the installation ID once, then 
 
 Initialization prepares this directory; application services receive their secret directories read-only. `docker compose exec web oac-web core-key` prints the Core key to the operator terminal without writing it to container logs. Database passwords and credential encryption keys are never printed.
 
+Credential encryption domains, keyed-fingerprint derivation domains and request-fingerprint purposes are persistent format identifiers. They remain fixed independently of product naming; changing them invalidates stored ciphertext, idempotency identities or signed authorizations.
+
 The named Docker volume `<project>_data` contains these paths. Docker manages Linux ownership on every host; each service mounts only its required subdirectories. Preserve this volume together with the project definition and public URL. Removing only the secret directories does not reset an installation; initialization refuses to start over an existing database. Core also binds the installation ID to its database. Runtime settings continue to live in [Core's database](#runtime-settings-web).
 
 ## Docker node configuration
