@@ -176,3 +176,53 @@ func TestBaseProtocolConsumerNeverSendsCredit(t *testing.T) {
 		t.Fatal("new control sent to an old Runtime")
 	}
 }
+
+// Withdrawal is an execution event: it must reach Core before Done and return
+// transport credit just like the corresponding function call.
+func TestFunctionWithdrawalDispatchesWithAndWithoutCredit(t *testing.T) {
+	for _, credit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "base", true: "credit"}[credit], func(t *testing.T) {
+			s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+			s.eventCredit = credit
+			defer s.Close("test")
+			sub, err := s.SubscribeDurable("run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, err := proto.NewEnvelope(proto.TypeFunctionCallWithdrawn, "run", proto.FunctionCallWithdrawnPayload{CallID: "call", NativeID: "child", TurnID: "child-turn"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.dispatch(env)
+			select {
+			case got := <-sub.Events:
+				if got.Type != env.Type || string(got.Payload) != string(env.Payload) {
+					t.Fatal("withdrawal identity changed", got)
+				}
+				if err := sub.Consumed(t.Context(), got); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatal("function withdrawal was dropped")
+			}
+			select {
+			case frame := <-s.sendCh:
+				var ack proto.ExecutionEventsAckPayload
+				if !credit || frame.Type != proto.TypeExecutionEventsAck || frame.DecodePayload(&ack) != nil || ack.Count != 1 || ack.Bytes != proto.ExecutionEventBytes(env) {
+					t.Fatal("incorrect withdrawal credit", frame)
+				}
+			default:
+				if credit {
+					t.Fatal("withdrawal credit was not returned")
+				}
+			}
+			s.dispatch(proto.Envelope{Type: proto.TypeDone, ID: "run"})
+			if got := <-sub.Events; got.Type != proto.TypeDone {
+				t.Fatal("Done ordering lost", got)
+			}
+			if _, open := <-sub.Events; open || sub.Err() != nil {
+				t.Fatal("terminal event did not close subscription", sub.Err())
+			}
+		})
+	}
+}

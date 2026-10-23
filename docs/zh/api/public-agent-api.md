@@ -56,7 +56,7 @@ agents /agents
 | [Vaults](#vaults) | `/vaults` | MCP 服务器的只写凭据 |
 | Subagents | `/agents/sessions/{id}/subagents` | 只读的子任务；请参阅 [子 Agent](../../../contracts/agents-api/zh/subagents.md) |
 
-Core 保留固定版本 SDK 的全部路由，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。配置扩展位于 [`x_agents_core`](#core-extensions-x-agents-core)。使用 Project key 的[输入回执扩展](../../../contracts/agents-api/zh/sessions-events.md#input-receipts)可准确识别批次受理产生的用户 Item，不改变官方 events 响应。
+Core 保留固定版本 SDK 的全部路由，完整列表见 [upstream-routes.json](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/contracts/agents-api/upstream-routes.json)。配置扩展位于 [`x_agents_core`](#core-extensions)。使用 Project key 的[输入回执扩展](../../../contracts/agents-api/zh/sessions-events.md#input-receipts)可准确识别批次受理产生的用户 Item，不改变官方 events 响应。
 
 ## 常见任务 {#common-tasks}
 

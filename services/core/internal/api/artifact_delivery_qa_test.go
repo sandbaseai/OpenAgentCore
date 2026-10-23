@@ -162,7 +162,7 @@ func TestArtifactDeliveryMediaFixtureQA(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := &deliveryConn{archive: archive.Bytes(), incoming: make(chan []byte, 1), closed: make(chan struct{})}
-	gateway := runtimegateway.NewSessionWithOwner(conn, "device", "tenant", "test", runtimegateway.NewRegistry(), func(string, ...any) {}, nil)
+	gateway := runtimegateway.NewSession(conn, "device", "tenant", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 	gateway.Start()
 	defer gateway.Close("test")
 	storage := &deliveryStorage{}
