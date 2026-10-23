@@ -46,6 +46,12 @@ func (r *runtimeLifecycle) saveCompute(ctx context.Context, owner deployment.All
 	next, err := r.deployment.SetCompute(ctx, owner, phase, raw, until)
 	if err == nil {
 		log.Ctx(ctx).Info("Runtime compute phase saved", "allocation_id", owner.ID, "node_id", owner.NodeID, "from", owner.ComputePhase, "to", phase)
+		switch phase {
+		case "running":
+			r.computeRunning()
+		case "suspended":
+			r.freedSlot()
+		}
 	}
 	return next, err
 }
@@ -246,6 +252,7 @@ func (r *runtimeLifecycle) releaseLostCompute(ctx context.Context, p sandbox.San
 		return err
 	}
 	r.clearRuntimeState(released)
+	r.freedSlot()
 	return nil
 }
 
@@ -298,7 +305,7 @@ func (r *runtimeLifecycle) restoreIdleCompute(ctx context.Context, p sandbox.San
 		return err
 	}
 	if !activity.Busy && !activity.WakeRequested {
-		return nil
+		return r.expireForDemand(ctx, owner)
 	}
 	if err := r.computeCapacityForAllocation(ctx, owner); err != nil {
 		return err
@@ -324,6 +331,29 @@ func (r *runtimeLifecycle) restoreIdleCompute(ctx context.Context, p sandbox.San
 	}
 	return r.restoreCompute(ctx, p, next, state, false)
 }
+
+// expireForDemand lets capacity pressure end an idle checkpoint's retention
+// early. Core decides eligibility and demand; a refusal changes nothing, and
+// the expired allocation is observed and cleaned up as at its deadline.
+func (r *runtimeLifecycle) expireForDemand(ctx context.Context, owner deployment.Allocation) error {
+	return r.expire(ctx, owner, r.deployment.ExpireCheckpointForDemand)
+}
+
+func (r *runtimeLifecycle) expire(ctx context.Context, owner deployment.Allocation, end func(context.Context, deployment.Allocation) error) error {
+	err := end(ctx, owner)
+	if errors.Is(err, deployment.ErrNotIdle) || errors.Is(err, deployment.ErrAllocationConflict) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	expired, err := r.reader.EnvironmentAllocation(ctx, owner.Key())
+	if err != nil {
+		return err
+	}
+	return r.observe(ctx, expired)
+}
+
 func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observeOnly bool) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	if state.Retained == nil || state.Rollback || state.RestoreID == "" {
@@ -354,6 +384,11 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Sandbox
 	result, err := p.Resume(ctx, sandbox.ResumeRequest{Workspace: workspace, Reference: runtimeReference(owner), OperationID: state.RestoreID, Retained: *state.Retained, Target: *state.Target, ReconcileOnly: observeOnly})
 	observeExecutionStage(ctx, "provider_resume", resumeAt, err, "allocation_id", owner.ID, "session_id", owner.SessionID, "environment_id", owner.EnvironmentID, "node_id", r.nodeID, "reconcile_only", observeOnly)
 	logComputeStep(ctx, owner, "resume", resumeAt, err)
+	if errors.Is(err, sandbox.ErrCheckpointUnusable) {
+		// The Provider closed this attempt before native dispatch. Never restore
+		// the snapshot again: expire it and continue by ordinary expiry cleanup.
+		return r.expire(ctx, owner, r.deployment.ExpireUnusableCheckpoint)
+	}
 	if err != nil {
 		return err
 	}

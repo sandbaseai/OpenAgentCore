@@ -1,19 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/claudesdk"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/codex"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/mcode"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/paths"
 	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
 )
-
-var harnessDeclarations = []agent.Declaration{codex.Declaration, mcode.Declaration, claudesdk.Declaration}
 
 type discoveredHarness struct {
 	declaration agent.Declaration
@@ -33,22 +30,37 @@ func discoverAgentCLIs(parent context.Context, rc *runContext, profile string, d
 	if err != nil {
 		return nil, err
 	}
+	// Preflights are independent and sit on every cold start, so they run
+	// concurrently; their output is replayed in declaration order.
+	type probe struct {
+		runtime        *agent.Runtime
+		stdout, stderr bytes.Buffer
+	}
+	probes := make([]probe, len(declarations))
+	var running sync.WaitGroup
+	for i, declaration := range declarations {
+		if rc.installedKinds != nil && !rc.installedKinds[declaration.Kind] {
+			continue
+		}
+		running.Go(func() {
+			p := &probes[i]
+			started := time.Now()
+			p.runtime = declaration.Discover(parent, agent.DiscoveryOptions{Profile: profile, StateRoot: stateRoot, RuntimeRoot: runtimeRoot, Stdout: &p.stdout, Stderr: &p.stderr}, declaration.Info())
+			obslog.Ctx(parent).Info("runtime startup stage", "stage", "harness_discovery", "harness_kind", declaration.Kind, "duration_ms", float64(time.Since(started))/float64(time.Millisecond), "available", p.runtime != nil && p.runtime.Info.Available)
+		})
+	}
+	running.Wait()
 	var out agentCLIDiscovery
 	available := false
-	for _, declaration := range declarations {
-		if rc.installedKinds != nil && !rc.installedKinds[declaration.Info.Kind] {
+	for i := range probes {
+		p := &probes[i]
+		_, _ = rc.stdout.Write(p.stdout.Bytes())
+		_, _ = rc.stderr.Write(p.stderr.Bytes())
+		if p.runtime == nil {
 			continue
 		}
-		started := time.Now()
-		runtime := declaration.Discover(parent, agent.DiscoveryOptions{Profile: profile, StateRoot: stateRoot, RuntimeRoot: runtimeRoot, Stdout: rc.stdout, Stderr: rc.stderr}, declaration.Info)
-		obslog.Ctx(parent).Info("runtime startup stage", "stage", "harness_discovery",
-			"harness_kind", declaration.Info.Kind, "duration_ms", float64(time.Since(started))/float64(time.Millisecond),
-			"available", runtime != nil && runtime.Info.Available)
-		if runtime == nil {
-			continue
-		}
-		out = append(out, discoveredHarness{declaration, *runtime})
-		available = available || runtime.Info.Available
+		out = append(out, discoveredHarness{declarations[i], *p.runtime})
+		available = available || p.runtime.Info.Available
 	}
 	if err := parent.Err(); err != nil {
 		return out, err

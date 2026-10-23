@@ -85,7 +85,7 @@ func TestWebSocketNegotiatesEventCredit(t *testing.T) {
 			if tc.offer != nil {
 				header[proto.ExecutionFlowHeader] = tc.offer
 			}
-			conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?device_id=device&version=0.16.0", header)
+			conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?device_id=device&version="+proto.Version, header)
 			if resp == nil {
 				t.Fatal(err)
 			}

@@ -25,6 +25,7 @@ type decodedSessionRequest struct {
 }
 
 type sessionRequest struct {
+	computeProfile        string
 	initialFiles          []environmentconfig.InitialFile
 	initialization        environmentconfig.Setup
 	originalEnvironment   json.RawMessage
@@ -64,6 +65,13 @@ func (request decodedSessionRequest) validated() (sessionRequest, error) {
 	canonicalEnvironment, err := preparationEnvironmentInput(request.Environment, input.XAgentsCore)
 	if err != nil {
 		return input, err
+	}
+	if input.XAgentsCore != nil && len(input.XAgentsCore.Environment) > 0 {
+		var ext struct {
+			ComputeProfile string `json:"compute_profile"`
+		}
+		_ = json.Unmarshal(input.XAgentsCore.Environment, &ext)
+		input.computeProfile = ext.ComputeProfile
 	}
 	input.originalEnvironment = request.Environment
 	var environmentFields map[string]json.RawMessage

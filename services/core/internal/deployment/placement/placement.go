@@ -16,6 +16,7 @@ import (
 )
 
 var (
+	ErrComputeProfileUnavailable = errors.New("requested compute profile is unavailable")
 	// ErrResetAdmission rejects new hosted work while a sandbox reset pauses
 	// admission.
 	ErrResetAdmission = errors.New("hosted admission is paused for a sandbox reset")
@@ -70,7 +71,13 @@ func (r *Rules) PublicURL() string { return r.publicURL }
 
 // Deployment is the deployment as placement reads it, loaded under the
 // deployment lock.
+type ComputeProfile struct {
+	Generation    uint64                 `json:"generation"`
+	Specification sandbox.DeploymentSpec `json:"specification"`
+}
+
 type Deployment struct {
+	ComputeProfiles map[string]ComputeProfile
 	// InstallationID is empty until the execution owner claims the
 	// installation at startup.
 	InstallationID string

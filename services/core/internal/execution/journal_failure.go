@@ -17,7 +17,7 @@ func (j *journal) reportFailure(stage, kind string, size int, err error) {
 		ctx = context.Background()
 	}
 	switch kind {
-	case proto.TypeDelta, proto.TypeOutputMessage, proto.TypeThinking, proto.TypeToolCall, proto.TypeCommandOutput, proto.TypeUsage,
+	case proto.TypeDelta, proto.TypeOutputMessage, proto.TypeReasoning, proto.TypeToolCall, proto.TypeCommandOutput, proto.TypeUsage,
 		proto.TypeError, proto.TypeDone, proto.TypePromptSteerAck, proto.TypeSubagentIdentity, proto.TypeSubagentLifecycle, proto.TypeSubagentTurn, proto.TypeSubagentItem, proto.TypeSubagentCoordination, "cancel_receipt":
 	default:
 		kind = "unknown"

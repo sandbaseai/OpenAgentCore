@@ -74,7 +74,7 @@ func TestTerminalRealCommitUnknownRollbackAndStatus(t *testing.T) {
 			if mode == "unknown" || mode == "rollback" {
 				status = sessions.TurnCompleted
 			}
-			ended, err := d.finishRun(tenant, session, turn, "fixture", Result{}, status)
+			ended, err := d.finishRun(tenant, session, turn, Result{}, status)
 			uncertain := mode == "unknown" || mode == "rollback"
 			if (err != nil) != uncertain {
 				t.Fatal(err)
@@ -109,7 +109,7 @@ func TestTerminalRealCommitUnknownRollbackAndStatus(t *testing.T) {
 				t.Fatal(ended.Status, rows)
 			}
 			if uncertain {
-				_, retryErr := d.finishRun(tenant, session, turn, "fixture", Result{}, status)
+				_, retryErr := d.finishRun(tenant, session, turn, Result{}, status)
 				rows = terminalRows(t, logs.Bytes())
 				if len(rows) != 2 {
 					t.Fatal(rows)
@@ -148,7 +148,7 @@ func TestTerminalUnappliedFallbackUsesSeparateAttempts(t *testing.T) {
 	logs := captureExecutionLogs(t)
 	f := newFinishObservationFixture(t, 0)
 	receipt := f.start(t)
-	ended, err := f.dispatcher.finishRun(f.tenant, f.session.ID, receipt.TurnID, "fixture", Result{}, sessions.TurnCompleted)
+	ended, err := f.dispatcher.finishRun(f.tenant, f.session.ID, receipt.TurnID, Result{}, sessions.TurnCompleted)
 	if err != nil || ended.Status != sessions.TurnFailed {
 		t.Fatal(err, ended.Status)
 	}

@@ -116,7 +116,7 @@ func TestInitializationCommitWakesThrottledScheduler(t *testing.T) {
 			if _, err = registry.WaitForDevice(t.Context(), "device", time.Second); err != nil {
 				t.Fatal(err)
 			}
-			heartbeat, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{SupportedAgentKinds: []proto.SupportedAgentKind{{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{Streaming: proto.CapabilitySupported, Steering: proto.CapabilitySupported, DurableTurns: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, Preparation: proto.CapabilitySupported, ExecutionControls: proto.CapabilitySupported, WebSearchControl: proto.CapabilitySupported, TextVerbosity: proto.CapabilitySupported, ToolObservations: proto.CapabilitySupported, SubagentControl: proto.CapabilitySupported, LocalEnvironment: proto.CapabilitySupported, WorkspaceReadPreparation: proto.CapabilitySupported, WorkspaceOutputExport: proto.CapabilitySupported})}}})
+			heartbeat, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{SupportedAgentKinds: []proto.SupportedAgentKind{{Kind: "codex", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{Streaming: proto.CapabilitySupported, DurableTurns: proto.CapabilitySupported, DurableInputReceipts: proto.CapabilitySupported, Preparation: proto.CapabilitySupported, ExecutionControls: proto.CapabilitySupported, ToolObservations: proto.CapabilitySupported, SubagentControl: proto.CapabilitySupported, LocalEnvironment: proto.CapabilitySupported, WorkspaceReadPreparation: proto.CapabilitySupported, WorkspaceOutputExport: proto.CapabilitySupported})}}})
 			if err = conn.WriteJSON(heartbeat); err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestInitializationCommitWakesThrottledScheduler(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("capability hint absent")
 			}
-			worker := &Worker{dispatcher: &Dispatcher{SessionsReader: reader, Registry: registry, DeploymentReader: &strictDeploymentReader{t: t, environmentAllocation: func(context.Context, deployment.AllocationKey) (deployment.Allocation, error) {
+			worker := &Worker{runtimes: &runtimeManager{}, dispatcher: &Dispatcher{SessionsReader: reader, Registry: registry, DeploymentReader: &strictDeploymentReader{t: t, environmentAllocation: func(context.Context, deployment.AllocationKey) (deployment.Allocation, error) {
 				return deployment.Allocation{}, deployment.ErrNotFound
 			}}}, scheduleWake: make(chan struct{}, 1), concurrency: 1}
 			storage := &initializationWakeStorage{reader: reader, worker: worker}

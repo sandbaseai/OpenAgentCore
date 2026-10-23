@@ -62,7 +62,7 @@ func TestProcessCreateObservationsReachLogger(t *testing.T) {
 	for _, overflow := range []bool{false, true} {
 		t.Run(strconv.FormatBool(overflow), func(t *testing.T) {
 			p, caller, ref := fixture(t)
-			_, _ = p.Create(bounded(t), sandbox.Bootstrap{Reference: ref, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "private-bootstrap", Harness: "codex", NetworkAccess: "enabled"})
+			_, _ = p.Create(bounded(t), sandbox.Bootstrap{Reference: ref, SessionID: uuid.NewString(), DeviceID: uuid.NewString(), CoreURL: "https://core.example/api/v1", Credential: "private-bootstrap", Harness: "codex"})
 			q := caller.requests[0]
 			q.Deadline = time.Now().Add(time.Second)
 			raw := `{"event":"e2b_create_stage","stage":"sandbox_create","duration_us":1250,"completed":true}` + "\nprivate SDK secret\n"

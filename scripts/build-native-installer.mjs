@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Package trusted, already-built native artifacts. This does not install on a host.
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
@@ -131,10 +131,10 @@ export async function validateComponents(root, names, daemonVersion) {
       const upstream = await json(join(component, 'source.json'));
       const expected = await json(new URL('../packages/mcode-harness/source.json', import.meta.url));
       if (upstream.version !== pins.minimax || upstream.revision !== expected.revision) throw new Error('MiniMax source pin mismatch');
-      for (const entry of ['launch.mjs', 'dist/worker.mjs', 'provenance.json', 'native-patch.json']) await requireFile(join(component, entry));
+      for (const entry of ['check.mjs', 'subagent-snapshot.mjs', 'provenance.json', 'native-patch.json']) await requireFile(join(component, entry));
       if (probe(node, [join(component, 'native/cli.js'), '--version'], component, env) !== pins.minimax) throw new Error('MiniMax native pin mismatch');
       const info = JSON.parse(probe(node, [join(component, 'check.mjs')], component, env));
-      if (info.protocol !== 2 || info.native !== pins.minimax || info.source !== expected.revision) throw new Error('MiniMax companion compatibility failed');
+      if (info.protocol !== 3 || info.native !== pins.minimax || info.source !== expected.revision) throw new Error('MiniMax companion compatibility failed');
     }
   }
 }
@@ -177,4 +177,15 @@ export async function buildBundle(options) {
     await rename(staging, output);
     return manifest;
   } finally { await rm(staging, { recursive: true, force: true }); }
+}
+
+// Split a built bundle into the small base archive (the daemon and bundle.json) and one archive
+// per component. Names are the artifact names Core serves: <os>-<arch>[-<component>].
+export async function archiveBundle(bundle, output) {
+  const { os, arch, components } = await json(join(bundle, 'bundle.json'));
+  const tar = process.platform === 'win32' ? join(process.env.SystemRoot, 'System32', 'tar.exe') : 'tar';
+  const pack = (name, entries) => execFileSync(tar, ['-czf', join(output, `${name}.tar.gz`), '-C', bundle, ...entries], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  await mkdir(output, { recursive: true });
+  pack(`${os}-${arch}`, [process.platform === 'win32' ? 'oac-daemon.exe' : 'oac-daemon', 'bundle.json']);
+  for (const name of Object.keys(components)) pack(`${os}-${arch}-${name}`, [`components/${name}`]);
 }

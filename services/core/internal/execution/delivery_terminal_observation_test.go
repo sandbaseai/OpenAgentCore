@@ -58,7 +58,7 @@ func TestDeliveryTerminalActualPath(t *testing.T) {
 			receipt := f.start(t)
 			f.dispatcher.SessionsReader = sessionpg.New(pgunit.NewPool(f.pool), nil)
 			conn := &terminalDeliveryConn{artifactWorkspaceConn: &artifactWorkspaceConn{executionTraceConn: &executionTraceConn{closed: make(chan struct{})}, replies: make(chan []byte, 8)}, mode: mode}
-			peer := runtimegateway.NewSessionWithOwner(conn, "device", f.tenant, "test", runtimegateway.NewRegistry(), func(string, ...any) {}, nil)
+			peer := runtimegateway.NewSession(conn, "device", f.tenant, "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 			peer.Start()
 			defer peer.Close("test")
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -112,7 +112,7 @@ func TestDeliveryTerminalActualPath(t *testing.T) {
 				t.Fatalf("boundaries=%s want=%s", gotJSON, wantJSON)
 			}
 			if mode != "start_failure" {
-				ended, err := f.dispatcher.finishRun(f.tenant, f.session.ID, receipt.TurnID, "fixture", result, status)
+				ended, err := f.dispatcher.finishRun(f.tenant, f.session.ID, receipt.TurnID, result, status)
 				if err != nil || ended.Status != sessions.TurnCompleted {
 					t.Fatal("delivery journal cannot settle", err)
 				}

@@ -39,7 +39,11 @@ type Registry struct {
 	// is inserted into byDevice. Buffered(1) so a Register that
 	// happens between WaitForDevice registering and selecting on the
 	// chan still wakes the waiter.
-	waiters         map[string][]chan *Session
+	waiters map[string][]chan *Session
+
+	// announced coalesces "a session reported its agent kinds for the first
+	// time" for the one owner that waits on known kinds.
+	announced       chan struct{}
 	capabilityHints chan struct{}
 }
 
@@ -50,7 +54,19 @@ func NewRegistry() *Registry {
 		byDevice:        map[string]*Session{},
 		byRun:           map[string]*Session{},
 		waiters:         map[string][]chan *Session{},
+		announced:       make(chan struct{}, 1),
 		capabilityHints: make(chan struct{}, 1),
+	}
+}
+
+// Announced signals after a session first reports its agent kinds. Polling
+// recovers a coalesced signal.
+func (r *Registry) Announced() <-chan struct{} { return r.announced }
+
+func (r *Registry) announce() {
+	select {
+	case r.announced <- struct{}{}:
+	default:
 	}
 }
 

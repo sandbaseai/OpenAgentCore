@@ -111,7 +111,7 @@ class ProviderTest(unittest.TestCase):
                         'Reference': self.reference, 'Deadline': (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
                         'Bootstrap': dict(self.reference, SessionID=str(uuid4()), DeviceID=str(uuid4()),
                                           CoreURL='https://core.example/api/v1', Credential='private-runtime-secret',
-                                          Harness='codex', NetworkAccess='enabled', AllowedDomains=[])}
+                                          Harness='codex')}
         self.request['RuntimeBootstrap'] = {
             'version': 2, 'harness': 'codex', 'core_url': self.request['Bootstrap']['CoreURL'],
             'device_id': self.request['Bootstrap']['DeviceID'],

@@ -23,8 +23,8 @@ type ExecutionEventsAckPayload struct {
 
 func IsExecutionEvent(kind string) bool {
 	switch kind {
-	case TypeDelta, TypeOutputMessage, TypeThinking, TypeToolCall, TypeCommandOutput,
-		TypeUsage, TypeError, TypeDone, TypePromptSteerAck, TypeFunctionCall,
+	case TypeDelta, TypeOutputMessage, TypeReasoning, TypeToolCall, TypeCommandOutput,
+		TypeUsage, TypeError, TypeDone, TypePromptSteerAck, TypeFunctionCall, TypeFunctionCallWithdrawn,
 		TypeSubagentIdentity, TypeSubagentLifecycle, TypeSubagentTurn, TypeSubagentItem, TypeSubagentCoordination:
 		return true
 	}

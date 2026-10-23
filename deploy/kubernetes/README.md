@@ -28,11 +28,13 @@ Both images always come from one commit, so the console never talks to a Core of
 
 ## Deploy
 
+**Installation boundary:** the current source uses the `oac_schema_version` migration ledger and a folded schema baseline. A database from the earlier `agents_api_schema_version` installation cannot be upgraded by this workflow. Do not dispatch against that database: the replacement would attempt to create existing objects after the old Pod has stopped. Preserve the database, state volume and credential key; plan a separate installation and any required data transfer before changing the deployed source. Source synchronization or merging into `beta` does not authorize reinstallation.
+
 Merge the deployment workflow into `main`. Run **Actions** → **core-deploy** → **Run workflow** from `main` and select `source_branch` (`main` by default or `beta`), then give it a release tag or a full commit SHA already merged into that source branch. Both choices replace the same production Core and Web; `beta` does not create a separate environment. Review the [beta integration ledger](https://github.com/sandbaseai/OpenAgentCore/blob/beta/deploy/kubernetes/BETA_CHANGELOG.md) on the beta branch before selecting a beta revision. Keep the workflow branch set to `main`, including when deploying beta. The run builds both images, pushes them, applies the secrets and the environment, rolls Core out and then Web, and checks that both Services have a ready endpoint. It does not create an Ingress or configure DNS or certificates. Route `/v1` and `/api/v1` to `oac-core:8091`, and all other paths to `oac-web:8080`, in the `openagentcore` namespace. After configuring HTTPS, check `/healthz`, verify that unauthenticated `/v1/agents` returns `401`, and qualify a fresh E2B Session and Turn.
 
 **A deployment is an outage.** Core's single replica stops before its replacement starts, and the replacement migrates the schema before it listens, so the Agents API, the machine routes and every running Session are unavailable for the rollout. Deploy in a window you can afford to lose. The Pod that takes over also needs the previous one's leased database connection to be gone; until it is, `AcquireLease` fails and Core exits, and the rollout depends on a restart landing inside the 15-minute deadline.
 
-To roll back, run the workflow again with the earlier commit. A rollback across a schema migration is not automatic: the earlier Core runs against the newer schema.
+To roll back within the same compatible installation schema, run the workflow again with the earlier commit. A source rollback does not undo migrations and cannot cross the migration-ledger or folded-baseline boundary. Restore a compatible database and state snapshot through a separately approved recovery procedure when required.
 
 ## Settings
 

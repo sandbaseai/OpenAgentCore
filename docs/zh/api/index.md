@@ -1,10 +1,10 @@
 ---
 title: "API 命名空间和凭据"
 source: docs/api/index.md
-source_hash: 8d2ad771264cdae08856ea185cd9e1be9ee54f436e38de3fbd9d792c28248f42
+source_hash: d6d1482165c94d0d832593a7ea1ae8c24d20189a1b6bd6a945f4c49944785ca2
 ---
 
-Core 提供三个命名空间。每个命名空间都有一种调用方及其独立凭据，凭据只能在其所属命名空间中使用。
+Core 提供三个 API 命名空间，每个面向一类调用方并使用独立凭据：应用使用 `/v1`，管理员使用 `/core/v1`，机器使用 `/api/v1`。凭据只能在其所属命名空间中使用。
 
 | 命名空间 | 调用方 | 凭据 | 内容 | 所有者 |
 | --- | --- | --- | --- | --- |
@@ -14,14 +14,8 @@ Core 提供三个命名空间。每个命名空间都有一种调用方及其独
 
 在其他命名空间中使用凭据会返回 401：在 `/core/v1` 或 `/api/v1` 上使用项目 API 密钥，或者在 `/v1` 或 `/api/v1` 上使用 Core 密钥。有关项目和密钥的行为，请参阅 [项目自有资产](../concepts.md#projects-own-assets)。
 
-**路由。** Web 把 `/v1`、`/api/v1` 和 `/docs` 原样转发到 Core（[控制台服务器](../web/console-server.md)）。已登录的浏览器通过 Web 访问 `/core/v1`，由 Web 附上 Core 密钥。操作员脚本在 Core 主机上从 Core 的网络命名空间内调用 `/core/v1`（[编写 Core API 脚本](../getting-started/operations.md#script-the-core-api)）。
+**路由。** Web [把 API 路径转发到 Core](../web/console-server.md#request-boundary)。已登录的浏览器通过 Web 访问 `/core/v1`，由 Web 附上 Core 密钥。操作员脚本在 Core 主机上从 Core 的网络命名空间内调用 `/core/v1`（[编写 Core API 脚本](../getting-started/operations.md#script-the-core-api)）。
 
-**API 参考。** Core 在 `/docs` 提供三个命名空间的只读 Swagger UI，文档位于 `/docs/openapi.yaml`、`/docs/core.openapi.yaml` 和 `/docs/runtime.openapi.yaml`。不需要凭据，页面也不发送 API 请求。在控制台源地址打开，例如 `http://localhost:8080/docs`。浏览器从 `unpkg.com` 加载 Swagger UI。
+## API 参考 {#api-reference}
 
-## 机器连接 API {#machine-connection-api}
-
-节点、Runtime 守护进程和自托管安装程序使用各自的凭据调用 `/api/v1`。[机器连接 API](../../../contracts/agents-api/zh/machine-api.md) 列出了每个路由、调用方和凭据。
-
-运维脚本通过经 Core 密钥认证的 `GET` 和 `PUT /core/v1/workspace-storage` 配置独立文件系统存储；参见[工作区存储](../../../contracts/agents-api/zh/admin-api.md#workspace-storage)。
-
-Web 和运维脚本通过 Core 密钥认证的 `PATCH /core/v1/sandbox/deployment` 更新沙箱空闲策略；参见[沙箱部署](../../../contracts/agents-api/zh/sandbox-deployment.md)。
+Core 在 `/docs` 提供三个命名空间的只读 Swagger UI，文档位于 `/docs/openapi.yaml`、`/docs/core.openapi.yaml` 和 `/docs/runtime.openapi.yaml`。不需要凭据，页面也不发送 API 请求。在控制台源地址打开，例如 `http://localhost:8080/docs`。浏览器从 `unpkg.com` 加载 Swagger UI。

@@ -1,27 +1,42 @@
 ---
-title: "Add a Sandbox Provider"
+title: "Sandbox Provider protocol"
 ---
 
-A **Sandbox Provider** supplies the outer compute that a Runtime daemon runs in for a Core-managed Environment, and the bounded bootstrap that starts that daemon. This guide is the path for adding one and the reference for how Core drives it. The interface is [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go).
+The Sandbox Provider protocol connects Core to the adapter that supplies compute for Core-managed (`openai_hosted`) Environments and runs the bounded bootstrap that starts the Runtime daemon in it. This page is for adapter authors: it says what a Provider implements and what it may rely on Core to do. Docker, microsandbox and E2B implement it.
+
+| | |
+| --- | --- |
+| Caller | Core's runtime manager and execution Worker |
+| Implementations | Docker and microsandbox (node adapters) and E2B (direct adapter); see [Reference adapters](#reference-adapters) |
+| Code | [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go) in `sandbox_provider.go`, with the setup-time `ConfigurationAdapter` |
+| Transport | A direct adapter is called in process. A node adapter runs on a sandbox node and receives the same calls over the [sandbox node protocol](../contracts/agents-api/node-generation-protocol.md#provider-requests) |
+| Version rule | The in-process interface has no wire version. The sandbox node protocol and each helper protocol require an exact version match |
 
 | Term | Meaning |
 | --- | --- |
-| Environment | Durable execution place owned by Core; see [Environments](../contracts/agents-api/environments.md) |
+| Environment | Durable execution place owned by Core; see [Environments and Templates](../contracts/agents-api/environments.md) |
 | Allocation | One Core-owned compute lease for an Environment, identified by `Reference` |
-| Runtime | The daemon inside the Environment; it prepares capabilities and executes Turns |
 | Deployment | The single deployment-wide provider selection; see [Sandbox deployment](../contracts/agents-api/sandbox-deployment.md) |
 
-Core owns durable Environment, allocation, placement and cleanup state; the Provider owns compute and bootstrap only. The Runtime prepares capabilities and runs Turns over the [Core–Runtime protocol](./runtime-protocol.md), and the provider hands it its identity through the [Runtime bootstrap](./runtime-bootstrap.md) file. A provider never runs Environment initialization, Skills, Plugins, MCP setup, initial files, execution or Files; those use the Runtime. Isolation belongs to the provider's infrastructure, not the daemon; see [Runtime and outer isolation](./concepts.md#runtime-and-outer-isolation). Use the vendor's maintained SDK behind a thin adapter.
-
-## Steps
+## Implement a Provider
 
 1. **Read the contract.** Implement every method, support the required operations and declare a decision for each of the others in [Implement the interface](#implement-the-interface).
 2. **Write the adapter package** under `services/core/internal/sandbox/<kind>`: native SDK calls, ownership checks, identity translation, private configuration and, for a node adapter, its node-local construction. Assert `var _ sandbox.SandboxProvider = (*YourAdapter)(nil)`. An out-of-process helper lives in `services/core/tools/<kind>-provider`.
 3. **Register the kind** once, following [Register the provider kind](#register-the-provider-kind). Registration is explicit construction, not an init-time plugin registry.
 4. **Label owned resources** with the provider ownership labels in the [Runtime names](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/CONTRIBUTING.md#openagentcore-runtime-names) table, and never accept older label names as a fallback.
-5. **Run the contract suite** with `make check-sandbox-provider-contract`; see [Validate the integration](#validate-the-integration).
+5. **Run the contract suite** with `make check-sandbox-provider-contract`; see [Conformance](#conformance).
 6. **Run native acceptance** against real compute, then `make check`.
 7. **Document the adapter** next to it, like the [reference adapters](#reference-adapters).
+
+## Roles
+
+| Party | Owns | Never does |
+| --- | --- | --- |
+| Core | Durable Environment, allocation, placement and cleanup state; lifecycle serialization; every decision to create, suspend, restore or release | Calls an operation the Provider declared unsupported, or releases an allocation on an offline node, a timeout or an empty read |
+| Sandbox Provider | Compute for an allocation, the bounded Runtime bootstrap, native identity and ownership checks, and the receipts Core needs to observe and clean up | Runs Environment initialization, Skills, Plugins, MCP setup, initial files, execution or Files, or locates a resource by a bare native ID, name or path |
+| Runtime | Capability preparation and Turn execution, over the [Core–Runtime protocol](./runtime-protocol.md) after the Provider hands it its identity through the [Runtime bootstrap](./runtime-bootstrap.md) file | Allocates or destroys compute |
+
+Isolation belongs to the provider's infrastructure, not the daemon; see [Runtime and outer isolation](./concepts.md#runtime-and-outer-isolation). Use the vendor's maintained SDK behind a thin adapter.
 
 ## Implement the interface
 
@@ -37,6 +52,8 @@ Core owns durable Environment, allocation, placement and cleanup state; the Prov
 
 A backend without a native renewable lease, such as Docker, still keeps Core's hosted expiry and cleanup requirements. Every adapter implements `RunCommand` and its tests exercise it, but Core's orchestration does not call it; only the node transport forwards it. Confidential command input travels in `Command.Stdin`, never in arguments or logs, and the result keeps byte order, bounded output and the actual exit status.
 
+`Bootstrap.Workspace` and `ResumeRequest.Workspace` carry an external workspace binding exactly when the Provider's `DeploymentPolicy.Workspace` is declared; the Provider obligations for it are in [Attachment](./workspace-provider.md#attachment).
+
 ### Explicit operation contracts
 
 Every provider returns a complete `ProviderOperations()` declaration with one entry for each `SandboxProvider` method except `ProviderOperations` itself. The interface's method set is the operation inventory, and `sandbox.ValidateOperations` checks the declaration against it. The groups in the table below are lists in the protocol file, and a test keeps them equal to that method set, so a new method must join one of them.
@@ -46,8 +63,11 @@ Every provider returns a complete `ProviderOperations()` declaration with one en
 | `Create`, `GetInfo`, `Renew`, `Kill`, `RunCommand` | Supported | Allocation lifecycle and bounded commands |
 | `Observe` | Explicit decision | Ownership-checked read-only observation of one allocation |
 | `Initial`, `NewCompute`, `GetCompute`, `RenewCompute`, `Suspend`, `Resume`, `ResumeCompute`, `KillCompute`, `DeleteRetained`, `RunCommandCompute` | The same decision for all ten suspension methods in `nodes` or `direct` mode | Exact compute incarnations, capture and restore, retained-source resume and cleanup |
+| `RestorePreparation`, `SavePreparation` | The same decision for both | Reuse of a finished Environment preparation |
 
 `Initial` and `NewCompute` construct compute references without allocating, `ResumeCompute` thaws only the same resident instance after an aborted pause, and `RunCommandCompute` runs a bounded command in one exact compute incarnation. Core uses `RunCommandCompute` to wake a parked daemon after a restore ([`runtime_compute_wake.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/execution/runtime_compute_wake.go)).
+
+`SavePreparation(reference, key)` stores what preparation wrote under `/environment` (workspace, packages and initialization, never Runtime state) in the allocation's initial compute after a complete preparation, and `RestorePreparation(reference, key)` puts a stored one back and returns `false` when it holds no valid entry. The `key` is opaque: Core derives it from the Project and everything that reaches preparation, never from the Environment, Session, Harness or Agent, and the Provider never interprets it. The Provider owns storage, scoping to its Runtime image, expiry and eviction. An entry is valid for 24 hours after its save, and a restore must not use an expired one. Core calls `RestorePreparation` after the Runtime connects and, on a hit, sends only the `finalize` operation before completing initialization. On a miss it prepares in full and calls `SavePreparation`; a save error is logged and never fails the Session. A Provider that declares neither always prepares in full. The microsandbox adapter keeps one archive per key in a private directory under the Runtime home.
 
 Each declaration entry is `state: supported` with no reason, or `state: unsupported` with an authored reason code. Missing, zero, unknown or unsafe entries fail validation. Adding a method to `SandboxProvider` requires an explicit decision and implementation in every adapter; never supply a base type or generate blanket unsupported implementations.
 
@@ -55,7 +75,7 @@ An unsupported method returns `providercontract.UnsupportedError` before any nat
 
 Each adapter owns one `Operations()` function, shared by its instance and its registration. `providers.ValidateBinding` checks both against the interface and each other, and Runtime admission and node generation loading also reject incomplete providers. Callers check the declaration with `providercontract.Require` before they call an operation, never a type assertion.
 
-`Observe` reads one allocation and never renews, starts, prepares or stops compute; see the [observation contract](../contracts/agents-api/runtime-observability.md).
+`Observe` reads one allocation and never renews, starts, prepares or stops compute; see [Runtime observability](../contracts/agents-api/runtime-observability.md).
 
 Contract tests call every method declared unsupported with no native client configured, require its matching error and zero result, and reject incomplete or contradictory declarations. Supported behavior still needs native and lifecycle tests.
 
@@ -87,7 +107,7 @@ Every call receives a bounded context. Expiry or cancellation ends the caller's 
 | `Kill` | Owned compute and retained storage removed; repeated confirmed absence succeeds | An error keeps ownership and cleanup intent; an ownership mismatch never deletes foreign resources | Retry cleanup of the same `Reference` after outstanding creation or mutation is fenced; never release the owner early |
 | `RunCommand`, `RunCommandCompute` | Collected output and actual exit code; a nonzero exit is a settled command failure | Missing native completion is `ErrCommandUnconfirmed`; partial output is not success | Never replay. Keep the owner and reclaim before reuse when completion cannot be proved |
 
-`ErrInvalid`, `ErrOwnership`, `ErrExists`, `ErrNotFound`, `ErrComputeUnconfirmed` and `ErrCommandUnconfirmed` keep their defined meanings. An unclassified native or transport error is unknown, never permission to retry a mutation. Core never reads provider diagnostics as lifecycle truth or exposes native error text or credentials; the node transport maps errors to fixed codes, and direct SDK details stay private.
+`ErrInvalid`, `ErrOwnership`, `ErrExists`, `ErrNotFound`, `ErrComputeUnconfirmed`, `ErrCommandUnconfirmed` and, for `Resume` only, `ErrCheckpointUnusable` keep their defined meanings. An unclassified native or transport error is unknown, never permission to retry a mutation. Core never reads provider diagnostics as lifecycle truth or exposes native error text or credentials; the node transport maps errors to fixed codes, and direct SDK details stay private.
 
 Suspension support adds `Compute` generation, name and ID and `RetainedState`; persist operation IDs and the provider's retained-state provenance unchanged. `ReconcileOnly` on suspend or resume observes the previous attempt and never starts another capture or restore. `ResumeCompute` only thaws the retained source and never cold-starts a stopped one. Cleanup targets the exact compute incarnation and retained state, not whatever instance now has the same name. `GetCompute` returns `ErrNotFound` only when the owning node has verified that the exact incarnation no longer exists; an instance with the same name and another native ID is `ErrOwnership`, and an unreachable node or backend is an unknown result. A `ComputeState.Status` of `stopped` or `crashed` means the adapter verified that the exact incarnation’s process no longer exists; its record or disks can remain until `KillCompute` removes them. `paused`, `running` without a Runtime connection, and unknown states do not establish termination. Read [`runtime_compute.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/execution/runtime_compute.go) and its failure tests before declaring suspension support.
 
@@ -104,18 +124,18 @@ Hosted and self-hosted Environments use the same Runtime preparation; a provider
 
 ## Register the provider kind
 
-`sandbox/providers/registry.go` is the only registration table. Each entry binds the adapter's specification and resource validators, its `sandbox.ConfigurationAdapter`, the deployment mode (`nodes` or `direct`), its `sandbox.DeploymentPolicy` (disk limits, the Runtime input and the default size setup proposes), the operation declaration and a node-local (`BuildLocal`) or direct (`BuildDirect`) constructor. `providers.Build` and `providers.BuildDirect` construct adapters without allocating compute. There is no init-time registration or plugin loading.
+`sandbox/providers/registry.go` is the only registration table. Each entry binds the adapter's specification and resource validators, its `sandbox.ConfigurationAdapter`, the deployment mode (`nodes` or `direct`), its `sandbox.DeploymentPolicy` (disk limits, the optional external workspace requirement and the default size setup proposes), the operation declaration and a node-local (`BuildLocal`) or direct (`BuildDirect`) constructor. `providers.Build` and `providers.BuildDirect` construct adapters without allocating compute. There is no init-time registration or plugin loading.
 
 A new provider takes these steps:
 
 1. Implement the operation contracts in the adapter package, with native contract tests.
 2. Add its specification and resource validators.
 3. Implement `sandbox.ConfigurationAdapter` over a typed native configuration. `DecodeInput` strictly parses the separate public `configuration` and write-only `credential` objects of a request. `Encode` produces whitelisted public selectors, read-only observations and separate secret bytes, and never passes request JSON through. `Decode` restores stored selectors, and keeps access to owned resources, without remote admission or new template validation. `Normalize` copies its input before changing it. `ResolveChange`, `Equal` and `WithCredential` own inheritance, identity and credential composition. `CredentialAccessEqual` compares normalized credentials and every connection selector that determines resource access, excluding templates, capacity and discovery metadata; it validates both configurations and returns an error for invalid inputs. The caller separately preserves explicit credential-submission intent. `Requirements` declares whether a credential and a public Core origin are required, and which setup operations are supported: `Discovery` for `DiscoverConfiguration`, `SelectionDiscovery` for `DiscoverSelection` and `CredentialVerification` for `VerifyCredential`. `DiscoverConfiguration` validates the query and returns a safe catalog, never a mutation or an admission decision, while Core keeps authorization, input limits and deadlines. `DiscoverSelection` resolves a candidate's omitted native values before commit, and `VerifyCredential` verifies a credential's access to owned resources without mutation. Both receive the candidate's `sandbox.DirectConfig` and build any native client for that call only. A node provider accepts only an empty public object, rejects credentials and returns Unsupported for every setup operation and for credential replacement.
-4. For a node adapter, export from its package the `BuildLocal` constructor, the typed `native` object it decodes and the native files it adds to the shared node artifacts. Node-local settings, such as host paths, live only in that object; resources and the Runtime release are read from the node configuration's `specification`.
+4. For a node adapter, export from its package the `BuildLocal` constructor, the typed `native` object it decodes and the native files it adds to the shared node artifacts. Node-local settings, such as host paths, live only in that object; resources are read from the node configuration's `specification`, and the Runtime image comes from the same object.
 5. Register its constructor, policies, configuration adapter and operation declaration in `providers/registry.go`. Its key is the provider kind, which also labels the Provider's observations, and suspension support reads this entry. The generated projections combine each registered mode and deployment policy with the shared field bounds in `sandbox/deployment_contract.go`: the installer reads them from `deploy/node/node_spec.py`, and the TypeScript client and Web from `packages/agents-client/src/deployment-contract.ts`, so Web reads these declarations instead of comparing provider kinds. Regenerate both with `go run ./services/core/cmd/specification-contract -write`.
 6. Supply the distribution artifacts for the adapter and its helper, and offer the provider to operators through the registered configuration contract.
+7. Web's setup step, deployment summary and client projection name each provider. Add the new provider to `apps/web` until the protocol declares configuration fields.
 
-**Known design gap:** Web still names providers in the setup wizard's backend choice, the Docker confirmation and E2B's configuration fields wherever Web shows or parses them (the setup step with its service presets, the deployment summary and the client's deployment projection), because the protocol declares no configuration fields yet. Exposing another provider through that surface currently requires a shared Web edit. This coupling does not meet [Complexity stays in the adapter](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/AGENTS.md#complexity-stays-in-the-adapter); new integrations must express their configuration through the protocol and keep vendor-specific behavior in the adapter. Never add a Session or Turn scheduling path, a vendor column or API field, or a vendor switch in the store.
 
 A node configuration, `sandbox.NodeConfig`, holds `provider`, `generation`, `installation_id`, `core_url`, `specification` and the adapter's opaque `native` object. `providers.Build` validates `provider`, `generation`, `installation_id` and `specification`, and passes the configuration with ephemeral `sandbox.LocalOptions` to `BuildLocal`, which decodes `native` strictly. The caller explicitly selects standalone registration or single-provider execution with `Standalone`, or generation-owned execution with a canonical absolute node state directory in `GenerationStateDirectory`. Missing or mixed contexts are rejected. The adapter owns generation-specific native preparation and readiness checks. Microsandbox binds helper leases to the installation, generation and specification digest, then checks the pinned image after platform, capacity and artifact readiness.
 
@@ -125,12 +145,13 @@ A node configuration, `sandbox.NodeConfig`, holds `provider`, `generation`, `ins
 
 - A `nodes` registration has only `BuildLocal`, and a `direct` registration only `BuildDirect`; missing, mixed or unknown modes are rejected.
 - The specification and resource validators, the configuration adapter and a complete operation declaration are mandatory, so an incomplete registration cannot publish a partial projection. A declared default size must pass the adapter's resource validator.
-- The Runtime input policy either accepts the pinned Runtime or gives the adapter's fixed reason for rejecting it, never both.
 - Suspension is admitted in both `nodes` and `direct` modes when the complete lifecycle is declared supported. A registration carries no suspension values: Core applies its one [suspension policy](#suspension) to every supported Provider.
 
 The configuration adapter must be non-nil, including its concrete value. Every `ConfigurationRequirements` field needs an explicit valid decision: `Credential` and `PublicOrigin` are `Required` or `NotRequired`, and `Discovery`, `SelectionDiscovery` and `CredentialVerification` use the shared supported or unsupported declaration with a safe reason. A new requirement field needs an explicit validation update and never inherits an existing decision. Requiring a credential does not promise the `VerifyCredential` operation. These checks establish complete registration, not correct native SDK behavior; constructor and adapter contract tests still apply.
 
 ### Configuration storage and construction
+
+`Selection.ComputeProfiles` contains optional administrator-approved resource variants. The registry admits them only for direct-mode registrations, copies the default Runtime/workspace receipt, composes the default credential, and requires identical credential access selectors. Each variant follows the same declared `SelectionDiscovery` rule as the default: providers declaring discovery validate the native immutable selection; providers without discovery use their normalized selection. Node-mode providers explicitly reject nonempty variants. The common store materializes each approved variant as an immutable generation and persists only name-to-generation references in the active deployment. Public selection, freezing and collection are defined by [compute profiles](../contracts/agents-api/sandbox-deployment.md#compute-profiles).
 
 Preview and persistence use `providers.Normalize` and `providers.Describe`. `providers.DiscoverSelection` resolves omitted native values before commit, and the complete specification is validated again at persistence. `providers.ResolveChange` owns configuration inheritance, and comparisons use normalized selectors, so preview, retry and commit share the same defaults. The store owns transactions, credential encryption, generation fencing, resource ownership and generic object storage: only the adapter interprets `provider_config` and `provider_metadata`, and `provider_credential` holds ciphertext bound to the installation and generation. Retained generations keep their original public configuration and metadata and compose the current credential through the adapter, so a credential replacement never rewrites a retained selector. Database constraints check object structure, not the registration list.
 
@@ -146,25 +167,59 @@ Each node adapter's registration owns its typed `NodeArtifacts` declaration, the
 
 The launcher supplies `sandbox.ProcessPaths` from the [derived process environment](./configuration.md). Core reads these paths once and passes them to direct construction and setup operations. They are fixed distribution properties, not deployment settings or user-selectable helper paths. Each adapter resolves its own relative helper and state locations; E2B uses `e2b/oac-e2b-provider` and `e2b/`. Missing or nonabsolute roots fail before helper execution. Provider construction and discovery never read process environment variables.
 
-## Managed lifecycle
+## What Core guarantees to a Provider
 
-This is what Core does around every provider. Adapters implement none of it, but they rely on it.
+An adapter implements none of this, but it relies on it. The code-level mechanics are in [Core implementation constraints](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/IMPLEMENTATION.md#hosted-sandboxes).
 
-### Deployment publication
+- Core commits the allocation, its daemon credential digest and the Session binding before it calls `Create`. Only a fresh allocation receipt permits `Create`; retries and a Core restart observe the same `Reference` and never replay `Create` or rotate the credential.
+- Each node has one serial lifecycle worker, so calls for one node never run concurrently; E2B allocations share one worker. A stuck Provider on one node never stalls another.
+- Core never infers bootstrap completion from an engine or provider name; the adapter qualifies it through `Info.BootstrapComplete`.
+- Core calls `Kill` only after it has revoked the device's authority, settled pending input and requested cancellation. Temporary provider outages, unknown `Create` results and stopped compute never prove a permanent failure.
+- Core releases an allocation only after confirmed cleanup of its compute and volumes and proof that the original `Create` settled. Until then it keeps cleanup ownership, also after an absence observation, and bounded scans continue to catch late resources without another `Create`. This applies after public Session deletion too.
+- Core never releases an allocation on an offline node, a timeout or an empty read, and takes no lifecycle action on a node that is not [online](../contracts/agents-api/node-generation-protocol.md#connection). Retained ownership needs exact provider evidence: a socket path, a missing instance or an empty listing never proves cleanup or authorizes a replacement.
+- Placement is automatic and callers cannot choose a node. An active allocation keeps its original node, even while it is offline. After confirmed release, eligible retained Sessions can reserve compatible capacity again, including on another node. Source teardown must be confirmed before active capacity is released, and unknown operations keep their reservations. The [deployment contract](../contracts/agents-api/sandbox-deployment.md#generation-ownership-and-rollout) owns waiting, ordering and generation selection.
+- Between Turns, Core observes that connected compute is still its Session's running allocation. The check changes nothing. Running compute never expires, and an unreachable, stopped or missing instance without [confirmation](#confirmed-compute-loss) never authorizes discarding retained workspace or history or selecting replacement compute.
+- Core suspends the idle allocations of every Provider that declares checkpoint support, under one [suspension policy](../contracts/agents-api/sandbox-deployment.md#suspension-policy).
+- Disabling the provider stops new hosted admission and bootstrap but never blocks cancellation, function results or input retry outcomes of existing Sessions.
 
-At startup Core claims the stable installation identity and a new owner epoch before it selects a provider. The runtime manager keeps generation-aware provider facades. Initial setup and replacement prepare and validate candidates before any database write, and a rejected candidate leaves the active configuration and workers unchanged. A backend replacement uses the deployment mutation gate: it pauses manager admission, drains old calls and loops, then repeats the resource and generation guards in the commit transaction, where the new selection, its generation and the retirement of old nodes and unused enrollment tokens commit together. After commit, Core publishes the prevalidated configuration and the shared observation and bootstrap cache under the manager mutex, with no further external work or fallible step, so a request cancelled after commit cannot discard it. An interrupted drain stays a barrier for retries. Provider I/O and draining never hold a database transaction or the manager's map mutex.
+```mermaid
+stateDiagram-v2
+    [*] --> creating: allocation committed before Create
+    creating --> running: matching running compute with completed bootstrap
+    creating --> cleanup_pending: cleanup requested
+    running --> cleanup_pending: cleanup requested
+    cleanup_pending --> released: cleanup confirmed and Create settled
+    released --> [*]
+```
 
-A locally unavailable provider dependency keeps hosted admission closed while the existing scan waits for repair; administrator recovery stays available, also after a restart. Database and ownership errors stay failures. An unconfigured deployment refuses hosted admission with 503 `execution_unavailable` and creates no Session state. Core derives the Runtime bootstrap and daemon WebSocket addresses from the installation public URL, never from request headers, and reads the current selection from the database, never from a startup file.
+An allocation moves to `cleanup_pending` when its Session is deleted or archived, its Environment fails or expires, or an administrator resets the deployment. `released` requires `CreateSettled`; see [Identity and resource ownership](#identity-and-resource-ownership).
 
-Node readiness binds to the exact generation, the current connection and the owner epoch. A durable serving pin is promoted only for readiness of the then-current target, under deployment serialization, so a late report for a superseded target never acquires a pin.
+## Checkpoint lifecycle
 
-### Allocation lifecycle
+A Provider that declares the checkpoint operations (`Initial`, `NewCompute`, `GetCompute`, `RenewCompute`, `Suspend`, `Resume`, `ResumeCompute`, `KillCompute`, `DeleteRetained`, `RunCommandCompute`) lets Core suspend an idle allocation to retained state. Direct Providers resume it through their owning adapter; transferable checkpoints can restore on the same or another compatible node. Core records the allocation's `compute_phase`; it is `disabled` for a Provider that does not declare checkpoint support, and the other phases move as follows. Deletion, archive, reset and retention expiry release the allocation from any phase after the cleanup described in [What Core guarantees to a Provider](#what-core-guarantees-to-a-provider).
 
 Core includes the owning Session’s immutable Harness in `Bootstrap.Harness`; every provider projects it into the [Runtime bootstrap](./runtime-bootstrap.md) without choosing an implementation.
 
 The allocation, its dedicated daemon credential digest and the exact Session binding commit atomically before `Create`, under the execution lease and the Session lock. Only a fresh allocation receipt permits `Create`; retries and a Core restart observe the same reference without replaying it or rotating the credential. An allocation is private compute ownership, separate from public Environment connection and native readiness; adapters qualify bootstrap completion, and Core never infers it from an engine or provider name.
 
-With a configured provider, the Worker scans committed pending hosted Environments that have no allocation, which covers idle Session creation and recovery after an interruption between commit and bootstrap; an existing allocation never re-enters that path. The scan is bounded and serialized by the lifecycle owner and needs no caller action. An initial reservation without a Turn leaves its Session idle, and a daemon connection is never treated as native readiness. The same scan publishes authenticated connection observations with durable generations, after verifying the exact Session and device binding and a settled bootstrap.
+```mermaid
+stateDiagram-v2
+    [*] --> disabled: allocation created
+    disabled --> running: checkpoint Provider, compute running and bootstrapped
+    running --> quiescing: idle
+    quiescing --> suspending: daemon quiesced
+    quiescing --> running: daemon rejected quiesce
+    quiescing --> waking: new work or lost acknowledgement
+    suspending --> suspended: Suspend reports ResourcesReleased and SuspendSettled
+    suspending --> waking: capture cancelled or source still running
+    suspended --> restoring: new work or file access
+    restoring --> waking: Resume reports running
+    waking --> running: daemon resumed
+    running --> [*]: confirmed compute loss releases the allocation
+    suspended --> [*]: cold replacement after retention
+```
+
+The suspend and wake flows call the Provider in this order. Core persists each phase before the effect it describes.
 
 Between Turns, Core checks that connected, observed compute is still its Session's running allocation; the check changes nothing and never revives a cleanup request. Running compute never expires: explicit lifecycle cleanup, retained-state retention and [confirmed compute loss](#confirmed-compute-loss) govern reclamation. An unreachable container, or a stopped or missing one without that confirmation, never authorizes discarding retained workspace or history or selecting replacement compute. Disabling the provider stops new hosted admission and bootstrap but never blocks cancellation, function results or input retry outcomes of existing Sessions.
 
@@ -208,7 +263,35 @@ The Worker lease, the Session lock and the per-node gates own suspension for eve
 
 ### Coordinated protocol upgrade
 
-Upgrade Core and nodes together with node wire version 8, the E2B helper with private wire version 4 and its rebuilt template containing hosted suspension control, and the microsandbox helper with private wire version 5. All Providers deliver Runtime bootstrap version 2. Each boundary validates its own contract; version numbers are not interchangeable across boundaries. Before activation, use the previous compatible release to complete normal cleanup of incompatible unreleased allocations. The startup fence preserves their stored receipts and Session history and makes no Provider calls to migrate them.
+Upgrade Core and nodes together with node wire version 9, the E2B helper with private wire version 4 and its rebuilt template containing hosted suspension control, and the microsandbox helper with private wire version 7. All Providers deliver Runtime bootstrap version 2. Each boundary validates its own contract; version numbers are not interchangeable across boundaries. Before activation, use the previous compatible release to complete normal cleanup of incompatible unreleased allocations. The startup fence preserves their stored receipts and Session history and makes no Provider calls to migrate them.
+
+```mermaid
+sequenceDiagram
+    participant C as Core
+    participant R as Runtime
+    participant P as Provider
+    Note over C: idle, phase running
+    C->>C: persist quiescing
+    C->>R: environment_quiesce
+    R-->>C: environment_quiesced
+    C->>C: persist suspending
+    C->>P: Suspend(OperationID, Source)
+    P-->>C: RetainedState, ResourcesReleased, SuspendSettled
+    C->>C: persist suspended
+    Note over C: new work or live file access
+    C->>C: persist restoring, reserve destination
+    C->>P: NewCompute, then Resume(RetainedState, Target)
+    P-->>C: running Compute
+    C->>C: persist waking
+    C->>P: RunCommandCompute wakes a parked daemon
+    C->>R: environment_resume
+    R-->>C: environment_resumed
+    C->>P: DeleteRetained
+    C->>C: persist running
+```
+
+Capacity pressure can suspend an already idle node allocation earlier, after the inactivity grace in [Timeouts and limits](#timeouts-and-limits), when compatible waiting demand exists. A node with no free active slot but a free retained slot also keeps one active slot free: after the free-slot inactivity in [Timeouts and limits](#timeouts-and-limits), Core can suspend an idle allocation without waiting demand, so the next Session does not wait for a suspension. It does not while a Session placed on the node still waits for its sandbox or its initialization, because the node runs that Session's create and preparation only after the suspension. It never interrupts an active Turn or releases capacity before the ordinary quiesce, capture and source-stop proofs complete. If suspension cannot make capacity usable, the waiting request keeps its original deadline. When retained slots are full, pressure can [release an idle checkpoint](#cold-replacement-after-checkpoint-retention), and it suspends an allocation only if that allocation's checkpoint could then be released.
+
 
 ### Checkpoint transfer
 
@@ -216,9 +299,11 @@ A checkpoint-capable generation reports `CheckpointCompatibility`: opaque `Artif
 
 For transferable checkpoints, `Suspend` may report `ResourcesReleased` and `SuspendSettled` only after publishing a verified full archive durably, stopping the exact source compute and settling source-local capture and cleanup obligations. Core persists the bound retained state before marking it suspended; native absence alone is insufficient. `Suspend.ReconcileOnly` may finish archive publication and source cleanup for an already verified snapshot of the same operation, but cannot capture another snapshot or stop a source that has resumed running. If a previously published archive is missing or damaged, `Suspend.ReconcileOnly` may return its exact durable ownership receipt with `Status: unknown` and `ResourcesReleased: false` for cleanup; that receipt proves neither current archive usability nor source absence. `Resume` still verifies the archive before execution. After the source-settlement barrier, source-node unavailability does not prevent restoration. Deletion and ordinary expiry can transfer an idle suspended allocation's cleanup route to an online node in the same artifact domain; deletion does not require execution-class compatibility. The cleanup destination must already serve the same immutable generation and have retained capacity. Without such a node, cleanup stays pending and ownership is not released; operators must restore an eligible node or its capacity. An unknown running or restoring writer never moves merely because its node is unreachable.
 
-Recovery uses `Resume.ReconcileOnly` for the persisted target and operation. `RestoreAttemptClosed` is an exact operation ID, not a generic absence flag: the adapter may return it only after durably closing an attempt that never entered native execution and fencing every late request for that ID. An adapter may also close a durably admitted attempt when it can prove that its current invocation failed before dispatching native restoration. The microsandbox adapter does this only when the fresh request's wire deadline expires before native dispatch; archive corruption, qualification errors and opaque SDK failures do not authorize an automatic retry. Core then persists a new operation ID before attempting execution. Once native restoration has been dispatched, an unknown outcome retains the same target, ownership and original retention deadline; a missing native listing, helper death or timeout does not authorize replay. Such a restore can remain unavailable until explicit deletion or ordinary retention expiry, and pending inputs can reach their public deadline while waiting. User deletion still requires exact native settlement before resources and ownership can be released. An in-place adapter may retain a nonempty native ID: the closure must equal the requested ID, logical generation, name and retained provenance. The closure proves that this restore attempt was never dispatched, not that its underlying paused source is absent.
+Recovery uses `Resume.ReconcileOnly` for the persisted target and operation. `RestoreAttemptClosed` is an exact operation ID, not a generic absence flag: the adapter may return it only after durably closing an attempt that never entered native execution and fencing every late request for that ID. An adapter may also close a durably admitted attempt when it can prove that its current invocation failed before dispatching native restoration. The microsandbox adapter does this for the fresh request that created the admission, on any failure before it dispatches native restoration. An expired wire deadline or an unclassified failure closes the attempt, and Core then persists a new operation ID. A snapshot that is missing, fails identity or integrity verification, or fails the adapter's qualification for this generation, such as a resource, workspace or runtime image mismatch, is also closed and reported as `ErrCheckpointUnusable`. That outcome is durable: `Resume.ReconcileOnly` for the same operation reports it again, and late requests for the operation ID stay fenced. A Provider never returns it once native restoration was dispatched. On `ErrCheckpointUnusable` Core never restores that snapshot again and [ends its retention at once](#cold-replacement-after-checkpoint-retention). Once native restoration has been dispatched, an unknown outcome retains the same target, ownership and original retention deadline; a missing native listing, helper death or timeout does not authorize replay. Such a restore can remain unavailable until explicit deletion or ordinary retention expiry, and pending inputs can reach their public deadline while waiting. User deletion still requires exact native settlement before resources and ownership can be released.
 
-The microsandbox adapter requires an explicit private `checkpoint_root`, outside every guest-accessible filesystem. Its directory is mode `0700`; a private namespace marker identifies the actual archive store. The default installation creates a node-local private store. Cross-node restoration requires operators to mount the same private store on each participating node; mount paths may differ. Runtime state directories and workspace bindings are never used to infer this root. The adapter verifies the archive, external filesystem identity and native execution class again before restoration. Restored RAM and file descriptors do not promise continuity of external TCP connections or replay safety for application side effects.
+An in-place adapter may retain a nonempty native ID: the closure must equal the requested ID, logical generation, name and retained provenance. The closure proves that this restore attempt was never dispatched, not that its underlying paused source is absent.
+
+The microsandbox adapter requires an explicit private `checkpoint_root`, outside every guest-accessible filesystem. Its directory is mode `0700`; a private namespace marker identifies the actual checkpoint store. The default installation creates a node-local private store. Cross-node restoration requires operators to mount the same private store on each participating node; mount paths may differ. Each retained checkpoint is an uncompressed native snapshot of the guest's memory and root-disk layers, so a shared store carries that volume for every suspension and cross-node restore. Runtime state directories and workspace bindings are never used to infer this root. The adapter verifies the checkpoint, external filesystem identity and native execution class again before restoration. Restored RAM and file descriptors do not promise continuity of external TCP connections or replay safety for application side effects.
 
 ### Cold replacement after checkpoint retention
 
@@ -226,31 +311,41 @@ Retained-state retention bounds compute resources, not the lifetime of an eligib
 
 Core confirms the original creation is settled and all owned compute and retained states are cleaned up before releasing allocation and placement ownership. The old device's authority is revoked before replacement admission. Until Create, Kill or DeleteRetained has a confirmed outcome, it keeps ownership and admits no replacement writer. A recoverable Session and Environment remain disconnected with the same filesystem object and initialization result. Archive, reset and deletion take precedence and cannot be undone by a wake request.
 
-Capacity pressure never shortens checkpoint retention. Until its configured deadline, a suspended allocation keeps its snapshot and retained slot; unavailable capacity or an incompatible node does not authorize cold replacement. Pending requests retain their original input deadline. After retention expires, the ordinary expiry cleanup must confirm resource deletion before another allocation can reserve that slot; files and qualified native history remain retained.
+An unusable checkpoint, reported as `ErrCheckpointUnusable` by a restoring allocation's `Resume`, ends retention at once, exactly as if its deadline had passed. Core deletes the target and snapshot through the ordinary expiry cleanup, and a qualified Session continues as below, while an unqualified one ends as at ordinary expiry.
 
-New input or live Environment file access reserves a new allocation on a compatible node and bootstraps a fresh Runtime device. Preparation reuses the same filesystem and completed initialization rather than replaying initialization. Execution resumes the same native Session from retained history after validating the replacement Runtime's declaration. Missing or invalid native history fails explicitly; Core never substitutes a new native Session or replays completed input. History and published Artifact reads do not reserve compute. This path does not preserve VM memory, background processes or open connections, and it does not qualify an undeclared Runtime, Harness or filesystem combination.
+Capacity pressure ends retention early only for the node's oldest idle suspended allocation that meets these conditions, and only when waiting placement demand is blocked by the node's full retained slots. Core then treats the allocation as expired, one release per blocked demand, and every other suspended allocation keeps its snapshot and retained slot until its configured deadline. A checkpoint whose restore lacks capacity or a compatible node is not cold-replaced for that reason. Pending requests retain their original input deadline. The ordinary expiry cleanup must confirm resource deletion before another allocation can reserve the slot; files and qualified native history remain retained.
+
+Core confirms the original creation is settled and all owned compute and snapshots are cleaned up before releasing allocation and placement ownership. The old device's authority is revoked before replacement admission. Until Create, Kill or DeleteRetained has a confirmed outcome, it keeps ownership and admits no replacement writer. A recoverable Session and Environment remain disconnected with the same filesystem object and initialization result. Archive, reset and deletion take precedence and cannot be undone by a wake request.
+
+New input or live Environment file access reserves a new allocation on a compatible node and bootstraps a fresh Runtime device. Preparation reuses the same filesystem and completed initialization rather than replaying initialization. Execution resumes the same native Session from retained history after validating the replacement Runtime's declaration. Missing or invalid native history fails explicitly; Core never substitutes a new native Session or replays completed input. History and published Artifact reads do not reserve compute. This path does not preserve VM memory, background processes or open connections, and it does not qualify an undeclared Runtime, Harness or filesystem combination. It also provides no node-level drain, failover from an unreachable writer, concurrent writers, multi-active Core, autoscaling or snapshot replication.
 
 ### Confirmed compute loss
 
 Running compute has no retention deadline, so a host crash or reboot would otherwise leave its allocation owned indefinitely. After the owning node is online again, `GetCompute` returning `ErrNotFound` or a verified `stopped` or `crashed` status for the exact persisted incarnation releases a checkpoint-capable allocation in compute phase `running` only when all of these hold: the original creation is settled, the incarnation has a native ID, no capture, restore or rollback intent is recorded, no authenticated Runtime connection exists for the allocation's device, and the Session meets the conditions for [cold replacement](#cold-replacement-after-checkpoint-retention). Core then calls `KillCompute` for that exact incarnation. Only its confirmed result permits one Session-locked commit that rechecks the compute revision and those conditions, revokes the device and releases the allocation and placement. The Session, Environment, pending input, native Session identity and filesystem remain, and new input or live file access continues as in cold replacement.
 
-Every other observation keeps ownership and its diagnostic: a `paused`, `running` or unknown native status, an identity mismatch, a timeout or transport error, an unknown creation, a recorded restore, a live Runtime connection, owned workspace storage, incomplete initialization, a terminal Session or a missing `retained_native_history` declaration. A failed `KillCompute` changes nothing, and a concurrent archive, deletion or compute transition prevails. Core never acts while the node is offline, because it has no authority to stop compute without the node. Continuation retains the filesystem and uses the recorded native Session ID; a Harness resume error fails execution rather than creating another native Session. Core does not replay interrupted or completed input. The [coverage ledger](../contracts/agents-api/index.md) records the qualified continuation cases, including crashes immediately after completion acknowledgement. Completeness of arbitrary crash-damaged native history remains unqualified; identity checks do not detect a truncated but parseable history tail.
+Every other observation keeps ownership and its diagnostic: a `paused`, `running` or unknown native status, an identity mismatch, a timeout or transport error, an unknown creation, a recorded restore, a live Runtime connection, owned workspace storage, incomplete initialization, a terminal Session or a missing `retained_native_history` declaration. A failed `KillCompute` changes nothing, and a concurrent archive, deletion or compute transition prevails. Core never acts while the node is offline, because it has no authority to stop compute without the node. Continuation retains the filesystem and uses the recorded native Session ID; a Harness resume error fails execution rather than creating another native Session. Core does not replay interrupted or completed input. [OpenAI compatibility](../contracts/agents-api/index.md) records the qualified continuation cases, including crashes immediately after completion acknowledgement. Completeness of arbitrary crash-damaged native history remains unqualified; identity checks do not detect a truncated but parseable history tail.
 
-### Reset and archive
+## Timeouts and limits
 
-A [reset](../contracts/agents-api/sandbox-deployment.md#reset) is durable execution state that the runtime manager advances outside its counted work. Start, escalation, cancellation, setup, update and finalization serialize through the mutation gate. Idleness is rechecked with the Session lock and then the deployment lock, never in the reverse order during finalization. Work is keyset-paged and bound to the reset's request time and generation, with the absolute deadline and validated audit provenance persisted.
+| Value | Applies to | On expiry or excess |
+| --- | --- | --- |
+| Bounded context | Every Provider call | Ends the caller's wait and proves no rollback, stop, cleanup or absence. The adapter never detaches untracked mutations or replays a timed-out command |
+| Idle timeout and snapshot retention | Checkpoint-capable allocations, set by the [suspension policy](../contracts/agents-api/sandbox-deployment.md#suspension-policy) | At the idle timeout Core begins [suspension](#suspension). When retention ends Core cleans up the snapshot and, for a qualified Session, replaces the compute through [cold replacement](#cold-replacement-after-checkpoint-retention) |
+| 15 s | Inactivity of an idle node allocation before capacity-pressure suspension | Core can suspend it ahead of the idle timeout when compatible waiting demand exists |
+| 2 min | Inactivity of an idle allocation on a node with no free active slot and a free retained slot | Core can suspend it ahead of the idle timeout without waiting demand, so the next Session finds a free slot |
+| 50 MiB plus 32 bytes (`MaxCommandInputBytes`) | `Command.Stdin` | The command is invalid |
 
-One snapshot and timestamp partition the held resources. Offline ownership comes from the allocation's or active placement's node, with the same 45-second connection and owner-epoch predicate as online presence, independently of provider readiness; no cleanup failure, offline state or empty read authorizes a synthetic release. At zero held resources, Core drains outside database transactions, rechecks under the deployment lock and clears the deployment in one transaction, then publishes a generation-bearing empty provider without fallible work. If the final write or drain fails, it restores the committed provider with a bounded owner context before releasing the mutation gate; if that recovery fails, admission stays fenced and the owner stops.
+The online window and the other node timers are in the [sandbox node protocol](../contracts/agents-api/node-generation-protocol.md#timeouts-and-limits).
 
 An administrator [Session archive](../contracts/agents-api/admin-api.md#session-archive) keeps its Project scope and hosted eligibility checks in a Session-first transaction, together with Environment expiry, cancellation, Runtime authority revocation and audit; a reset's background archive reconstructs the actual Project scope from trusted records and keeps the requester's provenance. The ordinary provider lifecycle releases compute and retained states. Archive cancellation keeps a healthy receipt path until the terminal commit: only the archive that first revokes a device records its exact `archive_cancel_turn_id` (ordinary revocation clears it, and repeated cleanup keeps it), and the existing authenticated delivery may drain that cancellation for at most 20 seconds from the Turn's original `cancel_requested_at`. Core tracks the delivery through `done`, the cancellation acknowledgement and the terminal commit, independently of subscription removal, and grants no new connection, input, file or MCP authority or lease renewal. No transaction or lifecycle gate waits for the receipt, and a lost peer, expiry or restart falls back to ordinary failure and cleanup, never a fabricated cancelled outcome.
 
-## Validate the integration
+## Conformance
 
 E2B template and endpoint validators in the installer and Go adapter consume the shared [selector fixtures](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/e2b/testdata/configuration-selectors.json). Extend these cases with any validation change so both entry points accept the same selectors.
 
 Run `make check-sandbox-provider-contract` while developing. It runs the shared [`contracttest`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/contracttest) suite through real adapter boundaries with controlled native failures, plus the adapter and node transport tests; `make check` includes the same packages. Call the public failure runner with native-side fixtures instead of a fake `SandboxProvider`, and keep tests for foreign ownership, unknown mutation results, cancellation, no automatic replay, failed cleanup and reference-bound settlement.
 
-Node tests separately cover disconnect and reconnect fencing and cleanup after a lost Create response. Helper protocols and the [sandbox node protocol](../contracts/agents-api/node-generation-protocol.md) require an exact version match; direct in-process interfaces have no separate wire version.
+Node tests separately cover disconnect and reconnect fencing and cleanup after a lost Create response. Helper protocols and the [sandbox node protocol](../contracts/agents-api/node-generation-protocol.md) require an exact version match.
 
 Native acceptance proves what fixtures cannot: creation, lease behavior, owned partial cleanup, declared isolation and limits, and snapshots where supported. The opt-in Docker lifecycle and recovery tests use `AGENTS_RUNTIME_DOCKER_TEST_IMAGE`; the SDK helpers use `make check-e2b-provider` and `make check-microsandbox-provider`. Mocked compute proves neither reclamation nor isolation.
 
@@ -259,7 +354,7 @@ Native acceptance proves what fixtures cannot: creation, lease behavior, owned p
 | Kind | Adapter | Helper and adapter rules | Operator guide |
 | --- | --- | --- | --- |
 | Docker (node) | [`sandbox/docker`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/docker) | Node proxy in [`sandbox/node`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/node) | [Docker adapter](#docker-adapter) |
-| microsandbox (node) | [`sandbox/microsandbox`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/microsandbox) | [`tools/microsandbox-provider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/tools/microsandbox-provider/README.md) | [Nodes](./getting-started/nodes.md) |
+| microsandbox (node) | [`sandbox/microsandbox`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/microsandbox) | [`tools/microsandbox-provider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/tools/microsandbox-provider/README.md) | [Add and manage nodes](./getting-started/nodes.md) |
 | E2B (direct) | [`sandbox/e2b`](https://github.com/MiniMax-AI/OpenAgentCore/tree/main/services/core/internal/sandbox/e2b) | [`tools/e2b-provider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/tools/e2b-provider/README.md) | [Sandbox deployment](../contracts/agents-api/sandbox-deployment.md#e2b-configuration); application-managed templates in [`deploy/e2b`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/e2b/README.md) |
 
 ## Docker adapter
@@ -279,11 +374,3 @@ The node uses the explicit Unix socket in its [provider configuration](./configu
 ### Seccomp profile
 
 [`seccomp.json`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/seccomp.json) is the Moby default profile at [revision 65adc7e](https://github.com/moby/profiles/blob/65adc7e022c97f55e45c054ff012988027733b87/seccomp/default.json) (Apache-2.0, see [seccomp.LICENSE](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/seccomp.LICENSE); upstream file SHA-256 `785b2429264afba4d594320337cb17f144f3c7d51585f9805eef72e28f4f9334`) with one appended rule that allows `clone`, `unshare`, `setns`, `mount`, `umount2` and `pivot_root`. The distribution ships this file to every Docker node as `runtime/seccomp.json`.
-
-## Independent workspace attachment
-
-`Bootstrap.Workspace` and `ResumeRequest.Workspace` optionally carry a [workspace filesystem binding](workspace-provider.md). Absence selects the Provider's owned Environment disk; presence selects the exact external object and never permits a fallback to an owned disk. Providers validate the tenant and Environment against the binding and its configuration receipt before resolving it. `LocalOptions.Workspace` injects the filesystem resolver; Sandbox Providers never interpret filesystem adapter parameters or native receipts.
-
-`DeploymentPolicy.Workspace` declares supported attachment requirements; absence means external storage is unsupported. The derived immutable `DeploymentSpec.Workspace` receipt selects the generation mode and capabilities; its [deployment workflow](../contracts/agents-api/sandbox-deployment.md#resources) never copies filesystem configuration into the generation. Microsandbox requires `host_directory` and `user_xattr`; Docker and E2B reject external attachments. `ValidateWorkspacePolicy` uses the filesystem protocol's combination validator: an external filesystem without an enforced quota rejects a positive `EnvironmentDiskMiB`, while zero requests no quota. Root disk capacity is still required. Without an external declaration, the existing owned disk bounds apply.
-
-Microsandbox resolves each Create and Resume binding, including observation of an interrupted restore, and passes only the local directory and immutable ObjectID to its private helper. The helper binds the whole `/environment`; its retained contents and private native history follow the [workspace filesystem scope](workspace-provider.md#lifetime-and-filesystem-scope) and [Runtime resource directories](configuration.md#runtime-resource-directories). Private HOME, credentials and the compute root are not a durable history store. Explicit mode, object and path labels qualify native resources; mount shape alone never selects a mode. Checkpoint restore verifies the snapshot's object, remaps `/environment` through SDK `Volumes`, requires strict external mount policy and rejects every restore warning. Partial restore errors retain the exact target identity for cleanup and never establish readiness. Unknown outcomes remain observations of the original operation. Native Bind checkpoint and guest-local flock continuity do not establish fencing against an unknown writer.

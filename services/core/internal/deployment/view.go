@@ -10,11 +10,10 @@ import (
 type NodeRolloutState string
 
 const (
-	NodeRolloutReady          NodeRolloutState = "ready"
-	NodeRolloutPreparing      NodeRolloutState = "preparing"
-	NodeRolloutFailed         NodeRolloutState = "failed"
-	NodeRolloutUpdateRequired NodeRolloutState = "update_required"
-	NodeRolloutUnknown        NodeRolloutState = "unknown"
+	NodeRolloutReady     NodeRolloutState = "ready"
+	NodeRolloutPreparing NodeRolloutState = "preparing"
+	NodeRolloutFailed    NodeRolloutState = "failed"
+	NodeRolloutUnknown   NodeRolloutState = "unknown"
 )
 
 type RolloutState string
@@ -26,15 +25,16 @@ const (
 
 // View is the sandbox deployment as administrators read it.
 type View struct {
-	Rollout              Rollout                 `json:"rollout" binding:"required"`
-	Specification        *sandbox.DeploymentSpec `json:"specification,omitempty"`
-	SpecificationDigest  string                  `json:"specification_digest,omitempty"`
-	Generation           uint64                  `json:"generation" binding:"required"`
-	Mode                 sandbox.DeploymentMode  `json:"mode" binding:"required"`
-	Resources            Resources               `json:"resources" binding:"required"`
-	Configuration        json.RawMessage         `json:"configuration,omitempty" swaggertype:"object"`
-	Metadata             json.RawMessage         `json:"metadata,omitempty" swaggertype:"object"`
-	CredentialConfigured bool                    `json:"credential_configured" binding:"required"`
+	ComputeProfiles      map[string]ComputeProfileRecord `json:"compute_profiles,omitempty"`
+	Rollout              Rollout                         `json:"rollout" binding:"required"`
+	Specification        *sandbox.DeploymentSpec         `json:"specification,omitempty"`
+	SpecificationDigest  string                          `json:"specification_digest,omitempty"`
+	Generation           uint64                          `json:"generation" binding:"required"`
+	Mode                 sandbox.DeploymentMode          `json:"mode" binding:"required"`
+	Resources            Resources                       `json:"resources" binding:"required"`
+	Configuration        json.RawMessage                 `json:"configuration,omitempty" swaggertype:"object"`
+	Metadata             json.RawMessage                 `json:"metadata,omitempty" swaggertype:"object"`
+	CredentialConfigured bool                            `json:"credential_configured" binding:"required"`
 	// Idle suspension policy; null unless the selected Provider declares checkpoint support.
 	Suspension     *Suspension `json:"suspension" extensions:"x-nullable" binding:"required"`
 	InstallationID string      `json:"installation_id" binding:"required"`
@@ -67,11 +67,10 @@ type NodeRollout struct {
 }
 
 type RolloutNodes struct {
-	Ready          int64 `json:"ready" binding:"required"`
-	Preparing      int64 `json:"preparing" binding:"required"`
-	Failed         int64 `json:"failed" binding:"required"`
-	UpdateRequired int64 `json:"update_required" binding:"required"`
-	Unknown        int64 `json:"unknown" binding:"required"`
+	Ready     int64 `json:"ready" binding:"required"`
+	Preparing int64 `json:"preparing" binding:"required"`
+	Failed    int64 `json:"failed" binding:"required"`
+	Unknown   int64 `json:"unknown" binding:"required"`
 }
 
 type Rollout struct {

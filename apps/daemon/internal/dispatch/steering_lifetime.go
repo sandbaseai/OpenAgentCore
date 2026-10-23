@@ -32,7 +32,7 @@ func (r *Router) steerDurably(sendCtx context.Context, state *sessionState, sess
 
 func (r *Router) publishSteeringReceipt(ctx context.Context, state *sessionState, env proto.Envelope, input proto.PromptSteerPayload, fingerprint [32]byte, ack proto.PromptSteerAckPayload) bool {
 	r.mu.Lock()
-	state.steering[input.InputID] = steeringReceipt{fingerprint: fingerprint, ack: ack, durable: input.DurableReceipt}
+	state.steering[input.InputID] = steeringReceipt{fingerprint: fingerprint, ack: ack}
 	r.mu.Unlock()
 	// Credit waits follow the Run/connection lifetime, not a short native-call
 	// budget. Dropping an accepted receipt would make its outcome unknown.

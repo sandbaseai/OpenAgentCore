@@ -58,7 +58,7 @@ func translate(err error) error {
 // view never needs it. A credential the key cannot open or authenticate is an
 // internal decryption error.
 func record(d sqlc.RuntimeDeployment, cipher *credentialcrypto.Cipher, open bool) deployment.Record {
-	r := deployment.Record{IdleSeconds: d.IdleSeconds, InstallationID: uuidString(d.InstallationID), Provider: d.ProviderKind, BackendFingerprint: d.BackendFingerprint,
+	r := deployment.Record{ComputeProfiles: d.ComputeProfiles, IdleSeconds: d.IdleSeconds, InstallationID: uuidString(d.InstallationID), Provider: d.ProviderKind, BackendFingerprint: d.BackendFingerprint,
 		Generation: uint64(d.Generation), OwnerEpoch: uint64(d.OwnerEpoch), Mode: d.Mode, Specification: d.Specification,
 		Configuration: sandbox.ConfigurationRecord{Public: d.ProviderConfig, Metadata: d.ProviderMetadata}, CredentialStored: len(d.ProviderCredential) > 0}
 	if r.CredentialStored && open {
@@ -111,8 +111,8 @@ func nodeRecords(rows []sqlc.ListRuntimeNodesRow) ([]deployment.NodeRecord, erro
 		}
 		health.NodeHealth.Host = health.Host
 		record := deployment.NodeRecord{ID: uuidString(n.ID), Name: n.Name, Provider: n.ProviderKind, CoreURL: n.CoreUrl, CreatedAt: n.CreatedAt.Time, LastSeenAt: timestamp(n.LastSeenAt),
-			Health: health.NodeHealth, Online: n.Online, ServingReady: n.ServingReady, ProtocolVersion: int(n.ProtocolVersion), DeploymentGeneration: uint64(n.DeploymentGeneration),
-			TargetGeneration: uint64(n.TargetGeneration), TargetState: n.TargetState, TargetDiagnostic: n.TargetDiagnostic, MaxActive: int(n.MaxActive), MaxRetained: int(n.MaxRetained),
+			Health: health.NodeHealth, Online: n.Online, ServingReady: n.ServingReady,
+			TargetState: n.TargetState, TargetDiagnostic: n.TargetDiagnostic, MaxActive: int(n.MaxActive), MaxRetained: int(n.MaxRetained),
 			Active: n.Active, Retained: n.Retained, Reserved: n.Reserved, CleanupPending: n.CleanupPending, Running: n.Running, Snapshots: n.Snapshots}
 		if n.EnrollmentID.Valid {
 			id := uuidString(n.EnrollmentID)

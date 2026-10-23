@@ -32,8 +32,8 @@ func (q *Queries) ClaimWebSandboxDeployment(ctx context.Context, installationID 
 
 const initializeSandboxDeployment = `-- name: InitializeSandboxDeployment :exec
 UPDATE runtime_deployment SET provider_kind=$1, backend_fingerprint=$2,
-generation=$3, mode=$4,
-provider_config=$5,provider_metadata=$6,provider_credential=$7,specification=$8,
+generation=$3, mode=$4, compute_profiles=$5,
+provider_config=$6,provider_metadata=$7,provider_credential=$8,specification=$9,
 updated_at=clock_timestamp() WHERE singleton=true
 `
 
@@ -42,6 +42,7 @@ type InitializeSandboxDeploymentParams struct {
 	BackendFingerprint string `json:"backend_fingerprint"`
 	Generation         int64  `json:"generation"`
 	Mode               string `json:"mode"`
+	ComputeProfiles    []byte `json:"compute_profiles"`
 	ProviderConfig     []byte `json:"provider_config"`
 	ProviderMetadata   []byte `json:"provider_metadata"`
 	ProviderCredential []byte `json:"provider_credential"`
@@ -54,6 +55,7 @@ func (q *Queries) InitializeSandboxDeployment(ctx context.Context, arg Initializ
 		arg.BackendFingerprint,
 		arg.Generation,
 		arg.Mode,
+		arg.ComputeProfiles,
 		arg.ProviderConfig,
 		arg.ProviderMetadata,
 		arg.ProviderCredential,
@@ -82,7 +84,7 @@ func (q *Queries) RetireSandboxEnrollments(ctx context.Context) error {
 }
 
 const retireSandboxNodes = `-- name: RetireSandboxNodes :exec
-UPDATE runtime_nodes SET removed_at=clock_timestamp(),connection_id=NULL,provider_ready=false,ready_generation=NULL WHERE removed_at IS NULL
+UPDATE runtime_nodes SET removed_at=clock_timestamp(),connection_id=NULL,ready_generation=NULL WHERE removed_at IS NULL
 `
 
 func (q *Queries) RetireSandboxNodes(ctx context.Context) error {

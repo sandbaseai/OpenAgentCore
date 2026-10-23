@@ -42,7 +42,7 @@ func TestHeartbeatObservationStoreOutcomes(t *testing.T) {
 			old := slog.Default()
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			defer slog.SetDefault(old)
-			s := NewSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
+			s := newTestSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
 			defer s.Close("test")
 			s.heartbeat = &observationHeartbeatStore{err: test.err, deleted: test.deleted}
 			env, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{})
@@ -78,7 +78,7 @@ func TestHeartbeatObservationCloseDuringStore(t *testing.T) {
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(old)
-	s := NewSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
 	store := &observationHeartbeatStore{entered: make(chan struct{}), release: make(chan struct{})}
 	s.heartbeat = store
 	env, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{})
@@ -111,7 +111,7 @@ func TestHeartbeatObservedTextHandlerScalarFixture(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
-	s := NewSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "11111111-1111-4111-8111-111111111111", "tenant", "test", nil, nil)
 	s.heartbeat = &observationHeartbeatStore{err: context.Canceled}
 	env, _ := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{})
 	s.handleHeartbeat(env)

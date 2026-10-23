@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
@@ -28,6 +29,12 @@ func preparationEnvironmentInput(raw json.RawMessage, extension *v1.SessionExecu
 	}
 	for name, value := range setup {
 		switch name {
+		case "compute_profile":
+			var profile string
+			if kind != "openai_hosted" || json.Unmarshal(value, &profile) != nil || !sandbox.ValidComputeProfile(profile) {
+				return nil, errComputeProfile
+			}
+			continue
 		case "environment_template_id", "files", "env", "packages", "setup_commands", "skills", "plugins", "capability_directories":
 		default:
 			return nil, sessions.ErrInvalidInput

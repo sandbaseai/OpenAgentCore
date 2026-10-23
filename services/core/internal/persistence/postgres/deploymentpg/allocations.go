@@ -221,7 +221,23 @@ func (t *reservationTx) FindAllocation() (deployment.Allocation, bool, error) {
 }
 
 func (t *reservationTx) LockDeployment() (placement.Deployment, error) {
-	return placementpg.LockDeployment(t.ctx, t.q)
+	d, err := placementpg.LockDeployment(t.ctx, t.q)
+	if err != nil {
+		return d, err
+	}
+	frozen, err := t.q.GetSessionComputeGeneration(t.ctx, t.session)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return d, nil
+	}
+	if err != nil {
+		return d, err
+	}
+	if d.Provider != frozen.ProviderKind.String || d.Mode != "direct" {
+		return d, placement.ErrAdmissionClosed
+	}
+	d.Generation = uint64(frozen.Generation)
+	d.Specification = frozen.Specification
+	return d, nil
 }
 
 func (t *reservationTx) LoadReserved() (placement.Reserved, error) {

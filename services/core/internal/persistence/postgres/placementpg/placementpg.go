@@ -25,7 +25,15 @@ func LockDeployment(ctx context.Context, q *sqlc.Queries) (placement.Deployment,
 	if err != nil {
 		return placement.Deployment{}, err
 	}
-	return placement.Deployment{
+	expanded, err := ExpandComputeProfiles(ctx, q, d.ComputeProfiles)
+	if err != nil {
+		return placement.Deployment{}, err
+	}
+	var profiles map[string]placement.ComputeProfile
+	if len(d.ComputeProfiles) > 0 && json.Unmarshal(expanded, &profiles) != nil {
+		return placement.Deployment{}, sandbox.ErrInvalid
+	}
+	return placement.Deployment{ComputeProfiles: profiles,
 		InstallationID: uuidString(d.InstallationID), Provider: d.ProviderKind, Mode: d.Mode,
 		Generation: uint64(d.Generation), Resetting: d.ResetClear.Valid, Specification: d.Specification,
 	}, nil
@@ -120,4 +128,25 @@ func uuidString(id pgtype.UUID) string {
 		return ""
 	}
 	return uuid.UUID(id.Bytes).String()
+}
+
+// ExpandComputeProfiles projects immutable generation records for a deployment
+// snapshot. Callers hold the deployment lock or a repeatable-read snapshot.
+func ExpandComputeProfiles(ctx context.Context, q *sqlc.Queries, raw json.RawMessage) (json.RawMessage, error) {
+	var refs map[string]uint64
+	if json.Unmarshal(raw, &refs) != nil {
+		return nil, sandbox.ErrInvalid
+	}
+	if len(refs) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	expanded, err := q.ExpandComputeProfileSelections(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	var records map[string]json.RawMessage
+	if json.Unmarshal(expanded, &records) != nil || len(records) != len(refs) {
+		return nil, sandbox.ErrInvalid
+	}
+	return expanded, nil
 }

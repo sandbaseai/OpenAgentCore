@@ -78,7 +78,7 @@ func (w *Worker) bindSessionDevice(ctx context.Context, session sessions.Session
 		observeSchedulingState(ctx, "unknown")
 		return false, sessions.ErrInvalidInput
 	}
-	if snapshot.Environment != nil && (snapshot.Environment.Type == "openai_hosted" || snapshot.Environment.Type == "self_hosted") {
+	if snapshot.Environment.Type == "openai_hosted" || snapshot.Environment.Type == "self_hosted" {
 		environment, err := w.dispatcher.SessionsReader.GetSessionEnvironment(ctx, session.TenantID, session.ID)
 		if err != nil {
 			observeSchedulingState(ctx, "unknown")

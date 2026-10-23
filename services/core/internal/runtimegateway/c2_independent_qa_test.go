@@ -19,7 +19,7 @@ func TestIndependentC2SerialRoundsPairingAndCap(t *testing.T) {
 	prior := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(prior)
-	s := NewSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+	s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
 	defer s.Close("test")
 	ctx := textobs.WithArtifact(t.Context(), "5889faac-763b-4a6b-bae6-e809fe65e0cd", "4fbfe7d7-cfdb-4b96-917f-79b3d251c8b5")
 	done := make(chan error, 1)

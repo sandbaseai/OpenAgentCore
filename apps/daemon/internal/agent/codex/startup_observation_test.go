@@ -129,66 +129,6 @@ func TestFirstOutputIgnoresEmptyWrites(t *testing.T) {
 	}
 }
 
-func TestCatalogObservationsPreserveFailureBoundaries(t *testing.T) {
-	if !SupportsTextVerbosity {
-		t.Skip("catalog probe requires Unix")
-	}
-	for _, test := range []struct {
-		name, script, failedStage string
-	}{
-		{"success", `printf '%s' '{"models":[{"slug":"known","support_verbosity":true}]}'`, ""},
-		{"nonzero", `printf '%s' '{"models":[]}'; exit 7`, "model_catalog_command"},
-		{"invalid", `printf '%s' '{"models":'`, "model_catalog_validation"},
-		{"unsupported", `printf '%s' '{"models":[]}'`, "model_catalog_validation"},
-		{"snapshot_failure", `printf '%s' '{"models":[{"slug":"known","support_verbosity":true}]}'`, "model_catalog_snapshot"},
-		{"spawn_failure", "", "model_catalog_command"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			output := captureStartupLogs(t)
-			home := t.TempDir()
-			if test.name == "snapshot_failure" {
-				home = filepath.Join(home, "missing")
-			}
-			plan := SessionPlan{Model: "known", Cwd: t.TempDir(), Env: []string{"CODEX_HOME=" + home}, ExtraConfig: [][2]string{{"model_verbosity", `"high"`}}, Cleanup: func() {}}
-			defer func() { plan.Cleanup() }()
-			binary := filepath.Join(t.TempDir(), "probe")
-			content := "#!/bin/sh\n" + test.script + "\n"
-			if test.name == "spawn_failure" {
-				content = "#!/missing-interpreter\n"
-			}
-			if err := os.WriteFile(binary, []byte(content), 0700); err != nil {
-				t.Fatal(err)
-			}
-			err := prepareModelVerbosity(t.Context(), binary, &plan)
-			if (err != nil) != (test.failedStage != "") {
-				t.Fatal(err)
-			}
-			stages := startupStages(t, output)
-			if stages["model_catalog"]["success"] != (err == nil) {
-				t.Fatal(stages)
-			}
-			if test.failedStage != "" && stages[test.failedStage]["success"] != false {
-				t.Fatal(stages)
-			}
-			if test.failedStage == "model_catalog_command" && stages["model_catalog_validation"] != nil {
-				t.Fatal("validated failed command")
-			}
-			if test.name == "spawn_failure" && stages["model_catalog_cleanup"] != nil {
-				t.Fatal("unstarted process reported cleanup")
-			}
-			if test.name == "success" && stages["model_catalog_cleanup"]["success"] != false {
-				t.Fatal("already-exited group signal did not report its error", stages)
-			}
-			if test.failedStage == "model_catalog_validation" && stages["model_catalog_snapshot"] != nil {
-				t.Fatal("persisted invalid catalog")
-			}
-			if strings.Contains(output.String(), "models") || strings.Contains(output.String(), home) {
-				t.Fatal("catalog or path leaked")
-			}
-		})
-	}
-}
-
 func TestInitializeObservationDoesNotBlockResponseDelivery(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()

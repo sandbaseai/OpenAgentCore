@@ -20,7 +20,7 @@ func (e *ModelProviderError) Error() string { return e.message }
 
 // SessionExecutionInput is a write-only execution extension, not a provider resource.
 type SessionExecutionInput struct {
-	// Environment supplies placement-independent preparation through the Core extension.
+	// Environment supplies portable preparation fields. For openai_hosted only, compute_profile selects an administrator-approved immutable compute choice; its name must match ^[a-z][a-z0-9-]{0,47}$. Omission retains default compute. Unknown names fail with invalid_request_error and param x_agents_core.environment.compute_profile; no fallback is performed.
 	Environment   json.RawMessage     `json:"environment,omitempty" swaggertype:"object"`
 	ModelProvider *ModelProviderInput `json:"model_provider,omitempty"`
 	HarnessConfig json.RawMessage     `json:"harness_config,omitempty" swaggertype:"object"`
@@ -56,7 +56,7 @@ func (p *ModelProviderInput) validate(registry harnessconfig.Registry) error {
 	if modelprovider.ValidateHeaders(p.Headers) != nil {
 		return &ModelProviderError{Code: "model_provider_headers_invalid", Param: "headers", message: "invalid model provider headers"}
 	}
-	if p.ContextWindow < 0 || p.MaxOutputTokens < 0 || (p.MaxOutputTokens > p.ContextWindow) {
+	if !modelprovider.TokenLimitsValid(p.ContextWindow, p.MaxOutputTokens) {
 		param := "max_output_tokens"
 		if p.ContextWindow < 0 {
 			param = "context_window"
@@ -83,12 +83,8 @@ func (p *ModelProviderInput) ValidateHarnessWithRegistry(harness string, registr
 	if err := configuration.ValidateProtocol(string(p.Protocol)); err != nil {
 		return &ModelProviderError{Code: "model_provider_protocol_unsupported", Param: "protocol", message: err.Error()}
 	}
-	if err := configuration.Validate(string(p.Protocol), p.ContextWindow, p.MaxOutputTokens); err != nil {
-		param := "max_output_tokens"
-		if p.ContextWindow <= 0 {
-			param = "context_window"
-		}
-		return &ModelProviderError{Code: "model_provider_token_limits_invalid", Param: param, message: err.Error()}
+	if err := configuration.ValidateMaxOutputTokens(p.MaxOutputTokens); err != nil {
+		return &ModelProviderError{Code: "model_provider_token_limits_invalid", Param: "max_output_tokens", message: err.Error()}
 	}
 	return nil
 }

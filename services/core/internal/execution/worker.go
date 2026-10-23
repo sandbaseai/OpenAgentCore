@@ -90,6 +90,7 @@ func StartWorker(ctx context.Context, dispatcher *Dispatcher, owner Owner) (_ *W
 	if err != nil {
 		return nil, err
 	}
+	worker.runtimes.scheduleWake = worker.scheduleWake
 	defer func() {
 		if err != nil {
 			worker.runtimes.stop()
@@ -156,11 +157,11 @@ func (w *Worker) CreateSession(ctx context.Context, tenant string, input session
 	if err := w.validateCreation(ctx, input); err != nil {
 		return sessions.Creation{}, err
 	}
-	profile, ok := w.dispatcher.Engines.Lookup(input.Engine)
+	declaration, ok := w.dispatcher.Harnesses().Lookup(input.Engine)
 	if !ok {
 		return sessions.Creation{}, sessions.ErrInvalidInput
 	}
-	input.SupportsRetainedNativeHistory = profile.RetainedNativeHistory.IsSupported()
+	input.SupportsRetainedNativeHistory = declaration.Capabilities.RetainedNativeHistory.IsSupported()
 	creation, err := w.dispatcher.Sessions.CreateSession(ctx, tenant, input)
 	if err == nil {
 		w.hintRuntimeWake(ctx, creation.Session)

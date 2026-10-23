@@ -4,7 +4,7 @@ owner_epoch=owner_epoch+1, updated_at=clock_timestamp() WHERE singleton=true;
 
 -- name: InitializeSandboxDeployment :exec
 UPDATE runtime_deployment SET provider_kind=$1, backend_fingerprint=$2,
-generation=$3, mode=$4,
+generation=$3, mode=$4, compute_profiles=sqlc.arg(compute_profiles),
 provider_config=sqlc.arg(provider_config),provider_metadata=sqlc.arg(provider_metadata),provider_credential=sqlc.arg(provider_credential),specification=sqlc.arg(specification),
 updated_at=clock_timestamp() WHERE singleton=true;
 
@@ -13,7 +13,7 @@ UPDATE runtime_deployment SET provider_metadata=$1,updated_at=clock_timestamp()
 WHERE singleton=true AND provider_kind<>'';
 
 -- name: RetireSandboxNodes :exec
-UPDATE runtime_nodes SET removed_at=clock_timestamp(),connection_id=NULL,provider_ready=false,ready_generation=NULL WHERE removed_at IS NULL;
+UPDATE runtime_nodes SET removed_at=clock_timestamp(),connection_id=NULL,ready_generation=NULL WHERE removed_at IS NULL;
 
 -- name: RetireSandboxEnrollments :exec
 UPDATE runtime_node_enrollments SET expires_at=clock_timestamp() WHERE consumed_at IS NULL;

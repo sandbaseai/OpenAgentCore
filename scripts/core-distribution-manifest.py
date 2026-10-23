@@ -42,18 +42,25 @@ BUNDLED_DOCS = (
     "docs/getting-started/install-options.md",
     "docs/getting-started/nodes.md",
     "docs/getting-started/operations.md",
+    "docs/getting-started/public-address.md",
     "docs/getting-started/quickstart.md",
+    "docs/getting-started/sandbox-backends.md",
     "docs/getting-started/self-hosted.md",
+    "docs/getting-started/troubleshooting.md",
+    "docs/getting-started/workspace-storage.md",
     "contracts/agents-api/environment-executor-credentials.md",
 )
 # Files the bundled docs show, copied as they are, so they work offline.
 BUNDLED_FILES = (
-    "docs/assets/openagentcore-banner.jpeg",
+    "docs/assets/openagentcore-wordmark-light.svg",
+    "docs/assets/openagentcore-wordmark-dark.svg",
     "docs/assets/architecture.svg",
+    "docs/assets/architecture-dark.svg",
     "docs/assets/console-overview-en.webp",
     "docs/assets/console-overview-zh.webp",
     "docs/assets/console-agent-metrics-en.webp",
     "docs/assets/console-agent-metrics-zh.webp",
+    "docs/assets/console-connect-host-en.webp",
 )
 REPOSITORY_URL = "https://github.com/MiniMax-AI/OpenAgentCore"
 MARKDOWN_LINK = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\]]*\])*)\]\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
@@ -191,7 +198,7 @@ def verify_runtime(image, daemon, source):
     files = {"/usr/local/bin/oac-daemon": pathlib.Path(daemon)}
     environment = dict(value.split("=", 1) for value in details["Config"]["Env"] if "=" in value)
     if "OAC_RUNTIME_MCODE_BIN" in environment:
-        for name in ("launch.mjs", "bridge.mjs", "check.mjs", "tool-executor.mjs", "subagent-snapshot.mjs", "source.json"):
+        for name in ("check.mjs", "subagent-snapshot.mjs", "source.json"):
             files["/opt/mcode-harness/" + name] = source / "packages/mcode-harness" / name
     output = subprocess.check_output(
         ["docker", "run", "--rm", "--network", "none", "--entrypoint", "sha256sum", image, *files], text=True
@@ -231,6 +238,10 @@ def release_base(value):
     return value.rstrip("/")
 
 
+# A platform base archive or one named part of it.
+NATIVE_ARTIFACT = re.compile(r"(linux|darwin|windows)-(amd64|arm64)(-[a-z]+)?")
+
+
 def native_catalog(bundle, stage, revision, source, artifact_base_url=""):
     """Ship only catalog metadata in Core; publish native archives independently."""
     bundle, stage, source = pathlib.Path(bundle), pathlib.Path(stage), pathlib.Path(source)
@@ -242,30 +253,32 @@ def native_catalog(bundle, stage, revision, source, artifact_base_url=""):
         raise ValueError("Native catalog has no qualified artifacts")
     assets = stage / "native-artifacts"
     assets.mkdir()
-    for platform, entry in catalog["artifacts"].items():
-        if not re.fullmatch(r"(linux|darwin|windows)-(amd64|arm64)", platform):
-            raise ValueError("Invalid native installer platform")
-        archive = source / (platform + ".tar.gz")
+    for name, entry in catalog["artifacts"].items():
+        if not NATIVE_ARTIFACT.fullmatch(name):
+            raise ValueError("Invalid native installer artifact")
+        archive = source / (name + ".tar.gz")
         if archive.is_symlink() or sha256(archive) != entry["sha256"]:
             raise ValueError("Native installer checksum mismatch")
-        filename = f"oac-native-{revision}-{platform}.tar.gz"
+        filename = f"oac-native-{revision}-{name}.tar.gz"
         shutil.copyfile(archive, assets / filename)
         (assets / (filename + ".sha256")).write_text(entry["sha256"] + "  " + filename + "\n")
-        catalog["artifacts"][platform] = {"sha256": entry["sha256"], **({"url": base + "/" + filename} if base else {})}
+        catalog["artifacts"][name] = {"sha256": entry["sha256"], **({"url": base + "/" + filename} if base else {})}
     for directory in (stage / "core/native-installers", bundle / "native-installers"):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n")
 
 
 def native_offline(bundle, stage):
+    """Carry the offline host's own platform; Core redirects the others to their release URL."""
     bundle, stage = pathlib.Path(bundle), pathlib.Path(stage)
     path = bundle / "native-installers/catalog.json"
     if not path.exists():
         return
     catalog = json.loads(path.read_text())
-    for platform in catalog["artifacts"]:
-        source = stage / "native-artifacts" / f"oac-native-{catalog['version']}-{platform}.tar.gz"
-        os.link(source, path.parent / (platform + ".tar.gz"))
+    for name, entry in catalog["artifacts"].items():
+        if name.startswith("linux-amd64") or "url" not in entry:
+            source = stage / "native-artifacts" / f"oac-native-{catalog['version']}-{name}.tar.gz"
+            os.link(source, path.parent / (name + ".tar.gz"))
 
 
 @contextmanager
@@ -320,7 +333,7 @@ def bootstraps(bundle, epoch, revision):
         zipapp.create_archive(directory, bundle / "node-install.pyz", compressed=True)
 
 
-def node_payload(bundle, stage, revision, source_tree, source_time, artifact_base_url="", offline="0"):
+def node_payload(bundle, stage, revision, source_tree, artifact_base_url="", offline="0"):
     bundle, stage = pathlib.Path(bundle), pathlib.Path(stage)
     artifact_base_url = release_base(artifact_base_url)
     if not artifact_base_url and offline != "1":
@@ -339,8 +352,6 @@ def node_payload(bundle, stage, revision, source_tree, source_time, artifact_bas
     metadata = {
         "source_commit": revision,
         "source_tree": source_tree,
-        # The commit time orders releases: initialization refuses an older one.
-        "source_time": int(source_time),
         "platform": "linux/amd64",
         "artifact_base_url": artifact_base_url,
         "artifacts": package_artifacts(bundle, stage, revision),

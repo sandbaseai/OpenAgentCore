@@ -67,6 +67,8 @@ func (p *Provider) call(ctx context.Context, q Request) (Response, error) {
 		return out, sandbox.ErrNotFound
 	case "command_unconfirmed":
 		return out, sandbox.ErrCommandUnconfirmed
+	case "checkpoint_unusable":
+		return out, sandbox.ErrCheckpointUnusable
 	case "metrics_unavailable":
 		return out, runtimeobs.ErrUnavailable
 	default:
@@ -144,9 +146,6 @@ func (p *Provider) Create(ctx context.Context, b sandbox.Bootstrap) (sandbox.Inf
 	if err := ValidateBootstrap(b); err != nil {
 		return absent, err
 	}
-	if p.config.ExternalWorkspace != (b.Workspace != nil) {
-		return absent, sandbox.ErrInvalid
-	}
 	workspace, err := p.resolveWorkspace(ctx, b.Reference, b.Workspace)
 	if err != nil {
 		return absent, err
@@ -220,7 +219,7 @@ func (p *Provider) nativeSuspend(ctx context.Context, q SuspendRequest) (State, 
 	return p.state(ctx, Request{Operation: "suspend", Reference: q.Reference, Suspend: &q})
 }
 func (p *Provider) nativeResume(ctx context.Context, q ResumeRequest) (State, error) {
-	if p.config.ExternalWorkspace != (q.Workspace != nil) {
+	if q.Workspace == nil {
 		return State{}, sandbox.ErrInvalid
 	}
 	workspace, err := p.resolveWorkspace(ctx, q.Reference, q.Workspace)
@@ -239,6 +238,24 @@ func (p *Provider) nativeRunCommandCompute(ctx context.Context, r sandbox.Refere
 		return sandbox.CommandResult{}, sandbox.ErrCommandUnconfirmed
 	}
 	return *out.Command, nil
+}
+
+// The preparation cache addresses the initial compute, like RunCommand.
+func (p *Provider) RestorePreparation(ctx context.Context, r sandbox.Reference, key string) (bool, error) {
+	c, e := p.nativeInitial(ctx, r)
+	if e != nil {
+		return false, e
+	}
+	out, e := p.call(ctx, Request{Operation: "restore_preparation", Reference: r, Compute: c, Key: key})
+	return out.Restored && e == nil, e
+}
+func (p *Provider) SavePreparation(ctx context.Context, r sandbox.Reference, key string) error {
+	c, e := p.nativeInitial(ctx, r)
+	if e != nil {
+		return e
+	}
+	_, e = p.call(ctx, Request{Operation: "save_preparation", Reference: r, Compute: c, Key: key})
+	return e
 }
 
 // ResumeCompute thaws the exact resident source after an aborted suspension.
@@ -264,7 +281,7 @@ func (p *Provider) nativeNewCompute(ctx context.Context, r sandbox.Reference, ge
 
 func (p *Provider) resolveWorkspace(ctx context.Context, reference sandbox.Reference, binding *workspacefs.Binding) (*WorkspaceDirectory, error) {
 	if binding == nil {
-		return nil, nil
+		return nil, sandbox.ErrInvalid
 	}
 	if err := sandbox.ValidateWorkspaceBinding(reference, binding); err != nil {
 		return nil, err

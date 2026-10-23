@@ -12,7 +12,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/execution"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/processconfig"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/node"
@@ -123,20 +122,13 @@ func (s *managedSetup) prepare(ctx context.Context, setup deployment.Setup) (exe
 	if err != nil {
 		return execution.PreparedRuntimeDeployment{}, err
 	}
-	adapter, err := s.registry.Lookup(setup.Provider)
+	selection, err := s.registry.PrepareSelection(ctx, s.direct(setup))
 	if err != nil {
 		return execution.PreparedRuntimeDeployment{}, err
 	}
-	direct := s.direct(setup)
-	selection := direct.Selection
-	if adapter.Configuration.Requirements().SelectionDiscovery.State == providercontract.Supported {
-		if selection, err = s.registry.DiscoverSelection(ctx, direct); err != nil {
-			return execution.PreparedRuntimeDeployment{}, err
-		}
-		setup.Specification, setup.Configuration = selection.DeploymentSpec, selection.Configuration
-		if candidate, err = s.configuration(setup); err != nil {
-			return execution.PreparedRuntimeDeployment{}, err
-		}
+	setup.Specification, setup.Configuration = selection.DeploymentSpec, selection.Configuration
+	if candidate, err = s.configuration(setup); err != nil {
+		return execution.PreparedRuntimeDeployment{}, err
 	}
 	candidate.Selection = &selection
 	return s.routeGenerations(candidate, setup)
@@ -192,5 +184,5 @@ func (s *managedSetup) provider(setup deployment.Setup) (sandbox.SandboxProvider
 
 // direct is the setup's input to direct-mode construction and setup operations.
 func (s *managedSetup) direct(setup deployment.Setup) sandbox.DirectConfig {
-	return sandbox.DirectConfig{ProcessPaths: s.processPaths, InstallationID: setup.InstallationID, Selection: sandbox.Selection{Provider: setup.Provider, DeploymentSpec: setup.Specification, Configuration: setup.Configuration}, Fence: &s.providerCalls}
+	return sandbox.DirectConfig{ProcessPaths: s.processPaths, InstallationID: setup.InstallationID, Selection: sandbox.Selection{ComputeProfiles: setup.ComputeProfiles, Provider: setup.Provider, DeploymentSpec: setup.Specification, Configuration: setup.Configuration}, Fence: &s.providerCalls}
 }

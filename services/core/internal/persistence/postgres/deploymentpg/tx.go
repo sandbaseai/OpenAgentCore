@@ -16,6 +16,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/db/sqlc"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/auditpg"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/placementpg"
 )
 
 // unit is one transaction or snapshot. locked reports that the transaction
@@ -32,6 +33,10 @@ var _ deployment.NodeReads = unit{}
 // transactions and snapshots never need it.
 func (u unit) LoadDeployment() (deployment.Record, error) {
 	d, err := u.loadDeployment()
+	if err != nil {
+		return deployment.Record{}, err
+	}
+	d.ComputeProfiles, err = placementpg.ExpandComputeProfiles(u.ctx, u.q, d.ComputeProfiles)
 	if err != nil {
 		return deployment.Record{}, err
 	}
@@ -85,7 +90,7 @@ func (u unit) LoadEnrollment(tokenDigest string) (deployment.EnrollmentRecord, e
 	if err != nil {
 		return deployment.EnrollmentRecord{}, err
 	}
-	return deployment.EnrollmentRecord{ID: uuidString(r.ID), InstallationID: uuidString(r.InstallationID), ExpiresAt: r.ExpiresAt.Time, Consumed: r.ConsumedAt.Valid, MaxActive: int(r.MaxActive), MaxRetained: int(r.MaxRetained)}, nil
+	return deployment.EnrollmentRecord{ID: uuidString(r.ID), InstallationID: uuidString(r.InstallationID), ExpiresAt: r.ExpiresAt.Time, Consumed: r.ConsumedAt.Valid, MaxActive: optionalInt(r.MaxActive), MaxRetained: optionalInt(r.MaxRetained)}, nil
 }
 
 func (u unit) LoadGenerationSpecification(generation uint64) (deployment.GenerationSpecification, error) {
@@ -175,6 +180,21 @@ func (t *nodeTx) RemoveNode(id string) error {
 	return t.q.RemoveRuntimeNode(t.ctx, nodeID)
 }
 
+func optionalInt4(v *int) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(*v), Valid: true}
+}
+
+func optionalInt(v pgtype.Int4) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int32)
+	return &n
+}
+
 func (t *nodeTx) CreateEnrollment(enrollment deployment.NewEnrollment) (time.Time, error) {
 	id, err := parseID(enrollment.ID)
 	if err != nil {
@@ -184,7 +204,7 @@ func (t *nodeTx) CreateEnrollment(enrollment deployment.NewEnrollment) (time.Tim
 	if err != nil {
 		return time.Time{}, err
 	}
-	if err := t.q.CreateRuntimeEnrollment(t.ctx, sqlc.CreateRuntimeEnrollmentParams{ID: id, TokenSha256: enrollment.TokenDigest, InstallationID: installation, MaxActive: int32(enrollment.MaxActive), MaxRetained: int32(enrollment.MaxRetained)}); err != nil {
+	if err := t.q.CreateRuntimeEnrollment(t.ctx, sqlc.CreateRuntimeEnrollmentParams{ID: id, TokenSha256: enrollment.TokenDigest, InstallationID: installation, MaxActive: optionalInt4(enrollment.MaxActive), MaxRetained: optionalInt4(enrollment.MaxRetained)}); err != nil {
 		return time.Time{}, err
 	}
 	row, err := t.q.GetRuntimeEnrollment(t.ctx, enrollment.TokenDigest)
@@ -216,7 +236,7 @@ func (t *nodeTx) HeartbeatNode(heartbeat deployment.Heartbeat) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	changed, err := t.q.HeartbeatRuntimeNode(t.ctx, sqlc.HeartbeatRuntimeNodeParams{ID: id, ConnectionID: connection, OwnerEpoch: int64(heartbeat.Epoch), ProviderReady: heartbeat.Health.ProviderReady, Health: raw})
+	changed, err := t.q.HeartbeatRuntimeNode(t.ctx, sqlc.HeartbeatRuntimeNodeParams{ID: id, ConnectionID: connection, OwnerEpoch: int64(heartbeat.Epoch), Health: raw})
 	return changed == 1, translate(err)
 }
 
@@ -255,14 +275,6 @@ func (t *nodeTx) PromoteServingGeneration(nodeID string, generation uint64) erro
 	return t.q.PromoteNodeServingGeneration(t.ctx, sqlc.PromoteNodeServingGenerationParams{ID: id, ReadyGeneration: pgtype.Int8{Int64: int64(generation), Valid: true}})
 }
 
-func (t *nodeTx) RefreshServingReadiness(nodeID string, protocol int) error {
-	id, err := parseID(nodeID)
-	if err != nil {
-		return err
-	}
-	return t.q.RefreshNodeServingReadiness(t.ctx, sqlc.RefreshNodeServingReadinessParams{ID: id, ProtocolVersion: int32(protocol)})
-}
-
 // deploymentTx is one leased deployment change.
 type deploymentTx struct {
 	unit
@@ -277,11 +289,19 @@ func (t *deploymentTx) LoadDeployment() (deployment.Record, error) {
 	if err != nil {
 		return deployment.Record{}, err
 	}
+	d.ComputeProfiles, err = placementpg.ExpandComputeProfiles(t.ctx, t.q, d.ComputeProfiles)
+	if err != nil {
+		return deployment.Record{}, err
+	}
 	return record(d, t.cipher, true), nil
 }
 
 func (t *deploymentTx) LoadSnapshot() (deployment.Snapshot, error) {
 	row, err := t.q.GetSandboxDeploymentSnapshot(t.ctx)
+	if err != nil {
+		return deployment.Snapshot{}, err
+	}
+	row.RuntimeDeployment.ComputeProfiles, err = placementpg.ExpandComputeProfiles(t.ctx, t.q, row.RuntimeDeployment.ComputeProfiles)
 	if err != nil {
 		return deployment.Snapshot{}, err
 	}
@@ -308,7 +328,24 @@ func (t *deploymentTx) SaveSelection(selection deployment.SelectionRecord) error
 	if selection.Generation > math.MaxInt64 {
 		return deployment.ErrInvalidInput
 	}
-	params := sqlc.InitializeSandboxDeploymentParams{ProviderKind: selection.Provider, BackendFingerprint: selection.BackendFingerprint, Generation: int64(selection.Generation), Mode: selection.Mode, ProviderConfig: selection.Configuration.Public, ProviderMetadata: selection.Configuration.Metadata, Specification: selection.Specification}
+	references := make(map[string]uint64, len(selection.ComputeProfiles))
+	for name, p := range selection.ComputeProfiles {
+		references[name] = p.Generation
+	}
+	profiles, err := json.Marshal(references)
+	if err != nil {
+		return err
+	}
+	for _, p := range selection.ComputeProfiles {
+		spec, err := json.Marshal(p.Specification)
+		if err != nil {
+			return err
+		}
+		if err := t.q.SaveComputeProfileGeneration(t.ctx, sqlc.SaveComputeProfileGenerationParams{Generation: int64(p.Generation), ProviderKind: selection.Provider, Specification: spec, ProviderConfig: p.Configuration, ProviderMetadata: p.Metadata}); err != nil {
+			return err
+		}
+	}
+	params := sqlc.InitializeSandboxDeploymentParams{ComputeProfiles: profiles, ProviderKind: selection.Provider, BackendFingerprint: selection.BackendFingerprint, Generation: int64(selection.Generation), Mode: selection.Mode, ProviderConfig: selection.Configuration.Public, ProviderMetadata: selection.Configuration.Metadata, Specification: selection.Specification}
 	if len(selection.Configuration.Secret) > 0 {
 		sealed, err := t.cipher.SealSandboxDeployment(selection.Configuration.Secret, selection.InstallationID, selection.Generation)
 		if err != nil {

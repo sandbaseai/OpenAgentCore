@@ -19,10 +19,9 @@ const (
 	// TypeOutputMessage carries opt-in native message boundaries and completion snapshots.
 	TypeOutputMessage = "output_message"
 
-	// TypeThinking carries an internal-thinking fragment. Gateway
-	// forwards as a plain EventDelta so existing renderers keep
-	// working.
-	TypeThinking = "thinking"
+	// TypeReasoning carries one native reasoning item: its text fragments while
+	// in progress and its terminal status.
+	TypeReasoning = "reasoning"
 
 	// TypeToolCall carries a tool invocation. Stage=="before" runs
 	// before the call, "after" runs after.
@@ -65,10 +64,19 @@ type OutputMessagePayload struct {
 	Text   *string `json:"text,omitempty"`
 }
 
-// ThinkingPayload carries an internal-thinking fragment.
-type ThinkingPayload struct {
-	Text     string `json:"text"`
-	Sequence uint64 `json:"sequence,omitempty"`
+// ReasoningPayload reports one native reasoning item. An in_progress frame
+// carries the next text fragment of native part Index, which is the current
+// part or the next one; the completed frame carries no text.
+type ReasoningPayload struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Index  int    `json:"index,omitempty"`
+	Delta  string `json:"delta,omitempty"`
+}
+
+// Valid reports whether p is a well-formed reasoning frame.
+func (p ReasoningPayload) Valid() bool {
+	return p.ID != "" && p.Index >= 0 && (p.Status == "in_progress" || (p.Status == "completed" && p.Delta == ""))
 }
 
 // ToolCallPayload carries a tool invocation event. Stage is "before"
@@ -163,20 +171,16 @@ type AgentKindCapabilities struct {
 	// process shutdown using its retained private state, without replaying input.
 	// It does not promise process memory or external connection restoration.
 	RetainedNativeHistory CapabilitySupport `json:"retained_native_history"`
-	Steering              CapabilitySupport `json:"steering"`
 	MessageItems          CapabilitySupport `json:"message_items"`
 
-	ToolObservations               CapabilitySupport `json:"tool_observations"`
-	EnvironmentNone                CapabilitySupport `json:"environment_none"`
-	LocalEnvironment               CapabilitySupport `json:"local_environment"`
-	Preparation                    CapabilitySupport `json:"preparation"`
-	WorkspaceReadPreparation       CapabilitySupport `json:"workspace_read_preparation"`
-	WorkspaceOutputExport          CapabilitySupport `json:"workspace_output_export"`
-	ProgrammaticToolCallingDisable CapabilitySupport `json:"programmatic_tool_calling_disable"`
-	WebSearchControl               CapabilitySupport `json:"web_search_control"`
-	// ExecutionControls supports typed search and verbosity controls.
+	ToolObservations         CapabilitySupport `json:"tool_observations"`
+	EnvironmentNone          CapabilitySupport `json:"environment_none"`
+	LocalEnvironment         CapabilitySupport `json:"local_environment"`
+	Preparation              CapabilitySupport `json:"preparation"`
+	WorkspaceReadPreparation CapabilitySupport `json:"workspace_read_preparation"`
+	WorkspaceOutputExport    CapabilitySupport `json:"workspace_output_export"`
+	// ExecutionControls accepts the typed execution controls.
 	ExecutionControls    CapabilitySupport `json:"execution_controls"`
-	TextVerbosity        CapabilitySupport `json:"text_verbosity"`
 	StructuredOutput     CapabilitySupport `json:"structured_output"`
 	ToolSearch           CapabilitySupport `json:"tool_search"`
 	MessageImages        CapabilitySupport `json:"message_images"`

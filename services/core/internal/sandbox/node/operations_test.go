@@ -15,7 +15,7 @@ import (
 func TestUnsupportedWireIsExplicitAndDoesNotInvokeProvider(t *testing.T) {
 	p := &fakeProvider{}
 	q := request{ID: uuid.NewString(), ConnectionID: uuid.NewString(), Reference: reference(), TimeoutMillis: 1000, Operation: "initial"}
-	out := execute(t.Context(), p, q)
+	out, _ := execute(t.Context(), p, q)
 	if p.creates != 0 || p.reads != 0 || p.kills != 0 {
 		t.Fatal("unsupported operation reached provider")
 	}
@@ -101,11 +101,20 @@ func TestRetainedLifecycleDispatchSurvivesStrictWire(t *testing.T) {
 		if err := decoded.Request.validate(); err != nil {
 			t.Fatal(err)
 		}
-		if out := execute(t.Context(), p, *decoded.Request); responseError(out) != nil {
+		if out, _ := execute(t.Context(), p, *decoded.Request); responseError(out) != nil {
 			t.Fatal(out)
 		}
 	}
 	if p.renewed.ID != compute.ID || p.renewed.RestoredFrom == nil || *p.renewed.RestoredFrom != retained || p.deleted != retained {
 		t.Fatal("retained evidence lost in transport")
+	}
+}
+
+func TestCheckpointUnusableCrossesTheWireAsFixedCode(t *testing.T) {
+	if code := errorCode(sandbox.ErrCheckpointUnusable); code != "checkpoint_unusable" {
+		t.Fatal(code)
+	}
+	if !errors.Is(responseError(response{ErrorCode: "checkpoint_unusable"}), sandbox.ErrCheckpointUnusable) {
+		t.Fatal("code not mapped back")
 	}
 }

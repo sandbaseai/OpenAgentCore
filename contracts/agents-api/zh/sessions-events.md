@@ -1,10 +1,10 @@
 ---
 title: "Session、事件和历史"
 source: contracts/agents-api/sessions-events.md
-source_hash: ec4793c064dfe73020c3cade63a2b17d3ac08e72f1528cd33110630bbbcf623c
+source_hash: 2eb9f5ed442a080fde67e95c749ad3cd0e79692a5cf5e36d1771328627f6df4e
 ---
 
-本契约涵盖 Session 内部发生的事情：发送输入、实时事件流，以及读取 Turn、Item 和使用量的持久化历史。Session 资源本身（创建配置、重试标识、更新、列出和删除）见 [Core 线协议行为](wire-semantics.md)。消息和函数结果内容见[消息内容](message-content.md)。[Agents API 指南](../../../docs/zh/api/public-agent-api.md)展示了使用 SDK 和 HTTP 的调用方式。
+本契约涵盖 Session 内部发生的事情：发送输入、实时事件流，以及读取 Turn、Item 和使用量的持久化历史。Session 资源本身（创建配置、重试标识、更新、列出和删除）见 [API 行为](wire-semantics.md)。消息和函数结果内容见[消息内容](message-content.md)。[Agents API 指南](../../../docs/zh/api/public-agent-api.md)展示了使用 SDK 和 HTTP 的调用方式。
 
 ## 恢复模型 {#recovery-model}
 
@@ -26,6 +26,20 @@ Session 的 `status` 和 `last_active_at` 由其最新的根 Turn 以及仍在�
 | `in_progress` | 最新 Turn 正在排队、运行或等待 |
 | `requires_action` | 最新 Turn 正在等待函数结果且未请求取消，或输入正在等待 `self_hosted` 机器连接。`required_actions` 列出 `function_call` 或 `environment_connection` 条目 |
 | `failed` | 最新 Turn 失败（`error` 为 "The execution could not complete."）、为 Environment 预留的输入失败、初始输入在接纳前到期，或 Environment 初始化失败（见 [Environment 初始化失败](#environment-initialization-failure)） |
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> in_progress: Turn queued
+    in_progress --> idle: completed or cancelled
+    in_progress --> requires_action: awaits function result
+    idle --> requires_action: awaits self_hosted machine
+    requires_action --> in_progress: result or machine
+    requires_action --> idle: cancelled
+    in_progress --> failed: Turn failed
+    idle --> failed: input expired or Environment failed
+    failed --> in_progress: new input
+```
 
 Turn 失败后 Session 仍可使用：新输入会启动一个新 Turn。后来预留的输入到期时，Session 保持为 `idle`。Environment 初始化失败或过期会阻止新工作。
 
@@ -66,9 +80,7 @@ Turn 失败后 Session 仍可使用：新输入会启动一个新 Turn。后来�
 
 ### 包含 Environment 的会话 {#sessions-with-an-environment}
 
-在 `openai_hosted` 和 `self_hosted` Session 中，Turn 运行期间发送的消息会立即加入该 Turn。发送给空闲 Session 的消息会为 Environment 预留该批次：请求等待 Turn 开始，从预留时起最多等待五分钟。预留等待 `self_hosted` 机器连接时，Session 显示为 `requires_action`，并带有 `environment_connection` 操作。在这些部署方式下，携带消息的批次只能包含消息。仅取消和仅结果的批次会立即被接纳，并且不会创建 Turn。
-
-当 Turn 启动时，等待中的请求以 202 结束；超过截止时间时，以 409 `environment_input_expired` 结束；管理员归档 Session 或重置其部署并取消预留时，以 409 `environment_input_cancelled` 结束；Environment 失败或过期时，以 409 `environment_unavailable` 结束。断开等待中的请求不会取消预留，也不会重新开始其截止计时。
+在 `openai_hosted` 和 `self_hosted` Session 中，Turn 运行期间发送的消息会立即加入该 Turn。发送给空闲 Session 的消息会为 Environment 预留该批次：请求等待 Turn 开始，从预留时起最多等待五分钟，Turn 启动时以 202 结束，否则以某个[输入错误](#input-errors)结束。预留等待 `self_hosted` 机器连接时，Session 显示为 `requires_action`，并带有 `environment_connection` 操作。在这些部署方式下，携带消息的批次只能包含消息。仅取消和仅结果的批次会立即被接纳，并且不会创建 Turn。断开等待中的请求不会取消预留，也不会重新开始其截止计时。
 
 ### 输入错误 {#input-errors}
 
@@ -83,9 +95,11 @@ Turn 失败后 Session 仍可使用：新输入会启动一个新 Turn。后来�
 | `call_id` 未标识该 Session 的任何函数调用的结果 | 400 `invalid_request_error`, param null | "Unknown pending tool call." |
 | 为该 Session 的某个调用提交结果，但 `turn_id` 标识另一个 Turn、未知 Turn ID，或不是 Turn ID 的值 | 400 `invalid_request_error`, param null | "The tool call belongs to a different Turn." |
 | 缺失、格式错误或来自其他作用域的 Session | 404 `not_found_error` | "Resource not found." |
+| 预留的批次在 Turn 启动前超过五分钟截止时间 | 409 `environment_input_expired` | "The environment input deadline elapsed before admission." |
+| 预留的批次因管理员归档 Session 或重置其部署而被取消 | 409 `environment_input_cancelled` | "The environment input was cancelled before admission." |
 | `openai_hosted` Environment 预配失败后提交新输入 | 409 `conflict_error` | "the hosted environment failed to provision" |
 | `self_hosted` Environment 失败后提交新输入、Environment 失败时输入已在等待，或 Environment 已过期 | 409 `environment_unavailable` | "The environment is no longer available for new input." |
-| Session Harness 无法处理的消息，例如 Claude Code 上仅含空白的文本 | 400 `unsupported_or_invalid_configuration` | 见[仅含空白的文本](message-content.md#whitespace-only-text) |
+| Session Harness 无法处理的消息，例如 MiniMax Code 上仅含空白的文本 | 400 `unsupported_or_invalid_configuration` | 见[仅含空白的文本](message-content.md#whitespace-only-text) |
 
 `turn_id` 为空或 `call_id` 为空白时，会返回通用的 400 `invalid_request`。错误消息绝不会重复调用方输入或内部标识符。
 
@@ -128,6 +142,7 @@ Turn 失败后 Session 仍可使用：新输入会启动一个新 Turn。后来�
 - `item.added` 和 `item.done` 始终携带 `output_index`；输入 Item 的该值为 null。函数结果只发出 `item.added`；`item.done` 用于代理输出。
 - 助手消息遵循以下单一顺序：先发送 `content` 为空的进行中 `item.added`，再发送文本为空的 `content_part.added`，然后发送 `output_text.delta` 事件、`output_text.done`、`content_part.done` 和 `item.done`。首次观察时已完整的消息（例如结构化输出）会在一个 `output_text.delta` 中逐字节发送全部文本。完整文本会替换此前累积的增量。
 - Codex 命令输出以 `agent.output.command_execution_output.delta` 流式传输，并携带命令的 Item ID 和输出索引。原生输出配额和文本转换规则适用，因此这些增量并非逐字节捕获的原始结果；完整 Item 才是权威结果。
+- reasoning Item 遵循以下单一顺序：先发送 `summary` 为空的进行中 `item.added`；然后按顺序对每个 `summary_text` 部分发送文本为空的 `reasoning_summary_part.added` 和 `reasoning_summary_text.delta` 事件，并在下一个部分开始或 Item 结束时发送 `reasoning_summary_text.done` 和 `reasoning_summary_part.done`；最后发送 `item.done`。被取消或失败的 Turn 截断的部分，其 `reasoning_summary_part.done` 的 `status` 为 `incomplete`，否则为 null。子 Turn 快照改写了先前文本时，新文本只出现在 done 事件中。
 - 已取消或失败的 Turn 会将其未完成的 Item 标记为 `incomplete`，并保留其部分内容。
 - 函数调用会一直保留在 `required_actions` 中，直到 Harness 应用其结果，或取消操作或 Turn 结束将其移除。重复通知不会发出新状态。
 
@@ -145,10 +160,13 @@ Turn 和 Item 列表接受 `after`、`limit` 和 `order`（[列表规则](wire-s
 | `command_execution` | 命令、报告的输出、退出代码、持续时间和工作目录 |
 | `mcp_call` | 服务器和工具标识、参数、结构化结果或错误 |
 | `function_call`、`function_call_output` | 关联的调用及其结果。结果始终携带 `output` 和 `error`；提交时省略这些字段则值为 null。存储的结果会保留提交时字段是否存在的信息。原生文件更改显示为 `apply_patch` 函数调用，更改内容作为参数，不会生成虚构结果 |
-| `web_search_call` | 支持的操作字段（`search`、`open_page`、`find_in_page`、`other`） |
-| `reasoning`、`agent_message` 和 Subagent 协调调用 | 见 [Subagents](subagents.md)。`agent_message` 没有状态；reasoning 状态可以为 null |
+| `web_search_call` | 支持的操作字段（`search`、`open_page`、`find_in_page`、`other`）；Claude Code 以 `search` 报告 `WebSearch`，以 `open_page` 报告 `WebFetch` |
+| `reasoning` | 一个原生推理 item，每个原生部分对应一个 `summary_text` 部分，仅在 Agent 设置了 `reasoning.summary` 时出现；为 null（默认）时，任何 Turn（根或子）都没有 `reasoning` Item 和 reasoning 事件。文本内容见 [OpenAI 兼容性](index.md#differences-from-openai)。子 Turn 的 Item 状态可以为 null |
+| `agent_message` 和 Subagent 协调调用 | 见 [Subagents](subagents.md)。`agent_message` 没有状态 |
 
 工具失败不会导致其 Turn 失败。Session 的项目可以读取工具输出，其中可能包含该工具自己的诊断文本。
+
+PostgreSQL 无法存储 U+0000，因此 Harness 输出（例如命令输出）中的 U+0000 在存储、事件流和列表中都会替换为 U+FFFD，Turn 照常继续。
 
 ## 使用量 {#usage}
 

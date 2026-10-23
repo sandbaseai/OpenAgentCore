@@ -131,6 +131,9 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Sandbox
 		}
 	}
 	_, err := r.deployment.ReleaseAllocation(ctx, owner)
+	if err == nil {
+		r.freedSlot()
+	}
 	return err
 }
 

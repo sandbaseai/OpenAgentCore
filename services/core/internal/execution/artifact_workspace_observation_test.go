@@ -60,7 +60,7 @@ func TestArtifactWorkspaceScopePreservesPreparationAndRelease(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			logs := captureExecutionLogs(t)
 			conn := &artifactWorkspaceConn{executionTraceConn: &executionTraceConn{closed: make(chan struct{})}, replies: make(chan []byte, 4), failed: mode == "prepare_failure"}
-			peer := runtimegateway.NewSessionWithOwner(conn, "device", "tenant", "test", runtimegateway.NewRegistry(), func(string, ...any) {}, nil)
+			peer := runtimegateway.NewSession(conn, "device", "tenant", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 			peer.Start()
 			defer peer.Close("test")
 			session := sessions.Session{ID: "session", TenantID: "tenant", Engine: "codex"}

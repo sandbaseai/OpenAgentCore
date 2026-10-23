@@ -98,6 +98,9 @@ type CreationTx interface {
 	// preparation when the Session froze a setup or initial files, and
 	// returns its ID.
 	CreateEnvironment(ctx context.Context) (string, error)
+	// FreezeComputeProfile binds the selected immutable generation while the
+	// deployment lock is held, including before an allocation exists.
+	FreezeComputeProfile(ctx context.Context, profile string, generation uint64) error
 	// CreateInputReservation reserves the batch under key until the deadline
 	// the database clock sets, marked as the Session's initial input.
 	CreateInputReservation(ctx context.Context, key string, batch json.RawMessage, initial bool) (EnvironmentInputReservation, error)
@@ -150,7 +153,8 @@ func (s *Service) CreateSession(ctx context.Context, tenant string, input Create
 // Skills, then the Session's own rows. It returns the resources created.
 func (s *Service) createResources(ctx context.Context, tx CreationTx, session Session, input CreateSession, batch []Input, encoded json.RawMessage) ([]writeaudit.Resource, error) {
 	var configuration struct {
-		Environment struct {
+		ComputeProfile string `json:"compute_profile"`
+		Environment    struct {
 			Type string `json:"type"`
 		} `json:"environment"`
 	}
@@ -168,6 +172,15 @@ func (s *Service) createResources(ctx context.Context, tx CreationTx, session Se
 			return nil, err
 		}
 		if err := s.rules.CheckAdmission(deployment, ""); err != nil {
+			return nil, err
+		}
+	}
+	if profile := configuration.ComputeProfile; profile != "" {
+		selected, ok := deployment.ComputeProfiles[profile]
+		if !hosted || deployment.Mode != string(sandbox.DeploymentDirect) || !sandbox.ValidComputeProfile(profile) || !ok || selected.Generation == 0 || selected.Generation >= deployment.Generation {
+			return nil, placement.ErrComputeProfileUnavailable
+		}
+		if err := tx.FreezeComputeProfile(ctx, profile, selected.Generation); err != nil {
 			return nil, err
 		}
 	}

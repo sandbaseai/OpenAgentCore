@@ -61,15 +61,14 @@ Each code returns HTTP 400 with `type: "invalid_request_error"`. A missing, malf
 | `model_provider_base_url_invalid` | `base_url` | omitted | Requires HTTPS without credentials, query or fragment |
 | `model_provider_protocol_unsupported` | `protocol` | `harness` and `allowed_protocols`, from the build's adapter catalog | The protocol is unknown or unsupported by the selected Harness |
 | `model_provider_api_key_invalid` | `api_key` | `max_length`: 16384 | The key is empty, too long or contains a prohibited character |
-| `model_provider_token_limits_invalid` | `context_window` or `max_output_tokens` | omitted | Limits are invalid, or the Harness requires positive limits that are missing |
+| `model_provider_token_limits_invalid` | `context_window` or `max_output_tokens` | omitted | A limit is negative, `max_output_tokens` exceeds a set `context_window`, or the Harness has no native setting for a set limit |
 | `model_configuration_model_invalid` | `model` | omitted | The deployment default's model is not a nonempty model identifier |
 | `harness_config_invalid` | `harness_config` | omitted | The deployment default's native parameters are unsupported or invalid |
 | `invalid_sandbox_configuration` | `resources.cpus` | `min`: 1, `max`: 255 | The CPU count is outside the supported bounds |
 | `invalid_sandbox_configuration` | `resources.memory_mib` | `min`: 512, `max`: 1048576 | Memory is outside the supported bounds |
-| `invalid_sandbox_configuration` | `resources.root_disk_mib` or `resources.environment_disk_mib` | `min`: 1024 for microsandbox; `min`: 0, `max`: 0 for Docker and E2B | Disk capacity is missing or unsupported by the provider |
-| `invalid_sandbox_configuration` | `runtime` | omitted | The Runtime release is missing, mutable, invalid or not allowed for E2B |
+| `invalid_sandbox_configuration` | `resources.root_disk_mib` or `resources.environment_disk_mib` | `min`: 1024 for microsandbox (`environment_disk_mib` also accepts 0); `min`: 0, `max`: 0 for Docker and E2B | Disk capacity is missing or unsupported by the provider |
 
-Bounds are validation constants, never submitted values. Node names are limited in bytes; Project and key names in trimmed Unicode characters without control characters. Only the first failure is reported, in this order: model provider URL, protocol, key, general limits, the Harness's protocol, then the Harness's required limits; sandbox resources CPU, memory, disk, then Runtime. Model-provider field errors inside a `model_provider` object keep that object's field as `param`. An unknown sandbox provider returns an error without these fields.
+Bounds are validation constants, never submitted values. Node names are limited in bytes; Project and key names in trimmed Unicode characters without control characters. Only the first failure is reported, in this order: model provider URL, protocol, key, limits, then the Harness's protocol; sandbox resources CPU, memory, then disk. Model-provider field errors inside a `model_provider` object keep that object's field as `param`. An unknown sandbox provider returns an error without these fields.
 
 ## Other administration errors
 
@@ -81,6 +80,7 @@ These codes have null `param` and no `details`. [Sandbox deployment](./sandbox-d
 | 400 | `workspace_operation_unsupported` | The selected workspace storage does not support the operation or sandbox combination |
 | 404 | `workspace_storage_not_found` | Workspace storage is not configured or the requested object does not exist |
 | 409 | `workspace_storage_conflict` | Workspace storage ownership or configuration conflicts with the current state |
+| 409 | `workspace_storage_required` | The sandbox provider runs every Environment on workspace storage and none is selected |
 | 503 | `workspace_storage_unavailable` | Workspace storage is unavailable or an operation remains unconfirmed |
 | 400 | `sandbox_operation_unsupported` | The selected sandbox provider does not support the operation |
 | 401 | `invalid_admin_key` | The bearer credential is not a valid Core key |
@@ -106,7 +106,7 @@ These codes have null `param` and no `details`. [Sandbox deployment](./sandbox-d
 
 ## Diagnostic failure categories
 
-The [Session and Turn diagnostics reads](./session-diagnostics.md) return these categories inside a successful 200 snapshot, not as an error envelope. Public `/v1` Turn errors do not change. `params` is `{}` unless the table says otherwise.
+The [Session diagnostics](./session-diagnostics.md) routes return these categories inside a successful 200 snapshot, not as an error envelope. Public `/v1` Turn errors do not change. `params` is `{}` unless the table says otherwise.
 
 | Code | Stored cause or safe meaning |
 | --- | --- |

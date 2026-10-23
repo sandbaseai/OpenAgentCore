@@ -10,7 +10,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
-const ProtocolVersion = 5
+const ProtocolVersion = 7
 const SDKVersion = "v0.7.8"
 const MaxOutputBytes = 1024 * 1024
 const MaxRequestBytes = 72 * 1024 * 1024
@@ -19,22 +19,19 @@ const MaxResponseBytes = 16 * 1024 * 1024
 // Config is trusted deployment configuration. Paths and hashes refer to one
 // immutable, qualified installation. Network is explicitly used on create and restore.
 type Config struct {
-	// ExternalWorkspace is derived from the immutable deployment specification.
-	ExternalWorkspace  bool
-	InstallationID     string
-	HelperPath         string
-	RuntimeHome        string
-	CheckpointRoot     string
-	RuntimePath        string
-	FirmwarePath       string
-	RuntimeSHA256      string
-	FirmwareSHA256     string
-	Image              string
-	MemoryMiB          uint32
-	CPUs               uint8
-	RootDiskMiB        uint32
-	EnvironmentDiskMiB uint32
-	Network            NetworkPolicy
+	InstallationID string
+	HelperPath     string
+	RuntimeHome    string
+	CheckpointRoot string
+	RuntimePath    string
+	FirmwarePath   string
+	RuntimeSHA256  string
+	FirmwareSHA256 string
+	Image          string
+	MemoryMiB      uint32
+	CPUs           uint8
+	RootDiskMiB    uint32
+	Network        NetworkPolicy
 }
 
 type NetworkPolicy struct {
@@ -114,7 +111,9 @@ type Request struct {
 	Suspend   *SuspendRequest
 	Resume    *ResumeRequest
 	Snapshot  *SnapshotIdentity
-	Deadline  time.Time
+	// Key is the opaque preparation cache key.
+	Key      string `json:",omitempty"`
+	Deadline time.Time
 }
 type Response struct {
 	// CreateSettled binds State to a completed Create rejection or an initial_info
@@ -124,6 +123,7 @@ type Response struct {
 	State         *State
 	Command       *sandbox.CommandResult
 	Metrics       *Metrics
+	Restored      bool `json:",omitempty"`
 	ErrorCode     string
 }
 

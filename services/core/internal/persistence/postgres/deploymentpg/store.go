@@ -15,6 +15,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/db/sqlc"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgunit"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/placementpg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
@@ -81,19 +82,38 @@ func (s *Store) ReadNodes(ctx context.Context, apply func(deployment.NodeReads) 
 func (s *Store) Deployment(ctx context.Context) (deployment.Record, error) {
 	ctx, cancel := context.WithTimeout(ctx, pgunit.ExecutionTimeout)
 	defer cancel()
-	d, err := s.pool.Queries().GetRuntimeDeployment(ctx)
-	if err != nil {
-		return deployment.Record{}, err
-	}
-	return record(d, s.cipher, true), nil
+	var result deployment.Record
+	err := s.pool.Snapshot(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		d, err := q.GetRuntimeDeployment(ctx)
+		if err != nil {
+			return err
+		}
+		d.ComputeProfiles, err = placementpg.ExpandComputeProfiles(ctx, q, d.ComputeProfiles)
+		if err != nil {
+			return err
+		}
+		result = record(d, s.cipher, true)
+		return nil
+	})
+	return result, err
 }
-
 func (s *Store) Snapshot(ctx context.Context) (deployment.Snapshot, error) {
-	row, err := s.pool.Queries().GetSandboxDeploymentSnapshot(ctx)
-	if err != nil {
-		return deployment.Snapshot{}, err
-	}
-	return snapshot(row)
+	var result deployment.Snapshot
+	err := s.pool.Snapshot(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		row, err := q.GetSandboxDeploymentSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		row.RuntimeDeployment.ComputeProfiles, err = placementpg.ExpandComputeProfiles(ctx, q, row.RuntimeDeployment.ComputeProfiles)
+		if err != nil {
+			return err
+		}
+		result, err = snapshot(row)
+		return err
+	})
+	return result, err
 }
 
 func (s *Store) OwnerEpoch(ctx context.Context) (uint64, error) {
@@ -125,6 +145,10 @@ func (s *Store) Allocation(ctx context.Context, ref sandbox.Reference) (deployme
 		}
 		a := row.RuntimeAllocation
 		d, err := q.GetRuntimeDeployment(ctx)
+		if err != nil {
+			return err
+		}
+		d.ComputeProfiles, err = placementpg.ExpandComputeProfiles(ctx, q, d.ComputeProfiles)
 		if err != nil {
 			return err
 		}
