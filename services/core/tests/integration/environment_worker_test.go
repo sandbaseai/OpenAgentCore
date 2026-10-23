@@ -16,7 +16,7 @@ func TestWorkerEnvironmentSharesCapacityThroughClaimAndCleanup(t *testing.T) {
 	pending := map[string]sessions.EnvironmentInputReservation{}
 	for range 2 {
 		value := workerEnvironmentReservation(t, h)
-		pending[value.SessionID] = value
+		pending[proto.SessionStateKey(value.SessionID)] = value
 	}
 	runtimes := []*dispatchHarness{h}
 	for _, runtime := range h.environments {
