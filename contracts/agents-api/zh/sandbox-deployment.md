@@ -46,6 +46,7 @@ POST 和 PUT 接受相同的完整选择，并要求提供先前 GET 返回的 `
 | `resources` | 每个沙箱的限制，见下文；Docker 和 microsandbox 必填，E2B 可选 |
 | `runtime` | 不可变的 [Runtime 发行版](#runtime-release)；Docker 和 microsandbox 必填，E2B 必须省略 |
 | `configuration` | 提供商的公开选择器。E2B：不可变的 `template` 构建以及可选且配套的 `api_url` 和 `domain`。Docker 和 microsandbox 仅接受 `{}` 或省略 |
+| `compute_profiles` | 可选映射，包含下文说明的最多八个命名不可变资源选项；省略或 `{}` 会将映射替换为空 |
 | `credential` | 提供商的只写凭据。E2B：`{api_key}`，首次设置时必填，在 PUT 中省略以保留当前密钥；null 或空密钥无效。Docker 和 microsandbox 拒绝该字段 |
 
 请求中没有 Core 地址。Core 根据安装公开 URL（`config.json` 中的 `public_url`，Core 对应 `OAC_PUBLIC_URL`）派生部署的 `core_url`：这是节点和沙箱客户机访问 Core 时使用的源地址。包含 `core_url` 的请求会像包含任何其他未知成员一样被拒绝，并返回 400 `invalid_request`。E2B 客户机从 E2B 云访问 Core，因此当公开 URL 为回环地址时，E2B 选择会被拒绝，并返回 409 `sandbox_configuration_error`。Docker 和 microsandbox 选择接受回环公开 URL，但这仅适用于本地开发，因为客户机的回环地址无法访问其主机。更改公开 URL 属于安装变更：使用旧地址注册的节点不会收到新沙箱，必须移除后重新添加。
@@ -69,6 +70,20 @@ microsandbox 会配置 CPU、内存、托管根磁盘，以及位于 `/environme
 响应中可选的 `specification.workspace` 是从所选[工作区文件系统](../../../docs/zh/workspace-provider.md)派生的不可变能力回执，不是可独立写入的设置。它仅包含 `attachment`、`user_xattr` 和 `capacity_quota`；文件系统配置、路径和凭据不进入 Sandbox specification。Core 保存前校验组合声明，保留代次校验与节点构造均使用此回执。缺失 `workspace` 时保留自有磁盘模式及现有容量边界。Create 和 Resume 必须且仅当固定代次选择外部存储时提供绑定。
 
 为现有自有磁盘部署启用外部存储时，先选择文件系统配置，再使用兼容资源更新 Sandbox 部署（不支持配额的文件系统使用 `environment_disk_mib: 0`）。选择文件系统不会改变现有代次或 allocation。下一次 Sandbox 更新派生外部能力回执；旧的自有磁盘 allocation 保留原磁盘。文件系统选择必须支持提供商声明的要求。已采用外部存储的部署要求相同的 `attachment` 和 `user_xattr`；选择可以更改 `capacity_quota`，此后在 Sandbox 更新设置相匹配的 `environment_disk_mib` 之前拒绝新工作区。既有工作区保持其获准时的容量。
+
+### 计算规格 {#compute-profiles}
+
+direct 模式部署可以在同一 POST 或 PUT 完整选择中添加 `compute_profiles`，最多八个名称，每个名称匹配 `^[a-z][a-z0-9-]{0,47}$`。值仅包含 `resources` 和 `configuration`，必须显式提供 CPU 和内存。档位继承部署的提供商、Runtime 和凭据，不能更换凭据端点；node 模式拒绝非空档位。提交前逐项规范化并验证不可变 build，任何一项无效均拒绝整个更新。
+
+```json
+{"compute_profiles":{"memory-8g":{"resources":{"cpus":4,"memory_mib":8192},"configuration":{"template":"template-id:build-uuid"}}}}
+```
+
+以上是请求片段，必须同时提供完整现有部署选择和 `expected_generation`，并使用实际 ready 的不可变 build，资源必须与实测值完全一致。不会自动从 4 核降级到 2 核。默认 `resources`、`configuration` 与这些档位独立。省略或 `{}` 清空可选档位；删除档位仅阻止新 Session 选择，已有 Session 保留冻结配置。GET 返回每个档位的 generation、specification、安全 configuration 和 metadata，不返回凭据。
+
+部署仅保存名称到 generation 的引用；配置唯一存储于不可变 generation 行。默认 generation 大于本次所有档位 generation，因此编号可能跳跃。GC 保留当前档位和已选择档位的未删除 Session，即使尚未分配计算资源。凭据轮换继续让保留 generation 使用当前部署凭据；reset 通过既有托管资源清理流程清空档位映射。
+
+迁移 `000102_session_compute_profiles.sql` 增加部署引用映射和 Session 绑定表，默认值为空，不需要手工数据回填，不改变现有默认资源。配置档位前执行正常迁移。
 
 ### Runtime 发行版 {#runtime-release}
 
@@ -246,17 +261,3 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 规范摘要是紧凑 UTF-8 JSON 的 SHA-256，其中 `provider` 位于首位，其次是 `resources`，然后在提供商需要时放置 `runtime`。资源和 Runtime 字段遵循契约的声明顺序；值为零的可选磁盘字段会被省略，必填字段则保持存在。发行版标识采用小写 ASCII，摘要绝不会受传入字段顺序或空白字符影响。`services/core/internal/sandbox/testdata/deployment-contract.json`保存共享验收用例、精确的规范字节和摘要，Go 与 Python 测试都会使用这些内容。
 
 规范摘要的 JSON 在 `runtime` 后包含可选的 `workspace`，字段按文件系统声明顺序排列：`attachment`、`user_xattr`、`capacity_quota`，布尔字段始终保留。该回执参与不可变 specification digest。
-
-### 计算规格 {#compute-profiles}
-
-direct 模式部署可以在同一 POST 或 PUT 完整选择中添加 `compute_profiles`，最多八个名称，每个名称匹配 `^[a-z][a-z0-9-]{0,47}$`。值仅包含 `resources` 和 `configuration`，必须显式提供 CPU 和内存。档位继承部署的提供商、Runtime 和凭据，不能更换凭据端点；node 模式拒绝非空档位。提交前逐项规范化并验证不可变 build，任何一项无效均拒绝整个更新。
-
-```json
-{"compute_profiles":{"memory-8g":{"resources":{"cpus":4,"memory_mib":8192},"configuration":{"template":"template-id:build-uuid"}}}}
-```
-
-以上是请求片段，必须同时提供完整现有部署选择和 `expected_generation`，并使用实际 ready 的不可变 build，资源必须与实测值完全一致。不会自动从 4 核降级到 2 核。默认 `resources`、`configuration` 与这些档位独立。省略或 `{}` 清空可选档位；删除档位仅阻止新 Session 选择，已有 Session 保留冻结配置。GET 返回每个档位的 generation、specification、安全 configuration 和 metadata，不返回凭据。
-
-部署仅保存名称到 generation 的引用；配置唯一存储于不可变 generation 行。默认 generation 大于本次所有档位 generation，因此编号可能跳跃。GC 保留当前档位和已选择档位的未删除 Session，即使尚未分配计算资源。凭据轮换继续让保留 generation 使用当前部署凭据；reset 通过既有托管资源清理流程清空档位映射。
-
-迁移 `000102_session_compute_profiles.sql` 增加部署引用映射和 Session 绑定表，默认值为空，不需要手工数据回填，不改变现有默认资源。配置档位前执行正常迁移。

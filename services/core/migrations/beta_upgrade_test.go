@@ -16,7 +16,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// A dedicated disposable database exercises the real 91-to-101 SQL, never a
+// A dedicated disposable database exercises the real 91-to-102 SQL, never a
 // product database. No provider or native sandbox is contacted by this test.
 func TestBeta91UpgradePreservesRetainedAllocations(t *testing.T) {
 	dsn := os.Getenv("OAC_TEST_DATABASE_URL")
@@ -100,7 +100,7 @@ func TestBeta91UpgradePreservesRetainedAllocations(t *testing.T) {
 		t.Fatal("mutable idle policy default", idlePolicy, err)
 	}
 	var version, live, workspaces int
-	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM agents_api_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 101 {
+	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM agents_api_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 102 {
 		t.Fatal(version, err)
 	}
 	if err = db.QueryRowContext(t.Context(), `SELECT count(*) FROM runtime_allocations WHERE state<>'released' AND compute_phase='suspended' AND compute_state->>'protocol_version'='1'`).Scan(&live); err != nil || live != 17 {
@@ -108,6 +108,16 @@ func TestBeta91UpgradePreservesRetainedAllocations(t *testing.T) {
 	}
 	if err = db.QueryRowContext(t.Context(), `SELECT count(*) FROM environment_workspaces`).Scan(&workspaces); err != nil || workspaces != 0 {
 		t.Fatal(workspaces, err)
+	}
+	// Existing deployments and Sessions retain their default resource selection:
+	// migration 102 must not invent named choices or backfill profile bindings.
+	var emptyProfiles bool
+	if err = db.QueryRowContext(t.Context(), `SELECT compute_profiles = '{}'::jsonb FROM runtime_deployment`).Scan(&emptyProfiles); err != nil || !emptyProfiles {
+		t.Fatal("compute profile default", emptyProfiles, err)
+	}
+	var profileBindings int
+	if err = db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_compute_generations`).Scan(&profileBindings); err != nil || profileBindings != 0 {
+		t.Fatal("unexpected compute profile bindings", profileBindings, err)
 	}
 	checkBeta99CheckpointConstraint(t, db, installation)
 	checkBeta98HistoricalAllocationDowngrade(t, db, provider)

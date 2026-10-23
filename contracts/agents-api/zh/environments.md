@@ -154,6 +154,14 @@ Worker 在每个 tick 中最多处理 32 个到期预留，处理顺序是在检
 
 当已完成的托管分配处于暂停或恢复状态且有下一 Turn 输入处于 pending 时，Core 会向托管 Runtime 维护循环发出提示。初始输入、冷创建、运行中或已禁用的计算资源、终止回执、取消和函数结果、历史及文件操作均不会发送提示。提示采用尽力而为的方式合并且不会阻塞；它们在正常的五秒周期中最多增加一次扫描，绝不会绕过容量、繁忙的生命周期门控或所有权检查。持久化工作和正常 ticker 始终具有权威性。
 
+## 托管计算规格 {#hosted-compute-profiles}
+
+新的 `openai_hosted` Session 可以传入 `x_agents_core.environment.compute_profile`，名称必须匹配 `^[a-z][a-z0-9-]{0,47}$`。例如 `{"x_agents_core":{"environment":{"compute_profile":"memory-8g"}}}` 选择管理员配置的档位。名称本身不规定 CPU 或内存；管理员通过[沙箱部署](sandbox-deployment.md#compute-profiles)配置精确资源。该字段不属于官方顶层 `environment` 联合类型或 Environment 模板。省略时保持现有默认行为；null、空串、格式错误、不支持的放置方式和不可用名称均拒绝，绝不退回默认档位。
+
+创建在部署锁内解析名称，并在创建 Session 的同一事务中冻结不可变 generation。调用方意图包含名称；即使管理员随后修改或删除该档位，相同幂等键的相同请求仍返回原 Session，改变意图则冲突。尚未首次分配计算资源的 Session 也保留该 generation。分配、挂起、恢复和清理均使用冻结选择；已有 Session 及未指定档位的 Session 保持原行为。
+
+不可用档位返回 HTTP 400 `invalid_request_error`，参数为 `x_agents_core.environment.compute_profile`，安全消息为 “The requested compute profile is not available for hosted execution.”。客户端不能通过该字段传入提供商模板、凭据或资源覆盖。
+
 ## Runtime 能力准备 {#runtime-capability-preparation}
 
 准备过程会安装 Session 选择的内容：初始文件、工具配置、Skills、Plugins、Environment MCP、npm 和 Python 软件包以及设置命令。两种放置方式使用同一条 Runtime 路径。
@@ -393,11 +401,3 @@ Core 的 Harness profile 会声明 `MCPOrigins`；接纳和分派会将来源与
 两种来源都支持匿名 HTTP 和 HTTPS bearer 凭据。所附加 Vault 的选择会冻结凭据身份，包括唯一的隐式 URL 匹配或匿名选择。只有该凭据经项目授权后，才会进入瞬时 Runtime 请求；绝不会搜索 Core 默认值或无关 Vault。解密失败或凭据缺失时，执行会失败且不会回退到匿名。公开 Environment MCP 保留 `project_vault` 权限，Plugin 凭据保留 `environment_configuration` 权限；两者都不会覆盖重复的服务器标签。Bearer 令牌绝不会进入持久化的原生配置或进程参数。
 
 工具允许列表和必需初始化遵循 [HTTP MCP contract](execution-tools.md#http-mcp)。
-
-## 托管计算规格 {#hosted-compute-profiles}
-
-新的 `openai_hosted` Session 可以传入 `x_agents_core.environment.compute_profile`，名称必须匹配 `^[a-z][a-z0-9-]{0,47}$`。例如 `{"x_agents_core":{"environment":{"compute_profile":"memory-8g"}}}` 选择管理员配置的档位。名称本身不规定 CPU 或内存；管理员通过[沙箱部署](sandbox-deployment.md#compute-profiles)配置精确资源。该字段不属于官方顶层 `environment` 联合类型或 Environment 模板。省略时保持现有默认行为；null、空串、格式错误、不支持的放置方式和不可用名称均拒绝，绝不退回默认档位。
-
-创建在部署锁内解析名称，并在创建 Session 的同一事务中冻结不可变 generation。调用方意图包含名称；即使管理员随后修改或删除该档位，相同幂等键的相同请求仍返回原 Session，改变意图则冲突。尚未首次分配计算资源的 Session 也保留该 generation。分配、挂起、恢复和清理均使用冻结选择；已有 Session 及未指定档位的 Session 保持原行为。
-
-不可用档位返回 HTTP 400 `invalid_request_error`，参数为 `x_agents_core.environment.compute_profile`，安全消息为 “The requested compute profile is not available for hosted execution.”。客户端不能通过该字段传入提供商模板、凭据或资源覆盖。
