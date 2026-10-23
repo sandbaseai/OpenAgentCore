@@ -2,6 +2,7 @@ package mcode
 
 import (
 	"bytes"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ func TestWorkspaceCredentialsRemainInRuntimeSnapshotAcrossReconnect(t *testing.T
 	t.Setenv("OAC_RUNTIME_SESSION_ID", session)
 	t.Setenv("OAC_RUNTIME_WORKSPACE", config.Directory)
 	t.Setenv("OAC_RUNTIME_CAPABILITY_DIRECTORY", t.TempDir())
-	req.AgentStateKey = session
+	req.AgentStateKey = proto.SessionStateKey(session)
 	req.LocalEnvironment.ID, req.LocalEnvironment.WorkspaceDirectory = environment, config.Directory
 	req.LocalEnvironment.Capabilities = true
 	req.LocalEnvironment.CapabilitySources = &agentcapabilities.Input{Directories: []string{plugin}}

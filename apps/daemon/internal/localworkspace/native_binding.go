@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/runtimefs"
 	"github.com/google/uuid"
 )
@@ -25,7 +26,7 @@ func newNativeBinding(environment, session, workspace, capabilities string) (*Bi
 	if err != nil || !info.IsDir() {
 		return nil, errors.New("local workspace root must be an existing directory")
 	}
-	return &Binding{environment: environment, stateKey: session, workspace: workspace, capabilityRoot: capabilities, writer: &fileWriter{}}, nil
+	return &Binding{environment: environment, stateKey: proto.SessionStateKey(session), workspace: workspace, capabilityRoot: capabilities, writer: &fileWriter{}}, nil
 }
 
 // ReadToolEnvironment reads explicit initialization values for this installation.

@@ -161,7 +161,7 @@ func (b *Binding) loadCapabilitySnapshot(root *os.Root, input agentcapabilities.
 }
 
 func (b *Binding) capabilityIdentity() agentcapabilities.Identity {
-	return agentcapabilities.Identity{EnvironmentID: b.environment, SessionID: b.stateKey}
+	return agentcapabilities.Identity{EnvironmentID: b.environment, SessionID: strings.TrimPrefix(b.stateKey, proto.SessionStateKey(""))}
 }
 
 // The current Linux Runtime layout is shared by user-owned and managed hosts.

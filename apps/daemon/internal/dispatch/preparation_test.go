@@ -111,7 +111,7 @@ func localPreparationHarness(t *testing.T) *harness {
 }
 
 func preparationRequest() proto.ExecutionPreparePayload {
-	return proto.ExecutionPreparePayload{SessionID: preparationSessionID, Configuration: proto.PromptRequestPayload{AgentKind: "prepared", AgentStateKey: preparationSessionID, LocalEnvironment: &proto.LocalEnvironment{ID: preparationEnvironmentID, WorkspaceDirectory: "/workspace", CapabilitySources: &agentcapabilities.Input{}}}}
+	return proto.ExecutionPreparePayload{SessionID: preparationSessionID, Configuration: proto.PromptRequestPayload{AgentKind: "prepared", AgentStateKey: proto.SessionStateKey(preparationSessionID), LocalEnvironment: &proto.LocalEnvironment{ID: preparationEnvironmentID, WorkspaceDirectory: "/workspace", CapabilitySources: &agentcapabilities.Input{}}}}
 }
 
 func preparationRouter(t *testing.T, sender dispatch.Sender, timeout time.Duration, factory preparationFactory) *dispatch.Router {

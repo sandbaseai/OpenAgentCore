@@ -71,6 +71,8 @@ Core has no admission rule for `usage` and `resume`.
 
 `retained_native_history` means the composed Runtime and Harness can reopen the same native Session from its private retained state after confirmed native shutdown. It does not promise process memory, background processes or external connection recovery. The selected filesystem must separately provide retained storage. Core uses the previous device's persisted declaration to determine whether compute can be released without terminating the Session, and validates the replacement Runtime before admitting execution. Missing or invalid native history fails explicitly; it never authorizes a new native root or replay of prior input.
 
+Core derives `agent_state_key` with `SessionStateKey(session_id)`: the stable `agents-api-` prefix followed by the Session ID. The Runtime uses the same definition for dedicated Environment binding. This namespace names native history, including indexes containing absolute paths; it does not change with product names or wire versions.
+
 ## Envelope and identity
 
 Every data frame is one JSON [`Envelope`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/envelope.go): `type`, a type-dependent `id`, a typed `payload` and an optional W3C `trace`. The trace is diagnostic correlation only; missing or invalid trace data creates a local trace and never changes ownership. Never use a trace ID as a request ID.

@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 6d12d0da86e8f5a14ac283baf79e49902027e0510e95a9d70cca998f8d2584e9
+source_hash: 53bb7a63eac869adc892d9443bbfb8297e1d904108c4114fc870dd21890c7c82
 ---
 
 Core–Runtime 协议连接 Core 与 Runtime daemon，定义 daemon 连接上消息的含义和顺序。托管和自托管 Runtime 使用同一协议。
@@ -70,6 +70,8 @@ wire 上每个字段都是 JSON boolean，所有字段都必须出现，包括 `
 | `mcp_http_tools`, `mcp_http_required`, `mcp_http_bearer_auth` | Agent 声明 MCP server（HTTP 或 stdio）；其中一个为 `required`；其中一个选用了 Vault 凭据 |
 
 `retained_native_history` 表示 Runtime 与 Harness 组合可在确认原生进程关闭后，从私有持久状态重新打开同一个原生 Session。它不保证恢复进程内存、后台进程或外部连接。所选文件系统还必须独立提供持久存储。Core 根据旧设备已持久化的声明判断能否释放计算而不终结 Session，并在准入执行前验证新 Runtime。原生历史缺失或无效时明确失败，绝不授权新建原生会话或重放此前输入。
+
+Core 使用 `SessionStateKey(session_id)` 派生 `agent_state_key`：固定的 `agents-api-` 前缀加 Session ID。Runtime 的专属 Environment 绑定使用同一定义。该命名空间标识原生历史，包含记录绝对路径的索引，不随产品名称或通信版本变化。
 
 Core 对 `usage` 和 `resume` 没有准入规则。
 

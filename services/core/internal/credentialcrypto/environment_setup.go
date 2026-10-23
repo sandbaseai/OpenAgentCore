@@ -42,5 +42,5 @@ func environmentSetupData(binding EnvironmentSetupBinding) ([]byte, error) {
 		Domain  string                  `json:"domain"`
 		Version byte                    `json:"version"`
 		Binding EnvironmentSetupBinding `json:"binding"`
-	}{"oac.environment-setup", formatVersion, binding})
+	}{"parsar.agents-api.environment-setup", formatVersion, binding})
 }
