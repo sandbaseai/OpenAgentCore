@@ -15,7 +15,7 @@ import (
 func TestUnsupportedWireIsExplicitAndDoesNotInvokeProvider(t *testing.T) {
 	p := &fakeProvider{}
 	q := request{ID: uuid.NewString(), ConnectionID: uuid.NewString(), Reference: reference(), TimeoutMillis: 1000, Operation: "initial"}
-	out := execute(t.Context(), p, q)
+	out, _ := execute(t.Context(), p, q)
 	if p.creates != 0 || p.reads != 0 || p.kills != 0 {
 		t.Fatal("unsupported operation reached provider")
 	}
@@ -53,5 +53,14 @@ func TestNodeOperationMappingCoversForwardedMethods(t *testing.T) {
 		if wire := operationWire(method); wire == "" || operationMethod(wire) != method {
 			t.Fatal(method)
 		}
+	}
+}
+
+func TestCheckpointUnusableCrossesTheWireAsFixedCode(t *testing.T) {
+	if code := errorCode(sandbox.ErrCheckpointUnusable); code != "checkpoint_unusable" {
+		t.Fatal(code)
+	}
+	if !errors.Is(responseError(response{ErrorCode: "checkpoint_unusable"}), sandbox.ErrCheckpointUnusable) {
+		t.Fatal("code not mapped back")
 	}
 }

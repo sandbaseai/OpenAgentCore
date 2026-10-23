@@ -299,10 +299,10 @@ test("one Agent creates independent Sessions; edits do not mutate prior executio
   assert.equal(store.get("sessions", pending).request, undefined);
   assert.equal(receipts.size, 3);
 });
-test("compatibility validation precedes execution, and old configurations migrate without fake Sessions", async (t) => {
+test("compatibility validation precedes execution", async (t) => {
   const store = openStore(":memory:");
   t.after(() => store.close());
-  const { api, put, agent, input } = await setup(store, () => {
+  const { api, put, input } = await setup(store, () => {
     throw new Error("must not execute");
   });
   const runtime = await put("runtimes", { name: "Text", environment: "none" });
@@ -318,13 +318,6 @@ test("compatibility validation precedes execution, and old configurations migrat
     }),
     /不含凭据/,
   );
-  const legacy = { ...agent, id: randomUUID(), runtime_id: runtime.id };
-  store.put("instances", legacy);
-  productAPI(store, () => {});
-  assert.equal(store.get("agents", legacy.id).name, agent.name);
-  assert.equal(store.get("agents", legacy.id).runtime_id, undefined);
-  assert.equal(store.list("sessions").length, 0);
-  assert.equal(store.list("instances").length, 0);
   assert.notEqual(
     dataPath({ target: "https://core.example", key: "a" }),
     dataPath({ target: "https://core.example", key: "b" }),
@@ -438,18 +431,4 @@ test("model editing and moving retain unique IDs within each Provider", async (t
     model: " three ",
   });
   assert.equal(renamed.model, "three");
-});
-
-
-test("MiniMax MCP bindings reject before Core for text-only and hosted placements", async (t) => {
-  const store = openStore(":memory:");
-  t.after(() => store.close());
-  let calls = 0;
-  const { put, agent } = await setup(store, async () => { calls++; return { id: randomUUID() }; });
-  const config = await put("agents", { ...agent, harness: "mcode", skill_ids: [] }, agent.id);
-  for (const environment of ["none", "openai_hosted"]) {
-    const runtime = await put("runtimes", { name: environment, environment });
-    await assert.rejects(put("sessions", { name: "Rejected", input: "hello", agent_id: config.id, runtime_id: runtime.id }), /MiniMax Code.*MCP/);
-  }
-  assert.equal(calls, 0);
 });

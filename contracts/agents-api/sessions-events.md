@@ -2,7 +2,7 @@
 title: "Sessions, events and history"
 ---
 
-This contract covers what happens inside a Session: sending input, the live event stream, and reading the durable history of Turns, Items and usage. The Session resource itself (creation configuration, retry identity, update, list and deletion) is in [Core wire behavior](./wire-semantics.md). Message and function-result content is in [message content](./message-content.md). The [Agents API guide](../../docs/api/public-agent-api.md) shows the calls with the SDK and HTTP.
+This contract covers what happens inside a Session: sending input, the live event stream, and reading the durable history of Turns, Items and usage. The Session resource itself (creation configuration, retry identity, update, list and deletion) is in [API behavior](./wire-semantics.md). Message and function-result content is in [message content](./message-content.md). The [Agents API guide](../../docs/api/public-agent-api.md) shows the calls with the SDK and HTTP.
 
 ## Recovery model
 
@@ -25,6 +25,20 @@ A Session's `status` and `last_active_at` derive from its latest root Turn and f
 | `requires_action` | The latest Turn waits for a function result and no cancellation was requested, or input waits for a `self_hosted` machine to connect. `required_actions` lists `function_call` or `environment_connection` entries |
 | `failed` | The latest Turn failed (`error` is "The execution could not complete."), input reserved for the Environment failed, initial input expired before admission, or the Environment failed to initialize (see [Environment initialization failure](#environment-initialization-failure)) |
 
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> in_progress: Turn queued
+    in_progress --> idle: completed or cancelled
+    in_progress --> requires_action: awaits function result
+    idle --> requires_action: awaits self_hosted machine
+    requires_action --> in_progress: result or machine
+    requires_action --> idle: cancelled
+    in_progress --> failed: Turn failed
+    idle --> failed: input expired or Environment failed
+    failed --> in_progress: new input
+```
+
 A Session stays usable after a Turn fails: new input starts a new Turn. Later reserved input that expires leaves the Session idle. An Environment initialization failure or expiry prevents new work.
 
 ## Send input
@@ -43,9 +57,7 @@ A Session stays usable after a Turn fails: new input starts a new Turn. Later re
 
 ### Sessions with an Environment
 
-On `openai_hosted` and `self_hosted` Sessions, messages sent while a Turn runs join it at once. Messages sent to an idle Session reserve the batch for the Environment: the request waits until a Turn starts, for at most five minutes from the reservation. While the reservation waits for a `self_hosted` machine, the Session reads `requires_action` with an `environment_connection` action. A batch that carries messages on these placements may contain only messages. Cancellation-only and result-only batches are admitted at once and create no Turn.
-
-The waiting request ends with 202 when the Turn starts, or with 409 `environment_input_expired` when the deadline passes, 409 `environment_input_cancelled` when an administrator archives the Session or resets its deployment and cancels the reservation, or 409 `environment_unavailable` when the Environment fails or expires. Disconnecting the waiting request does not cancel the reservation or restart its deadline.
+On `openai_hosted` and `self_hosted` Sessions, messages sent while a Turn runs join it at once. Messages sent to an idle Session reserve the batch for the Environment: the request waits until a Turn starts, for at most five minutes from the reservation, and ends with 202 when the Turn starts or with one of the [input errors](#input-errors). While the reservation waits for a `self_hosted` machine, the Session reads `requires_action` with an `environment_connection` action. A batch that carries messages on these placements may contain only messages. Cancellation-only and result-only batches are admitted at once and create no Turn. Disconnecting the waiting request does not cancel the reservation or restart its deadline.
 
 ### Input errors
 
@@ -60,9 +72,11 @@ Checks run in this order: request validation, Session lookup, retry lookup, the 
 | A result whose `call_id` names no function call of this Session | 400 `invalid_request_error`, param null | "Unknown pending tool call." |
 | A result for a call of this Session whose `turn_id` names another Turn, an unknown Turn ID or a value that is not a Turn ID | 400 `invalid_request_error`, param null | "The tool call belongs to a different Turn." |
 | A missing, malformed or foreign Session | 404 `not_found_error` | "Resource not found." |
+| A reserved batch whose five-minute deadline passed before a Turn started | 409 `environment_input_expired` | "The environment input deadline elapsed before admission." |
+| A reserved batch cancelled because an administrator archived the Session or reset its deployment | 409 `environment_input_cancelled` | "The environment input was cancelled before admission." |
 | New input after an `openai_hosted` Environment failed to provision | 409 `conflict_error` | "the hosted environment failed to provision" |
 | New input after a `self_hosted` Environment failed, input already waiting when the Environment failed, or an expired Environment | 409 `environment_unavailable` | "The environment is no longer available for new input." |
-| A message the Session's Harness cannot take, such as whitespace-only text on Claude Code | 400 `unsupported_or_invalid_configuration` | See [whitespace-only text](./message-content.md#whitespace-only-text) |
+| A message the Session's Harness cannot take, such as whitespace-only text on MiniMax Code | 400 `unsupported_or_invalid_configuration` | See [whitespace-only text](./message-content.md#whitespace-only-text) |
 
 An empty `turn_id` or blank `call_id` is the generic 400 `invalid_request`. Error messages never repeat caller input or internal identifiers.
 
@@ -105,6 +119,7 @@ A retry with the same `Idempotency-Key` and `stream: true` returns 201 with only
 - `item.added` and `item.done` always carry `output_index`, null for input Items. Function results emit `item.added` only; `item.done` is for agent output.
 - An assistant message follows one sequence: `item.added` in progress with empty `content`, `content_part.added` with empty text, `output_text.delta` events, `output_text.done`, `content_part.done` and `item.done`. A message first observed complete, such as structured output, sends its whole text in one `output_text.delta`, byte for byte. The completed text replaces the accumulated deltas.
 - Codex command output streams as `agent.output.command_execution_output.delta` with the command's Item ID and output index. Native output quotas and text conversion apply, so the deltas are not a byte-exact capture; the completed Item is authoritative.
+- A reasoning Item follows one sequence: `item.added` in progress with an empty `summary`; for each `summary_text` part in order, `reasoning_summary_part.added` with empty text, `reasoning_summary_text.delta` events, then `reasoning_summary_text.done` and `reasoning_summary_part.done` once the next part starts or the Item ends; then `item.done`. `reasoning_summary_part.done` has `status` `incomplete` for a part a cancelled or failed Turn cut off, otherwise null. A child Turn snapshot that rewrites earlier text reports it only in the done events.
 - A cancelled or failed Turn marks its unfinished Items `incomplete` and keeps their partial content.
 - A function call stays in `required_actions` until the Harness applies its result, or cancellation or the Turn's end removes it. A repeated notification emits no new state.
 
@@ -122,10 +137,13 @@ Turn and Item lists take `after`, `limit` and `order` ([list rules](./wire-seman
 | `command_execution` | Command, reported output, exit code, duration and working directory |
 | `mcp_call` | Server and tool identity, arguments, structured result or error |
 | `function_call`, `function_call_output` | A linked call and its result. The result always carries `output` and `error`, null when the submission omitted them; stored results keep the submitted field presence. Native file changes appear as an `apply_patch` function call with the changes as arguments and no invented result |
-| `web_search_call` | The supported action fields (`search`, `open_page`, `find_in_page`, `other`) |
-| `reasoning`, `agent_message` and the Subagent coordination calls | See [Subagents](./subagents.md). `agent_message` has no status; reasoning status can be null |
+| `web_search_call` | The supported action fields (`search`, `open_page`, `find_in_page`, `other`); Claude Code reports `search` for `WebSearch` and `open_page` for `WebFetch` |
+| `reasoning` | One native reasoning item, each native part one `summary_text` part, present only when the Agent sets `reasoning.summary`; with it null (the default) no `reasoning` Items or reasoning events appear for any Turn, root or child. [OpenAI compatibility](./index.md#differences-from-openai) describes the text. Status can be null on a child Turn's Item |
+| `agent_message` and the Subagent coordination calls | See [Subagents](./subagents.md). `agent_message` has no status |
 
 A failed tool does not fail its Turn. Tool output is readable by the Session's Project and can contain the tool's own diagnostic text.
+
+PostgreSQL cannot store U+0000, so Harness output that contains it, such as a command's output, is stored, streamed and listed with U+FFFD in its place, and the Turn continues.
 
 ## Usage
 

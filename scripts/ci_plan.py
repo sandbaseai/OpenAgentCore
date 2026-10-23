@@ -86,7 +86,7 @@ RULES = (
     (("scripts/generate-harness-catalog", "scripts/harness-catalog/", "scripts/openapi-split/", "scripts/patch-agents-openapi.py",
       "scripts/generate-public-api"), SCRIPTS, JOBS),
     (("scripts/check-sqlc.py", "scripts/go-test-shard.py"), (".py",), ("backend",)),
-    (("scripts/check-names", "scripts/name-allowlist.json", "scripts/ci_"), (".py", ".json"), ("hygiene",)),
+    (("scripts/ci_",), (".py",), ("hygiene",)),
     ((".github/workflows/", ".github/actions/"), (".yml", ".yaml"), JOBS),
 )
 # Embedded files and test fixtures are executable inputs regardless of suffix.
@@ -110,7 +110,7 @@ IMAGE_INPUTS = ("scripts/build-core", "scripts/build-e2b-provider", "deploy/dist
                 "services/core/deploy/e2b/")
 # Generated outputs retain freshness checks even when the file is documentation.
 GENERATED_OUTPUTS = {"contracts/agents-api/harness-catalog.md", "contracts/agents-api/zh/harness-catalog.md", "packages/agents-client/src/harness-catalog.ts",
-                     "services/core/internal/engine/catalog_generated.go"}
+                     "internal/harnessconfig/builtin/registry.go", "apps/daemon/internal/cli/harness_declarations.go"}
 
 
 def full(reason):

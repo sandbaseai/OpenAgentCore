@@ -40,7 +40,8 @@ func TestSubagentSnapshotsKeepOwnHistoryAndStableNativeIdentity(t *testing.T) {
 	}
 	first := project(childSnapshot(t))
 	second := project(childSnapshot(t))
-	if len(first) != 6 {
+	// Native thinking is not reported: MiniMax Code admits no reasoning summary.
+	if len(first) != 5 {
 		t.Fatalf("got %d events", len(first))
 	}
 	for i, event := range first {
@@ -48,7 +49,7 @@ func TestSubagentSnapshotsKeepOwnHistoryAndStableNativeIdentity(t *testing.T) {
 			t.Fatal("cold snapshot identities changed")
 		}
 	}
-	if first[0].Type != proto.TypeSubagentIdentity || first[1].Type != proto.TypeSubagentTurn || first[5].Type != proto.TypeSubagentTurn {
+	if first[0].Type != proto.TypeSubagentIdentity || first[1].Type != proto.TypeSubagentTurn || first[4].Type != proto.TypeSubagentTurn {
 		t.Fatal("identity/turn/item ordering changed")
 	}
 	var input proto.SubagentItemPayload
@@ -72,10 +73,9 @@ func TestSubagentSnapshotRejectsMissingParentProvenance(t *testing.T) {
 // The ACP cancelled response may precede the root native Turn becoming terminal.
 func TestSubagentSettlementIncludesActiveRootTurn(t *testing.T) {
 	dir := t.TempDir()
-	node, bridge := filepath.Join(dir, "node"), filepath.Join(dir, "bridge.mjs")
+	node := filepath.Join(dir, "node")
 	for name, data := range map[string]string{
-		node:   "#!/bin/sh\ncat \"$3/snapshot.json\"\n",
-		bridge: "",
+		node: "#!/bin/sh\ncat \"$3/snapshot.json\"\n",
 		filepath.Join(dir, "subagent-snapshot.mjs"): "",
 	} {
 		if err := os.WriteFile(name, []byte(data), 0700); err != nil {
@@ -83,7 +83,7 @@ func TestSubagentSettlementIncludesActiveRootTurn(t *testing.T) {
 		}
 	}
 	t.Setenv("OAC_RUNTIME_MCODE_NODE", node)
-	t.Setenv("OAC_RUNTIME_MCODE_WORKSPACE_BRIDGE", bridge)
+	t.Setenv("OAC_RUNTIME_MCODE_COMPANION", dir)
 	for _, status := range []string{"accepted", "aborted"} {
 		t.Run(status, func(t *testing.T) {
 			raw := []byte(`{"version":1,"complete":true,"rootSessionId":"root","sessions":[{"id":"root","turns":[{"id":"current","status":"` + status + `"}]}]}`)
