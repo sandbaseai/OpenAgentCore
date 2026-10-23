@@ -263,6 +263,7 @@ type RuntimeDeployment struct {
 	ProviderConfig     []byte             `json:"provider_config"`
 	ProviderMetadata   []byte             `json:"provider_metadata"`
 	IdleSeconds        int64              `json:"idle_seconds"`
+	ComputeProfiles    []byte             `json:"compute_profiles"`
 }
 
 type RuntimeDeploymentGeneration struct {
@@ -388,6 +389,12 @@ type SessionArtifact struct {
 	BodyOid       pgtype.Uint32      `json:"body_oid"`
 	Sha256        string             `json:"sha256"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type SessionComputeGeneration struct {
+	SessionID  pgtype.UUID `json:"session_id"`
+	Profile    string      `json:"profile"`
+	Generation int64       `json:"generation"`
 }
 
 type SessionDevice struct {

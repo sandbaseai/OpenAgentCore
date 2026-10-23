@@ -1,7 +1,7 @@
 ---
 title: "添加沙箱提供商"
 source: docs/sandbox-provider.md
-source_hash: 551e0c9a91255e4126456a93971c04791fd662fc0ee27dfd1023bc0541db4b88
+source_hash: 38793fa1a83bbf38d610cc7a4d9f85d3046f996806519356bea454dc02ed04c2
 ---
 
 **沙箱提供商** 为 Core 管理的 Environment 提供 Runtime daemon 运行所需的外层计算资源，以及启动 daemon 的有界引导流程。本指南说明如何添加提供商，并作为 Core 驱动提供商的参考。接口为 [`SandboxProvider`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/internal/sandbox/sandbox_provider.go)。
@@ -293,3 +293,5 @@ node 使用 [提供商配置](configuration.md#docker-node-configuration)中的�
 `DeploymentPolicy.Workspace` 声明挂载要求；未声明表示不支持外部存储。派生的不可变 `DeploymentSpec.Workspace` 回执选择代次的模式和能力；[部署流程](../../contracts/agents-api/zh/sandbox-deployment.md#resources)不会将文件系统配置复制进代次。Microsandbox 要求 `host_directory` 和 `user_xattr`；Docker 和 E2B 拒绝外部挂载。`ValidateWorkspacePolicy` 使用文件系统协议的组合校验器：不强制容量配额的外部文件系统拒绝正值 `EnvironmentDiskMiB`，零表示不请求配额。根磁盘容量仍为必需。未提供外部声明时，继续使用自有磁盘的容量边界。
 
 Microsandbox 在每次 Create 和 Resume（包括观察中断的恢复）时解析绑定，仅向私有 helper 传递本地目录和不可变 ObjectID。Helper 挂载整个 `/environment`；保留内容与私有原生历史遵循[工作区文件系统范围](workspace-provider.md#lifetime-and-filesystem-scope)和 [Runtime 资源目录](configuration.md#runtime-resource-directories)。私有 HOME、凭据和计算根磁盘不是持久历史存储。原生资源通过明确的模式、对象和路径标签校验，不根据挂载形状推断模式。检查点恢复校验快照对象，通过 SDK `Volumes` 重映射 `/environment`，要求严格外部挂载策略，并拒绝任何恢复警告。恢复部分失败时保留精确目标身份用于清理，不证明就绪。未知结果继续观察原操作。原生 Bind 检查点及 guest 内 flock 连续性不证明对未知 writer 的隔离。
+
+`Selection.ComputeProfiles` 包含可选的管理员批准资源档位。注册表仅允许 direct 模式使用，复制默认 Runtime/workspace receipt，组合默认凭据，并要求凭据访问端点一致。每个档位遵循与默认选择相同的 `SelectionDiscovery` 声明：声明支持发现时验证原生不可变选择，否则使用规范化选择。node 模式明确拒绝非空档位。公共存储将每个批准的档位物化为不可变 generation，当前部署仅保存名称到 generation 的引用。公共选择、冻结和 GC 由[计算规格协议](../../contracts/agents-api/zh/sandbox-deployment.md#compute-profiles)定义。

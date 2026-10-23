@@ -1,7 +1,7 @@
 ---
 title: "沙箱部署"
 source: contracts/agents-api/sandbox-deployment.md
-source_hash: 618bc3dcf7a027a1629e7c2cb998df759038a3d0804de8c92b2f64b73d124929
+source_hash: 24825bb84a103c73f28a5e8b05b51bb686d81fb738d45eda0ac21dcf44fb21d3
 ---
 
 沙箱部署为 Core 管理的 `openai_hosted` 执行选择沙箱提供商、每个沙箱的资源以及不可变的 Runtime 发行版。PostgreSQL 为每个安装维护一个当前有效选择；Web 和 Core API 写入同一配置。节点文件保存其已安装副本和特定于主机的路径，且不能覆盖其资源或 Runtime。该选择独立于 Harness。部署可以保持未配置状态，没有节点；此时它拒绝托管准入。
@@ -246,3 +246,17 @@ POST 会在持久保存候选配置之前对其进行验证，并且不会创建
 规范摘要是紧凑 UTF-8 JSON 的 SHA-256，其中 `provider` 位于首位，其次是 `resources`，然后在提供商需要时放置 `runtime`。资源和 Runtime 字段遵循契约的声明顺序；值为零的可选磁盘字段会被省略，必填字段则保持存在。发行版标识采用小写 ASCII，摘要绝不会受传入字段顺序或空白字符影响。`services/core/internal/sandbox/testdata/deployment-contract.json`保存共享验收用例、精确的规范字节和摘要，Go 与 Python 测试都会使用这些内容。
 
 规范摘要的 JSON 在 `runtime` 后包含可选的 `workspace`，字段按文件系统声明顺序排列：`attachment`、`user_xattr`、`capacity_quota`，布尔字段始终保留。该回执参与不可变 specification digest。
+
+### 计算规格 {#compute-profiles}
+
+direct 模式部署可以在同一 POST 或 PUT 完整选择中添加 `compute_profiles`，最多八个名称，每个名称匹配 `^[a-z][a-z0-9-]{0,47}$`。值仅包含 `resources` 和 `configuration`，必须显式提供 CPU 和内存。档位继承部署的提供商、Runtime 和凭据，不能更换凭据端点；node 模式拒绝非空档位。提交前逐项规范化并验证不可变 build，任何一项无效均拒绝整个更新。
+
+```json
+{"compute_profiles":{"memory-8g":{"resources":{"cpus":4,"memory_mib":8192},"configuration":{"template":"template-id:build-uuid"}}}}
+```
+
+以上是请求片段，必须同时提供完整现有部署选择和 `expected_generation`，并使用实际 ready 的不可变 build，资源必须与实测值完全一致。不会自动从 4 核降级到 2 核。默认 `resources`、`configuration` 与这些档位独立。省略或 `{}` 清空可选档位；删除档位仅阻止新 Session 选择，已有 Session 保留冻结配置。GET 返回每个档位的 generation、specification、安全 configuration 和 metadata，不返回凭据。
+
+部署仅保存名称到 generation 的引用；配置唯一存储于不可变 generation 行。默认 generation 大于本次所有档位 generation，因此编号可能跳跃。GC 保留当前档位和已选择档位的未删除 Session，即使尚未分配计算资源。凭据轮换继续让保留 generation 使用当前部署凭据；reset 通过既有托管资源清理流程清空档位映射。
+
+迁移 `000102_session_compute_profiles.sql` 增加部署引用映射和 Session 绑定表，默认值为空，不需要手工数据回填，不改变现有默认资源。配置档位前执行正常迁移。

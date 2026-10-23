@@ -11,6 +11,7 @@ import (
 // generation of it. An empty Provider means that Web setup has not yet selected
 // an adapter.
 type Setup struct {
+	ComputeProfiles                              map[string]sandbox.ComputeProfile
 	Specification                                sandbox.DeploymentSpec
 	InstallationID, Provider, BackendFingerprint string
 	Generation                                   uint64
@@ -31,7 +32,7 @@ type Setup struct {
 
 // selection is the provider selection a Setup describes.
 func (s Setup) selection() sandbox.Selection {
-	return sandbox.Selection{Provider: s.Provider, DeploymentSpec: s.Specification, Configuration: s.Configuration}
+	return sandbox.Selection{ComputeProfiles: s.ComputeProfiles, Provider: s.Provider, DeploymentSpec: s.Specification, Configuration: s.Configuration}
 }
 
 // configurationJSON reports an absent configuration object as {}.

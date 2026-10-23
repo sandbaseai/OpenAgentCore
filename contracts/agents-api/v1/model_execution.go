@@ -20,7 +20,7 @@ func (e *ModelProviderError) Error() string { return e.message }
 
 // SessionExecutionInput is a write-only execution extension, not a provider resource.
 type SessionExecutionInput struct {
-	// Environment supplies placement-independent preparation through the Core extension.
+	// Environment supplies portable preparation fields. For openai_hosted only, compute_profile selects an administrator-approved immutable compute choice; its name must match ^[a-z][a-z0-9-]{0,47}$. Omission retains default compute. Unknown names fail with invalid_request_error and param x_agents_core.environment.compute_profile; no fallback is performed.
 	Environment   json.RawMessage     `json:"environment,omitempty" swaggertype:"object"`
 	ModelProvider *ModelProviderInput `json:"model_provider,omitempty"`
 	HarnessConfig json.RawMessage     `json:"harness_config,omitempty" swaggertype:"object"`

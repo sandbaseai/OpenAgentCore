@@ -372,7 +372,8 @@ type DeploymentTx interface {
 
 // Record is the stored deployment.
 type Record struct {
-	IdleSeconds int64
+	ComputeProfiles json.RawMessage
+	IdleSeconds     int64
 	// InstallationID is empty until Web setup claims an installation.
 	InstallationID     string
 	Provider           string
@@ -411,6 +412,7 @@ type Snapshot struct {
 
 // SelectionRecord is one generation of the selection to store.
 type SelectionRecord struct {
+	ComputeProfiles                                    map[string]ComputeProfileRecord
 	InstallationID, Provider, BackendFingerprint, Mode string
 	Generation                                         uint64
 	Specification                                      json.RawMessage

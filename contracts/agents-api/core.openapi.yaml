@@ -718,8 +718,19 @@ definitions:
     required:
       - data
     type: object
+  api.SandboxComputeProfileInput:
+    properties:
+      configuration:
+        type: object
+      resources:
+        $ref: '#/definitions/sandbox.Resources'
+    type: object
   api.SandboxDeploymentChangeInput:
     properties:
+      compute_profiles:
+        additionalProperties:
+          $ref: '#/definitions/api.SandboxComputeProfileInput'
+        type: object
       configuration:
         type: object
       credential:
@@ -741,6 +752,10 @@ definitions:
     type: object
   api.SandboxDeploymentInput:
     properties:
+      compute_profiles:
+        additionalProperties:
+          $ref: '#/definitions/api.SandboxComputeProfileInput'
+        type: object
       configuration:
         type: object
       credential:
@@ -1256,6 +1271,17 @@ definitions:
       - nodes_on_other_address
       - self_hosted_executors
     type: object
+  deployment.ComputeProfileRecord:
+    properties:
+      configuration:
+        type: object
+      generation:
+        type: integer
+      metadata:
+        type: object
+      specification:
+        $ref: '#/definitions/sandbox.DeploymentSpec'
+    type: object
   deployment.HostHistory:
     properties:
       points:
@@ -1715,6 +1741,10 @@ definitions:
     type: object
   deployment.View:
     properties:
+      compute_profiles:
+        additionalProperties:
+          $ref: '#/definitions/deployment.ComputeProfileRecord'
+        type: object
       configuration:
         type: object
       core_url:

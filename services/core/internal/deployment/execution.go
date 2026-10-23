@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/engine"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
@@ -255,7 +256,7 @@ func (e *ExecutionOperations) saveSelection(tx DeploymentTx, d Record, input san
 	if err := registry.ValidateSpecification(input.Provider, input.DeploymentSpec); err != nil {
 		return configurationError(err)
 	}
-	if d.Generation >= math.MaxInt64 {
+	if d.Generation >= math.MaxInt64-uint64(len(input.ComputeProfiles)) {
 		return ErrConflict
 	}
 	description, err := registry.Describe(input.Provider, d.InstallationID)
@@ -274,8 +275,22 @@ func (e *ExecutionOperations) saveSelection(tx DeploymentTx, d Record, input san
 	if err != nil {
 		return err
 	}
-	return tx.SaveSelection(SelectionRecord{InstallationID: d.InstallationID, Provider: input.Provider, BackendFingerprint: description.BackendFingerprint, Mode: string(description.Mode),
-		Generation: d.Generation + 1, Specification: specification,
+	profiles := make(map[string]ComputeProfileRecord, len(input.ComputeProfiles))
+	names := make([]string, 0, len(input.ComputeProfiles))
+	for name := range input.ComputeProfiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		p := input.ComputeProfiles[name]
+		record, err := registry.Encode(input.Provider, p.Configuration)
+		if err != nil {
+			return err
+		}
+		profiles[name] = ComputeProfileRecord{Generation: d.Generation + uint64(i) + 1, Specification: sandbox.DeploymentSpec{Resources: p.Resources, Runtime: input.Runtime, Workspace: input.Workspace}, Configuration: configurationJSON(record.Public), Metadata: configurationJSON(record.Metadata)}
+	}
+	return tx.SaveSelection(SelectionRecord{ComputeProfiles: profiles, InstallationID: d.InstallationID, Provider: input.Provider, BackendFingerprint: description.BackendFingerprint, Mode: string(description.Mode),
+		Generation: d.Generation + uint64(len(profiles)) + 1, Specification: specification,
 		Configuration: sandbox.ConfigurationRecord{Public: configurationJSON(record.Public), Metadata: configurationJSON(record.Metadata), Secret: record.Secret}})
 }
 

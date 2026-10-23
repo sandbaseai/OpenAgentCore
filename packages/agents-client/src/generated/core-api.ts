@@ -116,6 +116,14 @@ export interface AdminauditPage {
 export const adminauditPageFields = ["data", "has_more", "next_cursor"] as const;
 export const attachmentKindValues = ["host_directory"] as const;
 export type AttachmentKind = (typeof attachmentKindValues)[number];
+export interface ComputeProfileRecord {
+  configuration?: Record<string, unknown>;
+  generation?: number;
+  metadata?: Record<string, unknown>;
+  specification?: DeploymentSpec;
+}
+export const computeProfileRecordFields = ["configuration", "generation", "metadata", "specification"] as const;
+export const computeProfileRecordRequired = [] as const;
 export interface ConfigurationDiscoveryInput {
   configuration?: Record<string, unknown>;
   credential?: Record<string, unknown>;
@@ -196,6 +204,7 @@ export interface DeploymentSpec {
 export const deploymentSpecFields = ["resources", "runtime", "workspace"] as const;
 export const deploymentSpecRequired = ["resources"] as const;
 export interface DeploymentView {
+  compute_profiles?: Record<string, ComputeProfileRecord>;
   configuration?: Record<string, unknown>;
   core_url: string;
   credential_configured: boolean;
@@ -212,7 +221,7 @@ export interface DeploymentView {
   specification_digest?: string;
   suspension: Suspension | null;
 }
-export const deploymentViewFields = ["configuration", "core_url", "credential_configured", "generation", "installation_id", "metadata", "mode", "owner_epoch", "provider", "reset", "resources", "rollout", "specification", "specification_digest", "suspension"] as const;
+export const deploymentViewFields = ["compute_profiles", "configuration", "core_url", "credential_configured", "generation", "installation_id", "metadata", "mode", "owner_epoch", "provider", "reset", "resources", "rollout", "specification", "specification_digest", "suspension"] as const;
 export const deploymentViewRequired = ["core_url", "credential_configured", "generation", "installation_id", "mode", "owner_epoch", "provider", "reset", "resources", "rollout", "suspension"] as const;
 export interface DiagnosticFailure {
   code: DiagnosticFailureCode;
@@ -809,7 +818,14 @@ export interface SandboxAllocationList {
   data: NodeAllocation[];
 }
 export const sandboxAllocationListFields = ["data"] as const;
+export interface SandboxComputeProfileInput {
+  configuration?: Record<string, unknown>;
+  resources?: SandboxResources;
+}
+export const sandboxComputeProfileInputFields = ["configuration", "resources"] as const;
+export const sandboxComputeProfileInputRequired = [] as const;
 export interface SandboxDeploymentChangeInput {
+  compute_profiles?: Record<string, SandboxComputeProfileInput>;
   configuration?: Record<string, unknown>;
   credential?: Record<string, unknown>;
   expected_generation: number;
@@ -817,9 +833,10 @@ export interface SandboxDeploymentChangeInput {
   resources?: SandboxResources;
   runtime?: RuntimeRelease;
 }
-export const sandboxDeploymentChangeInputFields = ["configuration", "credential", "expected_generation", "provider", "resources", "runtime"] as const;
+export const sandboxDeploymentChangeInputFields = ["compute_profiles", "configuration", "credential", "expected_generation", "provider", "resources", "runtime"] as const;
 export const sandboxDeploymentChangeInputRequired = ["expected_generation"] as const;
 export interface SandboxDeploymentInput {
+  compute_profiles?: Record<string, SandboxComputeProfileInput>;
   configuration?: Record<string, unknown>;
   credential?: Record<string, unknown>;
   expected_generation: number;
@@ -827,7 +844,7 @@ export interface SandboxDeploymentInput {
   resources?: SandboxResources;
   runtime?: RuntimeRelease;
 }
-export const sandboxDeploymentInputFields = ["configuration", "credential", "expected_generation", "provider", "resources", "runtime"] as const;
+export const sandboxDeploymentInputFields = ["compute_profiles", "configuration", "credential", "expected_generation", "provider", "resources", "runtime"] as const;
 export const sandboxDeploymentInputRequired = ["expected_generation"] as const;
 export interface SandboxEnrollmentToken {
   enrollment_id: string;

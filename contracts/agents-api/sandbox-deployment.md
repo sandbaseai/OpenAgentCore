@@ -44,6 +44,7 @@ POST and PUT take the same complete selection and require `expected_generation` 
 | `resources` | Per-sandbox limits, below; required for Docker and microsandbox, optional for E2B |
 | `runtime` | The immutable [Runtime release](#runtime-release); required for Docker and microsandbox, absent for E2B |
 | `configuration` | The provider's public selectors. E2B: the immutable `template` build and the optional paired `api_url` and `domain`. Docker and microsandbox accept only `{}` or omission |
+| `compute_profiles` | Optional map of up to eight named immutable resource choices, described below; omission or `{}` replaces the map with no choices |
 | `credential` | The provider's write-only credential. E2B: `{api_key}`, required at first setup and omitted on PUT to keep the current key; a null or empty key is invalid. Docker and microsandbox reject it |
 
 The request has no Core address. Core derives the deployment's `core_url` from the installation public URL (`public_url` in `config.json`, `OAC_PUBLIC_URL` for Core): the origin nodes and sandbox guests use to reach Core. A request that contains `core_url` is rejected with 400 `invalid_request` like any other unknown member. E2B guests reach Core from E2B's cloud, so an E2B selection is rejected with 409 `sandbox_configuration_error` while the public URL is loopback. Docker and microsandbox selections accept a loopback public URL, which serves only local development because a guest's loopback address does not reach its host. Changing the public URL is an installation change: nodes enrolled with the old address receive no new sandboxes and must be removed and added again.
@@ -66,6 +67,20 @@ microsandbox configures the CPUs, memory, a managed root disk and a separate own
 The optional response `specification.workspace` is an immutable capability receipt derived from the selected [workspace filesystem](../../docs/workspace-provider.md), not an independently writable setting. It contains only `attachment`, `user_xattr` and `capacity_quota`; filesystem configuration, paths and credentials stay outside the sandbox specification. Core validates the combined declarations before saving, and retained generation validation and node construction use this receipt. Missing `workspace` preserves owned disk mode, including its existing disk bounds. Create and Resume must provide a binding exactly when the frozen generation selects external storage.
 
 To enable external storage for an existing owned deployment, select the filesystem configuration first, then update the sandbox deployment with compatible resources (`environment_disk_mib: 0` for a filesystem without quotas). Selecting the filesystem does not alter existing generations or allocations. The next sandbox update derives the external receipt; old owned allocations keep their owned disks. A filesystem selection must support the provider's declared requirements. An already external deployment requires the same `attachment` and `user_xattr`; the selection may change `capacity_quota`, after which new workspaces are refused until a sandbox update sets a matching `environment_disk_mib`. Existing workspaces keep the capacity they were admitted with.
+
+### Compute profiles
+
+A direct-mode deployment can configure up to eight additional choices in the same POST or PUT selection. Names match `^[a-z][a-z0-9-]{0,47}$`. Each value contains exactly `resources` and `configuration`; CPU and memory are explicit. The choice shares the deployment’s provider, Runtime and credential, and cannot select another credential endpoint. Node-mode deployments reject nonempty choices. Every choice is normalized and its immutable build validated before the deployment mutation commits; an unsupported or invalid choice rejects the whole update.
+
+```json
+{"compute_profiles":{"memory-8g":{"resources":{"cpus":4,"memory_mib":8192},"configuration":{"template":"template-id:build-uuid"}}}}
+```
+
+Supply this field alongside the existing complete deployment selection and `expected_generation`. The example is a fragment: use a real ready immutable build whose measured resources equal the requested resources. There is no automatic fallback from 4 CPUs to 2 CPUs. The default `resources` and `configuration` remain independent of these choices. Removing a choice blocks new selection by name; existing Sessions retain their frozen choice. GET returns each choice’s generation, specification, safe configuration and metadata, never credentials.
+
+The deployment stores only name-to-generation references. Each choice’s configuration lives in one immutable generation record. The default selection advances beyond those reserved generations, so generation numbers may skip. Collection retains active choices and live Sessions that selected them even before compute exists. Credential rotation continues using the current deployment credential across retained generations. Reset clears the choice map through the existing hosted-resource reset workflow.
+
+Migration `000102_session_compute_profiles.sql` adds the deployment reference map and Session binding table with empty defaults. It needs no manual data backfill and does not change existing default resources. Apply the normal migration before configuring choices.
 
 ### Runtime release
 

@@ -119,7 +119,7 @@ func (q *Queries) DisconnectRuntimeNode(ctx context.Context, arg DisconnectRunti
 }
 
 const getRuntimeDeployment = `-- name: GetRuntimeDeployment :one
-SELECT singleton, installation_id, backend_fingerprint, updated_at, provider_kind, owner_epoch, generation, mode, provider_credential, specification, reset_clear, reset_requested_at, reset_deadline_at, reset_forced_at, reset_audit, provider_config, provider_metadata, idle_seconds FROM runtime_deployment WHERE singleton=true
+SELECT singleton, installation_id, backend_fingerprint, updated_at, provider_kind, owner_epoch, generation, mode, provider_credential, specification, reset_clear, reset_requested_at, reset_deadline_at, reset_forced_at, reset_audit, provider_config, provider_metadata, idle_seconds, compute_profiles FROM runtime_deployment WHERE singleton=true
 `
 
 func (q *Queries) GetRuntimeDeployment(ctx context.Context) (RuntimeDeployment, error) {
@@ -144,6 +144,7 @@ func (q *Queries) GetRuntimeDeployment(ctx context.Context) (RuntimeDeployment, 
 		&i.ProviderConfig,
 		&i.ProviderMetadata,
 		&i.IdleSeconds,
+		&i.ComputeProfiles,
 	)
 	return i, err
 }

@@ -11,6 +11,7 @@ import (
 )
 
 type configuration struct {
+	ComputeProfile string                        `json:"compute_profile,omitempty"`
 	Agent          v1.Agent                      `json:"agent"`
 	Environment    v1.Environment                `json:"environment"`
 	VaultIDs       []string                      `json:"vault_ids,omitempty"`
@@ -34,5 +35,5 @@ func resolve(input sessionRequest, tenant, key string, saved *v1.SavedAgent) (js
 	} else {
 		agent.ID = saved.ID
 	}
-	return json.Marshal(configuration{Agent: agent, Environment: *input.Environment, VaultIDs: input.VaultIDs})
+	return json.Marshal(configuration{ComputeProfile: input.computeProfile, Agent: agent, Environment: *input.Environment, VaultIDs: input.VaultIDs})
 }

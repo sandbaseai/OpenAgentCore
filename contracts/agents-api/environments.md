@@ -152,6 +152,14 @@ The Worker expires at most 32 due reservations per tick, after checking its leas
 
 When next-Turn input is pending on a completed managed allocation that is suspended or recovering, Core hints the managed Runtime maintenance loop. Initial input, cold creation, running or disabled compute, terminal receipts, cancellation and function results, history and file operations send no hint. Hints are best effort and coalesced without blocking; they add at most one scan per normal five-second cycle and never bypass capacity, a busy lifecycle gate or ownership checks. Persisted work and the normal ticker stay authoritative.
 
+## Hosted compute profiles
+
+A new `openai_hosted` Session may send `x_agents_core.environment.compute_profile`, a name matching `^[a-z][a-z0-9-]{0,47}$`. For example, `{"x_agents_core":{"environment":{"compute_profile":"memory-8g"}}}` selects the installation administrator’s configured choice. The name has no intrinsic CPU or memory meaning; administrators configure exact resources through [sandbox deployment](sandbox-deployment.md#compute-profiles). The field is not part of the official top-level `environment` union or an Environment template. Omission keeps the existing default placement behavior. Null, empty or malformed names, unsupported placement, and unavailable names are rejected; Core never substitutes the default.
+
+Creation resolves the name under the deployment lock and freezes its immutable generation in the same transaction as the Session. Caller intent includes the requested name, so an identical retry returns its original Session even after administrators remove or change the choice. Changed intent under the same idempotency key conflicts. Pending Sessions retain the generation before their first allocation; allocations, suspension, recovery and cleanup use that frozen generation. Existing Sessions and Sessions without a profile keep their existing behavior.
+
+Unavailable choices return HTTP 400 `invalid_request_error`, with parameter `x_agents_core.environment.compute_profile` and the safe message “The requested compute profile is not available for hosted execution.” Client requests cannot supply provider templates, credentials or resource overrides through this field.
+
 ## Runtime capability preparation
 
 Preparation installs what a Session selected: initial files, tool configuration, Skills, Plugins, Environment MCP, npm and Python packages and setup commands. Both placements use one Runtime path.
@@ -173,7 +181,7 @@ Core freezes resource versions, metadata and source selections at Session creati
 
 The runner uses only neutral Environment and Session identity and a Runtime peer, with no Provider, deployment or operating-system branch. Harness differences stay in the adapters.
 
-**Portable preparation input.** `self_hosted` input carries only `workspace_directory` and `capability_directories`. A Session with either workspace placement can also send `x_agents_core.environment`, a Core extension with `environment_template_id`, `files`, `env`, `packages`, `setup_commands`, `skills`, `plugins` and `capability_directories`. It uses the same parsers and inheritance rules as `openai_hosted` input. A field supplied both there and in `environment` is rejected, including an explicit null. A `self_hosted` Session names its Template only through this extension and cannot use a Template whose network is not `enabled` (400, param `x_agents_core.environment.environment_template_id`). Machine location, sizing and network policy are not extension fields.
+**Portable preparation input.** `self_hosted` input carries only `workspace_directory` and `capability_directories`. A Session with either workspace placement can also send `x_agents_core.environment`, a Core extension with `environment_template_id`, `files`, `env`, `packages`, `setup_commands`, `skills`, `plugins` and `capability_directories`. It uses the same parsers and inheritance rules as `openai_hosted` input. A field supplied both there and in `environment` is rejected, including an explicit null. A `self_hosted` Session names its Template only through this extension and cannot use a Template whose network is not `enabled` (400, param `x_agents_core.environment.environment_template_id`). Machine location and network policy are not extension fields. Hosted Sessions may additionally select an administrator-approved compute profile as described below.
 
 ```json
 {

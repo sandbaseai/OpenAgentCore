@@ -12,8 +12,14 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
+type SandboxComputeProfileInput struct {
+	Resources     sandbox.Resources `json:"resources"`
+	Configuration json.RawMessage   `json:"configuration" swaggertype:"object"`
+}
+
 type SandboxDeploymentInput struct {
-	ExpectedGeneration *uint64 `json:"expected_generation" binding:"required"`
+	ComputeProfiles    map[string]SandboxComputeProfileInput `json:"compute_profiles,omitempty"`
+	ExpectedGeneration *uint64                               `json:"expected_generation" binding:"required"`
 	// Per-sandbox limits, required for Docker and microsandbox. E2B may omit
 	// them; Core then uses the validated template build's cpus and memory_mib.
 	Resources     sandbox.Resources       `json:"resources"`
@@ -33,7 +39,18 @@ func (h *Handler) selection(v SandboxDeploymentInput) (sandbox.Selection, error)
 	if err != nil {
 		return sandbox.Selection{}, err
 	}
-	return sandbox.Selection{ExpectedGeneration: *v.ExpectedGeneration, Provider: v.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: v.Resources, Runtime: v.Runtime}, Configuration: c}, nil
+	profiles := make(map[string]sandbox.ComputeProfile, len(v.ComputeProfiles))
+	for name, p := range v.ComputeProfiles {
+		if !sandbox.ValidComputeProfile(name) {
+			return sandbox.Selection{}, sandbox.ErrInvalid
+		}
+		config, err := h.Sandboxes.Deployment.DecodeConfiguration(v.Provider, p.Configuration, nil)
+		if err != nil {
+			return sandbox.Selection{}, err
+		}
+		profiles[name] = sandbox.ComputeProfile{Resources: p.Resources, Configuration: config}
+	}
+	return sandbox.Selection{ComputeProfiles: profiles, ExpectedGeneration: *v.ExpectedGeneration, Provider: v.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: v.Resources, Runtime: v.Runtime}, Configuration: c}, nil
 }
 
 // DeploymentChanges sets up and updates the sandbox deployment through the
@@ -66,7 +83,7 @@ func (h *Handler) initializeSandboxDeployment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var input SandboxDeploymentInput
-	if decodeInputObject(raw, &input, "provider", "configuration", "credential", "resources", "runtime", "expected_generation") != nil || input.ExpectedGeneration == nil {
+	if decodeInputObject(raw, &input, "provider", "configuration", "credential", "resources", "runtime", "expected_generation", "compute_profiles") != nil || input.ExpectedGeneration == nil {
 		writeDeploymentError(w, r, deployment.ErrInvalidInput)
 		return
 	}
@@ -99,7 +116,7 @@ func (h *Handler) updateSandboxDeployment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var input SandboxDeploymentChangeInput
-	if decodeInputObject(raw, &input, "provider", "configuration", "credential", "resources", "runtime", "expected_generation") != nil || input.ExpectedGeneration == nil {
+	if decodeInputObject(raw, &input, "provider", "configuration", "credential", "resources", "runtime", "expected_generation", "compute_profiles") != nil || input.ExpectedGeneration == nil {
 		writeDeploymentError(w, r, deployment.ErrInvalidInput)
 		return
 	}

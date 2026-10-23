@@ -1,7 +1,7 @@
 ---
 title: "Environment 与模板"
 source: contracts/agents-api/environments.md
-source_hash: 9007be1099cf50f5ba376d2de4a060d039b6ee0b1c13c78a94665c28c2fc3fc6
+source_hash: d5f163c25177473da1651d3ca90e81e3254be16f2ac0e783e2f496ad290a97c0
 ---
 
 Environment 是 Session 的执行资源，包括 Harness 运行所在的机器、工作区以及已完成准备的能力。Session 通过其 `environment` 配置创建 Environment；不存在独立的 create 调用。Environment 模板是 Session 创建时解析的可复用准备配置。本契约涵盖这两类资源、两种放置方式、输入接纳、能力准备、Skills、Plugins 和 MCP 连接来源。
@@ -175,7 +175,7 @@ Core 会在 Session 创建时冻结资源版本、元数据和源选择。随后
 
 运行器仅使用中立的 Environment 和 Session 身份以及一个 Runtime 对端，不包含提供商、部署或操作系统分支。Harness 差异保留在适配器中。
 
-**可移植的准备输入。** `self_hosted` 输入仅携带 `workspace_directory` 和 `capability_directories`。无论 Session 采用哪种工作区放置方式，还可以发送 `x_agents_core.environment`，这是 Core 扩展，包含 `environment_template_id`、`files`、`env`、`packages`、`setup_commands`、`skills`、`plugins` 和 `capability_directories`。它使用与 `openai_hosted` 输入相同的解析器和继承规则。若同一字段同时在 `x_agents_core.environment` 和顶层 `environment` 中提供，则会被拒绝，包括显式 null。`self_hosted` Session 只能通过此扩展指定模板，并且不能使用 network 不是 `enabled` 的模板（400，param `x_agents_core.environment.environment_template_id`）。机器位置、规格大小和网络策略不是此扩展的字段。
+**可移植的准备输入。** `self_hosted` 输入仅携带 `workspace_directory` 和 `capability_directories`。无论 Session 采用哪种工作区放置方式，还可以发送 `x_agents_core.environment`，这是 Core 扩展，包含 `environment_template_id`、`files`、`env`、`packages`、`setup_commands`、`skills`、`plugins` 和 `capability_directories`。它使用与 `openai_hosted` 输入相同的解析器和继承规则。若同一字段同时在 `x_agents_core.environment` 和顶层 `environment` 中提供，则会被拒绝，包括显式 null。`self_hosted` Session 只能通过此扩展指定模板，并且不能使用 network 不是 `enabled` 的模板（400，param `x_agents_core.environment.environment_template_id`）。机器位置和网络策略不是此扩展的字段。托管 Session 还可以按下文选择管理员批准的计算规格。
 
 ```json
 {
@@ -393,3 +393,11 @@ Core 的 Harness profile 会声明 `MCPOrigins`；接纳和分派会将来源与
 两种来源都支持匿名 HTTP 和 HTTPS bearer 凭据。所附加 Vault 的选择会冻结凭据身份，包括唯一的隐式 URL 匹配或匿名选择。只有该凭据经项目授权后，才会进入瞬时 Runtime 请求；绝不会搜索 Core 默认值或无关 Vault。解密失败或凭据缺失时，执行会失败且不会回退到匿名。公开 Environment MCP 保留 `project_vault` 权限，Plugin 凭据保留 `environment_configuration` 权限；两者都不会覆盖重复的服务器标签。Bearer 令牌绝不会进入持久化的原生配置或进程参数。
 
 工具允许列表和必需初始化遵循 [HTTP MCP contract](execution-tools.md#http-mcp)。
+
+## 托管计算规格 {#hosted-compute-profiles}
+
+新的 `openai_hosted` Session 可以传入 `x_agents_core.environment.compute_profile`，名称必须匹配 `^[a-z][a-z0-9-]{0,47}$`。例如 `{"x_agents_core":{"environment":{"compute_profile":"memory-8g"}}}` 选择管理员配置的档位。名称本身不规定 CPU 或内存；管理员通过[沙箱部署](sandbox-deployment.md#compute-profiles)配置精确资源。该字段不属于官方顶层 `environment` 联合类型或 Environment 模板。省略时保持现有默认行为；null、空串、格式错误、不支持的放置方式和不可用名称均拒绝，绝不退回默认档位。
+
+创建在部署锁内解析名称，并在创建 Session 的同一事务中冻结不可变 generation。调用方意图包含名称；即使管理员随后修改或删除该档位，相同幂等键的相同请求仍返回原 Session，改变意图则冲突。尚未首次分配计算资源的 Session 也保留该 generation。分配、挂起、恢复和清理均使用冻结选择；已有 Session 及未指定档位的 Session 保持原行为。
+
+不可用档位返回 HTTP 400 `invalid_request_error`，参数为 `x_agents_core.environment.compute_profile`，安全消息为 “The requested compute profile is not available for hosted execution.”。客户端不能通过该字段传入提供商模板、凭据或资源覆盖。

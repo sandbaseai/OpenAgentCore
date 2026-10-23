@@ -26,15 +26,16 @@ const (
 
 // View is the sandbox deployment as administrators read it.
 type View struct {
-	Rollout              Rollout                 `json:"rollout" binding:"required"`
-	Specification        *sandbox.DeploymentSpec `json:"specification,omitempty"`
-	SpecificationDigest  string                  `json:"specification_digest,omitempty"`
-	Generation           uint64                  `json:"generation" binding:"required"`
-	Mode                 sandbox.DeploymentMode  `json:"mode" binding:"required"`
-	Resources            Resources               `json:"resources" binding:"required"`
-	Configuration        json.RawMessage         `json:"configuration,omitempty" swaggertype:"object"`
-	Metadata             json.RawMessage         `json:"metadata,omitempty" swaggertype:"object"`
-	CredentialConfigured bool                    `json:"credential_configured" binding:"required"`
+	ComputeProfiles      map[string]ComputeProfileRecord `json:"compute_profiles,omitempty"`
+	Rollout              Rollout                         `json:"rollout" binding:"required"`
+	Specification        *sandbox.DeploymentSpec         `json:"specification,omitempty"`
+	SpecificationDigest  string                          `json:"specification_digest,omitempty"`
+	Generation           uint64                          `json:"generation" binding:"required"`
+	Mode                 sandbox.DeploymentMode          `json:"mode" binding:"required"`
+	Resources            Resources                       `json:"resources" binding:"required"`
+	Configuration        json.RawMessage                 `json:"configuration,omitempty" swaggertype:"object"`
+	Metadata             json.RawMessage                 `json:"metadata,omitempty" swaggertype:"object"`
+	CredentialConfigured bool                            `json:"credential_configured" binding:"required"`
 	// Idle suspension policy; null unless the selected Provider declares checkpoint support.
 	Suspension     *Suspension `json:"suspension" extensions:"x-nullable" binding:"required"`
 	InstallationID string      `json:"installation_id" binding:"required"`

@@ -86,6 +86,8 @@ func writeSandboxError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusBadRequest, "invalid_sandbox_configuration", deploymentConfiguration.Message)
 	case errors.Is(err, placement.ErrResetAdmission):
 		writeError(w, http.StatusServiceUnavailable, "sandbox_reset_in_progress", "A sandbox reset is in progress.")
+	case errors.Is(err, placement.ErrComputeProfileUnavailable):
+		writeError(w, http.StatusBadRequest, "invalid_request_error", errComputeProfile.message, errComputeProfile.param)
 	case errors.Is(err, placement.ErrAdmissionClosed):
 		writeError(w, http.StatusConflict, "environment_unavailable", "The environment is no longer available for new input.")
 	case errors.Is(err, placement.ErrPublicURLUnreachable):

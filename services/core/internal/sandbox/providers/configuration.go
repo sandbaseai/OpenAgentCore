@@ -73,14 +73,49 @@ func (r *Registry) Normalize(s sandbox.Selection) (sandbox.Selection, error) {
 	if e != nil {
 		return s, e
 	}
-	return a.Configuration.Normalize(s)
+	normalized, err := a.Configuration.Normalize(s)
+	if err != nil {
+		return normalized, err
+	}
+	if len(s.ComputeProfiles) > 8 || len(s.ComputeProfiles) > 0 && a.Mode != sandbox.DeploymentDirect {
+		return s, sandbox.ErrInvalid
+	}
+	normalized.ComputeProfiles = make(map[string]sandbox.ComputeProfile, len(s.ComputeProfiles))
+	for name, profile := range s.ComputeProfiles {
+		if !sandbox.ValidComputeProfile(name) || profile.Resources.CPUs == 0 || profile.Resources.MemoryMiB == 0 {
+			return s, sandbox.ErrInvalid
+		}
+		owner := sandbox.Selection{Provider: s.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: profile.Resources, Runtime: normalized.Runtime, Workspace: normalized.Workspace}, Configuration: profile.Configuration}
+		if normalized.HasCredential() {
+			owner, err = r.WithCredential(owner, normalized)
+			if err != nil {
+				return s, err
+			}
+		}
+		owner, err = a.Configuration.Normalize(owner)
+		if err != nil {
+			return s, err
+		}
+		if normalized.HasCredential() {
+			equal, err := a.Configuration.CredentialAccessEqual(owner.Configuration, normalized.Configuration)
+			if err != nil || !equal {
+				return s, sandbox.ErrInvalid
+			}
+		}
+		normalized.ComputeProfiles[name] = sandbox.ComputeProfile{Resources: owner.Resources, Configuration: owner.Configuration}
+	}
+	return normalized, nil
 }
 func (r *Registry) ResolveChange(next, previous sandbox.Selection) (sandbox.Selection, error) {
 	a, e := r.Lookup(next.Provider)
 	if e != nil {
 		return next, e
 	}
-	return a.Configuration.ResolveChange(next, previous)
+	resolved, err := a.Configuration.ResolveChange(next, previous)
+	if err != nil {
+		return resolved, err
+	}
+	return r.Normalize(resolved)
 }
 func (r *Registry) WithCredential(owner, candidate sandbox.Selection) (sandbox.Selection, error) {
 	if owner.Provider != candidate.Provider {
@@ -221,4 +256,37 @@ func (nodeConfigurationAdapter) VerifyCredential(context.Context, sandbox.Direct
 
 func (a nodeConfigurationAdapter) CredentialAccessEqual(x, y sandbox.Configuration) (bool, error) {
 	return a.Equal(x, y)
+}
+
+// PrepareSelection applies the same declared discovery policy to the default
+// normalized selection and every approved variant. It performs no compute allocation.
+func (r *Registry) PrepareSelection(ctx context.Context, c sandbox.DirectConfig) (sandbox.Selection, error) {
+	selection := c.Selection
+	adapter, err := r.Lookup(selection.Provider)
+	if err != nil {
+		return selection, err
+	}
+	discovery := adapter.Configuration.Requirements().SelectionDiscovery.State == providercontract.Supported
+	c.Selection = selection
+	if discovery {
+		selection, err = r.DiscoverSelection(ctx, c)
+		if err != nil {
+			return selection, err
+		}
+	}
+	profiles := make(map[string]sandbox.ComputeProfile, len(selection.ComputeProfiles))
+	for name, p := range selection.ComputeProfiles {
+		variant := c
+		variant.Selection = sandbox.Selection{Provider: selection.Provider, DeploymentSpec: sandbox.DeploymentSpec{Resources: p.Resources, Runtime: selection.Runtime, Workspace: selection.Workspace}, Configuration: p.Configuration}
+		resolved := variant.Selection
+		if discovery {
+			resolved, err = r.DiscoverSelection(ctx, variant)
+			if err != nil {
+				return selection, err
+			}
+		}
+		profiles[name] = sandbox.ComputeProfile{Resources: resolved.Resources, Configuration: resolved.Configuration}
+	}
+	selection.ComputeProfiles = profiles
+	return selection, nil
 }

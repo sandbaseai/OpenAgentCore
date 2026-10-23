@@ -20,7 +20,7 @@ UPDATE runtime_deployment SET reset_clear = NULL,
 WHERE singleton = true;
 
 -- name: CompleteSandboxReset :exec
-UPDATE runtime_deployment SET provider_kind = '', backend_fingerprint = '', mode = '',
+UPDATE runtime_deployment SET compute_profiles = '{}', provider_kind = '', backend_fingerprint = '', mode = '',
     specification = '{}', provider_config = '{}'::jsonb, provider_metadata = '{}'::jsonb, provider_credential = NULL,
     generation = generation + 1, owner_epoch = owner_epoch + 1,
     reset_clear = NULL, reset_requested_at = NULL,

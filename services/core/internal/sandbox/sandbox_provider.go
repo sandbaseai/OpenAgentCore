@@ -365,6 +365,7 @@ type ConfigurationRecord struct {
 
 // Selection is the typed deployment configuration shared by preview and commit.
 type Selection struct {
+	ComputeProfiles map[string]ComputeProfile `json:"-"`
 	DeploymentSpec
 	ExpectedGeneration uint64        `json:"expected_generation"`
 	Provider           string        `json:"provider"`

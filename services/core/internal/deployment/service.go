@@ -53,6 +53,11 @@ func (s *Service) view(snapshot Snapshot) (View, error) {
 			result.SpecificationDigest = spec.Digest(d.Provider)
 		}
 	}
+	if len(d.ComputeProfiles) > 0 {
+		if err := json.Unmarshal(d.ComputeProfiles, &result.ComputeProfiles); err != nil {
+			return View{}, ErrConflict
+		}
+	}
 	if d.Provider != "" {
 		value, err := s.registry.Decode(d.Provider, sandbox.ConfigurationRecord{Public: d.Configuration.Public, Metadata: d.Configuration.Metadata})
 		if err != nil {
@@ -107,6 +112,10 @@ func (s *Service) setup(d Record) (Setup, error) {
 	result.Configuration, err = s.registry.Decode(d.Provider, d.Configuration)
 	if err != nil {
 		return Setup{}, ErrConflict
+	}
+	result.ComputeProfiles, err = s.profiles(d, result.selection())
+	if err != nil {
+		return Setup{}, err
 	}
 	result, err = s.describe(result)
 	if result.Suspension != nil {
@@ -250,7 +259,7 @@ func (s *Service) SetupForSelection(installationID string, input sandbox.Selecti
 	if err := s.rules.CheckPublicOrigin(input.Provider); err != nil {
 		return Setup{}, err
 	}
-	result := Setup{InstallationID: installationID, Provider: input.Provider, Mode: string(description.Mode), Specification: normalized.DeploymentSpec, Configuration: normalized.Configuration, BackendFingerprint: description.BackendFingerprint}
+	result := Setup{ComputeProfiles: normalized.ComputeProfiles, InstallationID: installationID, Provider: input.Provider, Mode: string(description.Mode), Specification: normalized.DeploymentSpec, Configuration: normalized.Configuration, BackendFingerprint: description.BackendFingerprint}
 	return s.describe(result)
 }
 
@@ -288,6 +297,19 @@ func (s *Service) selectionEqual(d Record, input sandbox.Selection) (bool, error
 	}
 	if previous.Specification.Digest(d.Provider) != normalized.DeploymentSpec.Digest(input.Provider) {
 		return false, nil
+	}
+	if len(previous.ComputeProfiles) != len(normalized.ComputeProfiles) {
+		return false, nil
+	}
+	for name, profile := range normalized.ComputeProfiles {
+		old, ok := previous.ComputeProfiles[name]
+		if !ok || old.Resources != profile.Resources {
+			return false, nil
+		}
+		equal, err := s.registry.Equal(input.Provider, old.Configuration, profile.Configuration)
+		if err != nil || !equal {
+			return equal, err
+		}
 	}
 	return s.registry.Equal(input.Provider, previous.Configuration, normalized.Configuration)
 }

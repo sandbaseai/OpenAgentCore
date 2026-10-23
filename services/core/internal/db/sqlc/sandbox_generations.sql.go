@@ -20,6 +20,8 @@ func (q *Queries) ClearSandboxGenerations(ctx context.Context) error {
 
 const collectSandboxGenerations = `-- name: CollectSandboxGenerations :exec
 DELETE FROM runtime_deployment_generations WHERE generation IN (SELECT g.generation FROM runtime_deployment_generations g WHERE g.generation <> (SELECT generation FROM runtime_deployment)
+AND NOT EXISTS(SELECT 1 FROM runtime_deployment d, jsonb_each_text(d.compute_profiles) p WHERE p.value::bigint=g.generation)
+AND NOT EXISTS(SELECT 1 FROM session_compute_generations c JOIN sessions s ON s.id=c.session_id WHERE c.generation=g.generation AND s.deleted_at IS NULL)
 AND NOT EXISTS(SELECT 1 FROM runtime_allocations a WHERE a.state <> 'released' AND a.deployment_generation=g.generation)
 AND NOT EXISTS(SELECT 1 FROM runtime_placements p WHERE p.released_at IS NULL AND p.deployment_generation=g.generation)
 AND NOT EXISTS(SELECT 1 FROM runtime_nodes n WHERE n.removed_at IS NULL AND n.ready_generation=g.generation) ORDER BY g.generation LIMIT 32)

@@ -233,3 +233,7 @@ func (t *creationTx) LoadSession(ctx context.Context) (sessions.Session, error) 
 	}
 	return session, err
 }
+
+func (t *creationTx) FreezeComputeProfile(ctx context.Context, profile string, generation uint64) error {
+	return t.q.FreezeSessionComputeGeneration(ctx, sqlc.FreezeSessionComputeGenerationParams{SessionID: t.session, Profile: profile, Generation: int64(generation)})
+}

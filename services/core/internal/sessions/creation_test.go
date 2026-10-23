@@ -612,3 +612,8 @@ func TestFindSessionCreation(t *testing.T) {
 		})
 	}
 }
+
+func (f *fakeCreationTx) FreezeComputeProfile(context.Context, string, uint64) error {
+	f.t.Fatal("unexpected FreezeComputeProfile")
+	return nil
+}
