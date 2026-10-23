@@ -1,16 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/claudesdk"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/codex"
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent/mcode"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/paths"
 )
-
-var harnessDeclarations = []agent.Declaration{codex.Declaration, mcode.Declaration, claudesdk.Declaration}
 
 type discoveredHarness struct {
 	declaration agent.Declaration
@@ -30,18 +28,35 @@ func discoverAgentCLIs(parent context.Context, rc *runContext, profile string, d
 	if err != nil {
 		return nil, err
 	}
+	// Preflights are independent and sit on every cold start, so they run
+	// concurrently; their output is replayed in declaration order.
+	type probe struct {
+		runtime        *agent.Runtime
+		stdout, stderr bytes.Buffer
+	}
+	probes := make([]probe, len(declarations))
+	var running sync.WaitGroup
+	for i, declaration := range declarations {
+		if rc.installedKinds != nil && !rc.installedKinds[declaration.Kind] {
+			continue
+		}
+		running.Go(func() {
+			p := &probes[i]
+			p.runtime = declaration.Discover(parent, agent.DiscoveryOptions{Profile: profile, StateRoot: stateRoot, RuntimeRoot: runtimeRoot, Stdout: &p.stdout, Stderr: &p.stderr}, declaration.Info())
+		})
+	}
+	running.Wait()
 	var out agentCLIDiscovery
 	available := false
-	for _, declaration := range declarations {
-		if rc.installedKinds != nil && !rc.installedKinds[declaration.Info.Kind] {
+	for i := range probes {
+		p := &probes[i]
+		_, _ = rc.stdout.Write(p.stdout.Bytes())
+		_, _ = rc.stderr.Write(p.stderr.Bytes())
+		if p.runtime == nil {
 			continue
 		}
-		runtime := declaration.Discover(parent, agent.DiscoveryOptions{Profile: profile, StateRoot: stateRoot, RuntimeRoot: runtimeRoot, Stdout: rc.stdout, Stderr: rc.stderr}, declaration.Info)
-		if runtime == nil {
-			continue
-		}
-		out = append(out, discoveredHarness{declaration, *runtime})
-		available = available || runtime.Info.Available
+		out = append(out, discoveredHarness{declarations[i], *p.runtime})
+		available = available || p.runtime.Info.Available
 	}
 	if err := parent.Err(); err != nil {
 		return out, err

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/MiniMax-AI/OpenAgentCore/internal/agentnetwork"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	wire "github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox/microsandbox"
 	sdk "github.com/superradcompany/microsandbox/sdk/go"
@@ -46,16 +45,10 @@ func (b backend) create(ctx context.Context) (wire.Response, error) {
 		return wire.Response{}, e
 	}
 	bootstrap := *b.q.Bootstrap
-	policy := agentnetwork.Policy{Access: bootstrap.NetworkAccess, AllowedDomains: bootstrap.AllowedDomains}
-	domains, _ := json.Marshal(policy.Hosts())
 	labels := wire.Labels(b.q.Config, b.q.Reference)
 	labels[bootstrapLabel] = "pending"
 	for key, value := range workspaceLabels(b.q.Workspace) {
 		labels[key] = value
-	}
-	mount := sdk.Mount.Owned(sdk.OwnedVolumeOptions{Kind: sdk.VolumeKindDisk, SizeMiB: b.q.Config.EnvironmentDiskMiB})
-	if b.q.Workspace != nil {
-		mount = sdk.Mount.Bind(b.q.Workspace.Path, sdk.MountOptions{})
 	}
 	live, e := sdk.CreateSandbox(ctx, c.Name,
 		// Every compatible node holds the pinned image; nothing is ever pulled.
@@ -65,13 +58,12 @@ func (b backend) create(ctx context.Context) (wire.Response, error) {
 		// The selected Environment mount keeps workspace and staging on one filesystem.
 		// Bootstrap creates their directories before starting the daemon.
 		sdk.WithWorkdir("/"), sdk.WithMounts(map[string]sdk.MountConfig{
-			"/environment": mount,
+			"/environment": sdk.Mount.Bind(b.q.Workspace.Path, sdk.MountOptions{}),
 		}),
 		sdk.WithLabels(labels), sdk.WithDetached(), sdk.WithQuietLogs(), sdk.WithNetwork(b.network()),
 		sdk.WithEnv(map[string]string{
 			"HOME": "/home/runtime", "OAC_RUNTIME_HOME": "/home/runtime/.oac",
 			"OAC_RUNTIME_ENVIRONMENT_ID": bootstrap.EnvironmentID, "OAC_RUNTIME_SESSION_ID": bootstrap.SessionID,
-			"OAC_RUNTIME_NETWORK_ACCESS": policy.Access, "OAC_RUNTIME_ALLOWED_DOMAINS": string(domains),
 			"OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE": "/run/oac/daemon-suspend.json",
 		}))
 	if e != nil {
@@ -90,7 +82,7 @@ func (b backend) create(ctx context.Context) (wire.Response, error) {
 	var actual struct {
 		Labels map[string]string `json:"labels"`
 	}
-	if json.Unmarshal([]byte(h.ConfigJSON()), &actual) != nil || qualifyWorkspace(actual.Labels, b.q.Workspace) != nil || (b.q.Workspace != nil && actual.Labels[workspacePathLabel] != b.q.Workspace.Path) {
+	if json.Unmarshal([]byte(h.ConfigJSON()), &actual) != nil || qualifyWorkspace(actual.Labels, b.q.Workspace) != nil || actual.Labels[workspacePathLabel] != b.q.Workspace.Path {
 		qualified.CreateSettled = true
 		return qualified, sandbox.ErrInvalid
 	}
