@@ -12,12 +12,15 @@ import tempfile
 from e2b import Template
 
 BASE = 'node:22.23.1-bookworm-slim@sha256:8607a9064d4a571140998ae9e52a3b3fcf9cff361d04642d5971e6cd76d39e27'
+COMPUTE_PROFILES = {'2c2g': (2, 2048), '2c8g': (2, 8192), '4c8g': (4, 8192)}
 parser = argparse.ArgumentParser()
 parser.add_argument('--image', required=True, help='Qualified linux/amd64 Runtime image digest')
 parser.add_argument('--name', required=True)
 parser.add_argument('--api-key-file', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--compute-profile', choices=COMPUTE_PROFILES, default='2c2g')
 args = parser.parse_args()
+cpu_count, memory_mb = COMPUTE_PROFILES[args.compute_profile]
 if not args.image.startswith('sha256:') or not args.output.is_absolute() or not args.api_key_file.is_absolute():
     parser.error('Use an image digest and absolute private key/output paths')
 image = json.loads(subprocess.check_output(['docker', 'image', 'inspect', args.image]))[0]
@@ -88,12 +91,13 @@ with tempfile.TemporaryDirectory(dir=state) as temporary:
     # Reinstall their system dependencies in E2B using the image's own installer.
     if creative_tools:
         template = template.run_cmd('sh /opt/oac-creative/install.sh --system-only', user='root')
-    result = Template.build(template, name=args.name, cpu_count=2, memory_mb=2048,
+    result = Template.build(template, name=args.name, cpu_count=cpu_count, memory_mb=memory_mb,
                             on_build_logs=lambda entry: print(entry.message, flush=True),
                             api_key=args.api_key_file.read_text().strip())
     report = {'template': result.template_id + ':' + result.build_id, 'image': image['Id'],
               'runtime_sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(), 'base': BASE,
-              'creative_tools': creative_tools}
+              'creative_tools': creative_tools, 'compute_profile': args.compute_profile,
+              'cpu_count': cpu_count, 'memory_mb': memory_mb}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))

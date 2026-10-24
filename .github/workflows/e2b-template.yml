@@ -21,6 +21,13 @@ on:
         default: creative
         required: true
 
+      compute_profile:
+        description: Template CPU and memory allocation
+        type: choice
+        options: [2c2g, 2c8g, 4c8g]
+        default: 2c2g
+        required: true
+
       resume_build:
         description: Existing unsubmitted templateID:build_UUID after an upload failure; requires ref
         type: string
@@ -181,6 +188,7 @@ jobs:
         env:
           RESUME_BUILD: ${{ inputs.resume_build }}
           SOURCE_COMMIT: ${{ steps.source.outputs.revision }}
+          COMPUTE_PROFILE: ${{ inputs.compute_profile }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
           E2B_API_URL: ${{ vars.E2B_API_URL }}
         run: |
@@ -191,9 +199,16 @@ jobs:
           printf '%s' "$E2B_API_KEY" > "$key"
           unset E2B_API_KEY
           mkdir -p "$RUNNER_TEMP/e2b-result"
+          compute_args=()
+          case "$COMPUTE_PROFILE" in
+            2c2g) ;;
+            2c8g|4c8g) compute_args=(--compute-profile "$COMPUTE_PROFILE") ;;
+            *) echo '::error::Unknown compute profile.'; exit 1 ;;
+          esac
           "$RUNNER_TEMP/e2b-sdk/bin/python" - source/services/core/deploy/e2b/build-template.py \
             --image "$(cat "$HOME/.oac/build/e2b-runtime/runtime-image.id")" \
             --name "sandbase-oac-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            "${compute_args[@]}" \
             --api-key-file "$key" --output "$RUNNER_TEMP/e2b-result/template.json" <<'PY'
           import hashlib, json, os, pathlib, runpy, sys
           from types import SimpleNamespace
@@ -252,7 +267,22 @@ jobs:
                   result = original_request(client, **kwargs)
               receipt = {'template': result.template_id + ':' + result.build_id,
                          'source_commit': os.environ['SOURCE_COMMIT'],
-                         'api_url': os.environ['E2B_API_URL'], 'resumed': bool(selector)}
+                         'api_url': os.environ['E2B_API_URL'], 'resumed': bool(selector),
+                         'resources_verified': False}
+              (output / 'build-request.json').write_text(json.dumps(receipt, indent=2) + '\n')
+              response = client.get_httpx_client().get(f'/templates/{result.template_id}')
+              response.raise_for_status()
+              detail = response.json()
+              builds = [build for build in detail.get('builds', [])
+                        if build.get('buildID') == result.build_id]
+              if (detail.get('templateID') != result.template_id or len(builds) != 1
+                      or type(builds[0].get('cpuCount')) is not int
+                      or type(builds[0].get('memoryMB')) is not int
+                      or builds[0]['cpuCount'] != kwargs['cpu_count']
+                      or builds[0]['memoryMB'] != kwargs['memory_mb']):
+                  raise RuntimeError('Template build CPU/memory does not match the requested compute profile')
+              receipt.update(cpu_count=builds[0]['cpuCount'], memory_mb=builds[0]['memoryMB'],
+                             resources_verified=True)
               (output / 'build-request.json').write_text(json.dumps(receipt, indent=2) + '\n')
               return result
           sdk.request_build = request
@@ -271,12 +301,18 @@ jobs:
           import json, os, pathlib
           report = pathlib.Path(os.environ['RUNNER_TEMP']) / 'e2b-result/template.json'
           value = json.loads(report.read_text())
+          receipt = json.loads(report.with_name('build-request.json').read_text())
+          if (receipt.get('resources_verified') is not True
+                  or receipt.get('template') != value['template']):
+              raise RuntimeError('Build report does not match a verified allocation receipt')
+          value.update(cpu_count=receipt['cpu_count'], memory_mb=receipt['memory_mb'])
           value.update(source_commit=os.environ['SOURCE_COMMIT'], source_branch=os.environ['SOURCE_BRANCH'],
                        api_url=os.environ['E2B_API_URL'], harnesses=['codex', 'claude_sdk', 'mcode'],
                        qualification='image identity and native package checks; no live Session/Turn')
           report.write_text(json.dumps(value, indent=2) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write(f"Source: `{value['source_commit']}`\n\nTemplate: `{value['template']}`\n\nImage: `{value['image']}`\n\n")
+              out.write(f"Compute: `{value['cpu_count']} vCPU / {value['memory_mb']} MiB`\n\n")
               out.write('One combined Runtime template built. No Core configuration or production deployment was changed.\n')
           PY
       - uses: actions/upload-artifact@v6
