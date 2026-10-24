@@ -10,6 +10,11 @@ name: core-deploy
 on:
   workflow_dispatch:
     inputs:
+      build_only:
+        description: Build and push images without changing the production installation
+        required: false
+        default: false
+        type: boolean
       source_branch:
         description: Source branch deployed to the existing production installation
         required: true
@@ -61,7 +66,7 @@ jobs:
             exit 1
           fi
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "Deploying $SOURCE_BRANCH at \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Selected $SOURCE_BRANCH at \`$revision\`" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: prepare
@@ -175,6 +180,7 @@ jobs:
         run: docker logout "${REGISTRY_HOST%%/*}" || true
 
   deploy:
+    if: ${{ !inputs.build_only }}
     needs: [prepare, build]
     runs-on: ${{ vars.OAC_DEPLOY_RUNNER || 'ubuntu-22.04' }}
     environment: production
