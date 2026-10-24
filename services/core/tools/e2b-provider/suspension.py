@@ -181,7 +181,7 @@ class Suspension:
                                          on_resume='restore', **self.p.options())
             if connected.sandbox_id != target['ID']:
                 raise Failure('ownership')
-            self.p.check_domain(connected)
+            self.p.check_domain(connected.sandbox_domain)
             entry = dict(entry, connected=True)
             self.p.receipt.save(suspension=entry, connection=self.material(connected))
         else:

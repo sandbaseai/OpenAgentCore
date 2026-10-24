@@ -190,15 +190,18 @@ class Provider:
             raise Failure('ownership')
         return cloud
 
-    def check_domain(self, cloud):
+    def check_domain(self, sandbox_domain):
         domain = self.options()['domain']
-        sandbox_domain = cloud.sandbox_domain
         if not isinstance(sandbox_domain, str) or not (
                 sandbox_domain == domain or sandbox_domain.endswith('.' + domain)):
             raise Failure('ownership')
 
     def qualified(self, cloud):
-        self.check_domain(cloud)
+        # SandboxInfo omits the optional domain on the official API. It is an
+        # observation, not connection material; Create and saved clients still
+        # require a qualified domain before any envd access.
+        if cloud.sandbox_domain is not None:
+            self.check_domain(cloud.sandbox_domain)
         template = self.config['Template'].split(':', 1)[0]
         if cloud.template_id not in (template, self.config['Template']):
             raise Failure('invalid')
@@ -236,6 +239,7 @@ class Provider:
         material = (self.receipt.data or {}).get('connection')
         if not material or material['sandbox_id'] != cloud.sandbox_id:
             raise Failure('unconfirmed')
+        self.check_domain(material['sandbox_domain'])
         return restore(material, self.options())
 
     def inspect(self):
@@ -252,7 +256,7 @@ class Provider:
         self.qualified(cloud)
         record = self.receipt.data or {}
         if (cloud.state == 'running' and not record.get('bootstrap_complete') and record.get('connection')
-                and record.get('status') not in ('bootstrap_failed', 'killed')):
+                and record.get('status') not in ('configuration_rejected', 'bootstrap_failed', 'killed')):
             try:
                 receipt = json.loads(self.client(cloud).files.read('/root/.oac/e2b/managed-ready.json',
                                       user='root', request_timeout=self.remaining()))
@@ -292,7 +296,7 @@ class Provider:
                           compute={'Generation': 0, 'Name': self.reference['AllocationID'],
                                    'ID': cloud.sandbox_id, 'RestoredFrom': None})
         # A create response must not steer envd traffic to an unrelated host.
-        self.check_domain(cloud)
+        self.check_domain(cloud.sandbox_domain)
         # SDK Create returns connection material, but no metadata or resources.
         # Read its exact ID before writing credentials, even when Core adopts the
         # template's resources and does not supply explicit limits.

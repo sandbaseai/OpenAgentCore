@@ -1,5 +1,6 @@
 """Native lifecycle effects and durable recovery are tested through the helper."""
 import unittest
+from types import SimpleNamespace
 from uuid import uuid4
 
 from provider import Provider
@@ -34,6 +35,48 @@ class SuspensionTest(unittest.TestCase):
                   'ID': retained['SourceID'], 'RestoredFrom': retained}
         return {'Reference': self.reference, 'OperationID': str(uuid4()), 'Target': target,
                 'Retained': retained, 'ReconcileOnly': False}
+
+    def missing_domain_observations(self):
+        self.api.get_info.side_effect = lambda *a, **k: SimpleNamespace(
+            sandbox_id=self.cloud.sandbox_id, sandbox_domain=None,
+            metadata=self.cloud.metadata, template_id=self.cloud.template_id,
+            state=self.cloud.state, cpu_count=2, memory_mb=2048)
+
+    def test_missing_observation_domain_preserves_explicit_pause_resume(self):
+        self.missing_domain_observations()
+        current = self.prepare()
+        _, paused = self.pause(current)
+        self.assertEqual(paused['ErrorCode'], '')
+        self.assertTrue(paused['State']['ResourcesReleased'])
+        self.assertEqual(self.invoke('compute_info', Compute=current)['State']['Status'], 'paused')
+        self.api.connect.assert_not_called()
+        request = self.resume_request(paused['State']['Retained'])
+        resumed = self.invoke('resume', Resume=request)
+        self.assertEqual(resumed['ErrorCode'], '')
+        self.assertEqual(resumed['State']['Compute']['ID'], current['ID'])
+        self.assertEqual(resumed['State']['Compute']['Generation'], current['Generation'] + 1)
+        self.assertEqual(self.record()['connection']['sandbox_domain'], 'e2b.app')
+        self.api.connect.assert_called_once()
+        self.assertEqual(self.api.connect.call_args.kwargs['on_resume'], 'restore')
+
+    def invalid_resume_connection_domain(self, domain):
+        self.missing_domain_observations()
+        current = self.prepare()
+        _, paused = self.pause(current)
+        request = self.resume_request(paused['State']['Retained'])
+        self.cloud.sandbox_domain = domain
+        self.assertEqual(self.invoke('resume', Resume=request)['ErrorCode'], 'ownership')
+        self.assertEqual(self.record()['connection']['sandbox_domain'], 'e2b.app')
+        self.assertFalse(self.record()['suspension']['connected'])
+        self.api.connect.assert_called_once()
+        self.assertEqual(self.invoke('resume', Resume=dict(request, ReconcileOnly=True))['ErrorCode'], 'unconfirmed')
+        self.api.connect.assert_called_once()
+
+    def test_missing_resume_connection_domain_is_rejected(self):
+        self.invalid_resume_connection_domain(None)
+
+    def test_foreign_resume_connection_domain_is_rejected(self):
+        self.invalid_resume_connection_domain('foreign.example')
 
     def test_resume_rejects_external_workspace_before_sdk(self):
         from state import Failure
