@@ -193,7 +193,7 @@ class Provider:
         self.qualified(cloud)
         record = self.receipt.data or {}
         if (cloud.state == 'running' and not record.get('bootstrap_complete') and record.get('connection')
-                and record.get('status') not in ('bootstrap_failed', 'killed')):
+                and record.get('status') not in ('configuration_rejected', 'bootstrap_failed', 'killed')):
             try:
                 receipt = json.loads(self.client(cloud).files.read('/root/.oac/e2b/managed-ready.json',
                                       user='root', request_timeout=self.remaining()))

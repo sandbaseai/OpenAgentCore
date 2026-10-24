@@ -91,6 +91,20 @@ class ObservationDomainTest(unittest.TestCase):
                 self.cloud.files.write.assert_not_called()
                 self.api.connect.assert_not_called()
 
+    def test_rejected_observation_cannot_resume_bootstrap_on_later_missing_domain(self):
+        self.api.get_info.return_value = self.observed(sandbox_domain='foreign.example')
+        self.assertEqual(self.call('create')['ErrorCode'], 'ownership')
+        self.assertEqual(self.record()['status'], 'configuration_rejected')
+        self.api.get_info.return_value = self.observed()
+        result = self.call('inspect')
+        self.assertEqual(result['ErrorCode'], '')
+        self.assertFalse(result['Info']['BootstrapComplete'])
+        self.assertTrue(result['Info']['CreateSettled'])
+        self.assertEqual(self.record()['status'], 'configuration_rejected')
+        self.cloud.files.read.assert_not_called()
+        self.cloud.files.write.assert_not_called()
+        self.api.connect.assert_not_called()
+
     def test_missing_actual_connection_domain_is_still_rejected(self):
         self.api.get_info.return_value = self.observed()
         self.cloud.sandbox_domain = None
