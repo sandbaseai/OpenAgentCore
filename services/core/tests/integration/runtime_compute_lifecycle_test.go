@@ -298,7 +298,7 @@ func newComputeLifecycleFixtureFor(t *testing.T, provider string, maxActive, max
 		}
 		server.Close()
 	})
-	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: webDeployment(t, s, provider), policy: execution.RuntimeSuspensionPolicy{Retention: time.Hour}}
+	f := &computeLifecycleFixture{t: t, store: s, provider: p, key: webDeployment(t, s, provider), policy: execution.RuntimeSuspensionPolicy{Retention: time.Hour, MaxActive: maxActive, MaxRetained: maxRetained}}
 	view, err := deploymentService(t, s).View(t.Context())
 	if err != nil {
 		t.Fatal(err)
