@@ -25,9 +25,6 @@ const providerAPIKeyEnv = "OAC_CODEX_PROVIDER_API_KEY"
 // ModelProviderInfo enum (model-provider-info/src/lib.rs) so the
 // rendered TOML deserialises 1:1 against upstream.
 type providerConfig struct {
-	// Name is the human-readable label shown in codex UI; defaults to
-	// "OpenAgentCore" when empty.
-	Name string
 	// BaseURL is the model provider's HTTPS endpoint, including any
 	// path prefix (e.g. /v1). Required.
 	BaseURL string
@@ -75,12 +72,8 @@ func writeCodexProviderConfig(codexHome string, cfg providerConfig) error {
 	b.WriteString(oacProviderSlug)
 	b.WriteString("]\n")
 
-	name := strings.TrimSpace(cfg.Name)
-	if name == "" {
-		name = "OpenAgentCore"
-	}
 	b.WriteString("name = ")
-	b.WriteString(tomlQuoteString(name))
+	b.WriteString(tomlQuoteString("OpenAgentCore"))
 	b.WriteByte('\n')
 
 	b.WriteString("base_url = ")

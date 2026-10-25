@@ -6,8 +6,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 )
 
-var _ sandbox.SandboxProvider = (*Provider)(nil)
-
 // Operations is this adapter's complete authored resource contract.
 func Operations() providercontract.Operations {
 	return providercontract.Operations{
@@ -19,12 +17,12 @@ func Operations() providercontract.Operations {
 		"Initial":            {State: providercontract.Supported},
 		"NewCompute":         {State: providercontract.Supported},
 		"GetCompute":         {State: providercontract.Supported},
-		"RenewCompute":       {State: providercontract.Supported},
 		"Suspend":            {State: providercontract.Supported},
 		"Resume":             {State: providercontract.Supported},
 		"KillCompute":        {State: providercontract.Supported},
-		"DeleteRetained":     {State: providercontract.Supported},
+		"DeleteSnapshot":     {State: providercontract.Supported},
 		"RunCommandCompute":  {State: providercontract.Supported},
+		"RenewCompute":       {State: providercontract.Supported},
 		"ResumeCompute":      {State: providercontract.Supported},
 		"RestorePreparation": {State: providercontract.Unsupported, Reason: "e2b_does_not_support_preparation_cache"},
 		"SavePreparation":    {State: providercontract.Unsupported, Reason: "e2b_does_not_support_preparation_cache"},

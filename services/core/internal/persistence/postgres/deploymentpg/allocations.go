@@ -14,7 +14,6 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/pgunit"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/placementpg"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/persistence/postgres/sessionpg"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sessions"
 )
 
@@ -309,7 +308,6 @@ func (t *reservationTx) InsertAllocation(a deployment.NewAllocation) (deployment
 	row, err := t.q.CreateRuntimeAllocation(t.ctx, sqlc.CreateRuntimeAllocationParams{
 		ID: id, EnvironmentID: t.environment, DeviceID: device, ProviderKey: provider, NodeID: node,
 		DeploymentGeneration: pgtype.Int8{Int64: int64(a.Generation), Valid: true},
-		ProtocolVersion:      sandbox.SuspensionStateVersion,
 	})
 	if err != nil {
 		return deployment.Allocation{}, err

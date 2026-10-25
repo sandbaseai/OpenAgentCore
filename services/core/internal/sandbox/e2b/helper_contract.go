@@ -11,21 +11,21 @@ import (
 //go:generate go run ./internal/contractgen
 
 // This adapter-private boundary is documented in tools/e2b-provider/README.md.
-const ProtocolVersion = 4
+const ProtocolVersion = 2
 const MaxOutputBytes = 1024 * 1024
 const MaxRequestBytes = 72 * 1024 * 1024
 const MaxResponseBytes = 16 * 1024 * 1024
-const MaxCredentialReferences = 32
+const MaxCredentialReferences = 3
 const MaxCommandInputBytes = sandbox.MaxCommandInputBytes
 
 // HelperOperations declares the complete set of one-shot helper operations.
 func HelperOperations() []string {
-	return []string{"create", "inspect", "renew", "kill", "command", "validate_deployment", "observe", "list_templates", "list_builds", "verify_credential", "compute_info", "compute_renew", "suspend", "resume", "compute_kill", "delete_retained", "compute_command", "resume_compute"}
+	return []string{"create", "inspect", "renew", "kill", "command", "validate_deployment", "observe", "list_templates", "list_builds", "verify_credential", "compute", "renew_compute", "suspend", "resume", "kill_compute", "delete_snapshot", "command_compute", "resume_compute"}
 }
 
 // HelperErrors are sanitized wire outcomes; an empty code denotes success.
 func HelperErrors() []string {
-	return []string{"", "invalid", "ownership", "exists", "not_found", "command_unconfirmed", "unconfirmed", "template_invalid", "team_mismatch", "unauthorized"}
+	return []string{"", "invalid", "ownership", "exists", "not_found", "command_unconfirmed", "unconfirmed", "template_invalid", "team_mismatch", "unauthorized", "checkpoint_unusable"}
 }
 
 // Validate checks the operation envelope before the helper can start. Native
@@ -55,26 +55,9 @@ func (q Request) Validate() error {
 		if !validReference(q.Reference) {
 			return sandbox.ErrInvalid
 		}
-	}
-
-	switch q.Operation {
-	case "compute_info", "compute_renew", "compute_kill", "compute_command", "resume_compute":
-		if q.Compute == nil || q.Compute.Name != q.Reference.AllocationID || (q.Operation != "compute_info" && q.Compute.ID == "") {
-			return sandbox.ErrInvalid
-		}
-		if q.Operation == "compute_command" && q.Command == nil {
-			return sandbox.ErrInvalid
-		}
-	case "suspend":
-		if q.Suspend == nil || q.Suspend.Reference != q.Reference || !validID(q.Suspend.OperationID) || q.Suspend.Source.Name != q.Reference.AllocationID || q.Suspend.Source.ID == "" {
-			return sandbox.ErrInvalid
-		}
-	case "resume":
-		if q.Resume == nil || q.Resume.Workspace != nil || q.Resume.Reference != q.Reference || !validID(q.Resume.OperationID) || sandbox.ValidateRetained(q.Resume.Retained) != nil || q.Resume.Retained.Reference != q.Reference.AllocationID {
-			return sandbox.ErrInvalid
-		}
-	case "delete_retained":
-		if q.Retained == nil || sandbox.ValidateRetained(*q.Retained) != nil || q.Retained.Reference != q.Reference.AllocationID {
+		present := map[string]bool{"compute": q.Compute != nil, "renew_compute": q.Compute != nil, "kill_compute": q.Compute != nil, "resume_compute": q.Compute != nil,
+			"command_compute": q.Compute != nil && q.Command != nil, "suspend": q.Suspend != nil, "resume": q.Resume != nil, "delete_snapshot": q.Snapshot != nil}
+		if want, checkpoint := present[q.Operation]; checkpoint && !want {
 			return sandbox.ErrInvalid
 		}
 	}
@@ -94,14 +77,14 @@ type Request struct {
 	Compute          *sandbox.Compute             `json:",omitempty"`
 	Suspend          *sandbox.SuspendRequest      `json:",omitempty"`
 	Resume           *sandbox.ResumeRequest       `json:",omitempty"`
-	Retained         *sandbox.RetainedState       `json:",omitempty"`
+	Snapshot         *sandbox.SnapshotIdentity    `json:",omitempty"`
 	Deadline         time.Time
 }
 type Response struct {
 	Version         int
-	State           *sandbox.ComputeState  `json:",omitempty"`
 	Info            *sandbox.Info          `json:",omitempty"`
 	Command         *sandbox.CommandResult `json:",omitempty"`
+	State           *sandbox.ComputeState  `json:",omitempty"`
 	ErrorCode       string
 	DeploymentValid bool              `json:",omitempty"`
 	TemplateBuild   *TemplateBuild    `json:",omitempty"`

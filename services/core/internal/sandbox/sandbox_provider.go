@@ -59,10 +59,12 @@ var (
 type Reference struct{ TenantID, EnvironmentID, AllocationID string }
 
 type Bootstrap struct {
-	Workspace *workspacefs.Binding `json:",omitempty"`
 	Harness   string
+	Workspace *workspacefs.Binding `json:",omitempty"`
 	Reference
 	SessionID, DeviceID, CoreURL, Credential string
+	// SuspendControl is true exactly when the Provider declares checkpoint support.
+	SuspendControl bool
 }
 
 // Info describes compute only. Running does not establish daemon authentication,
@@ -115,18 +117,21 @@ type SandboxProvider interface {
 	// The checkpoint lifecycle supplies exact-incarnation operations; Worker and
 	// Store remain the lifecycle owner. Its operations share one declaration.
 	Initial(context.Context, Reference) (Compute, error)
-	NewCompute(context.Context, Reference, uint64, *RetainedState) (Compute, error)
+	NewCompute(context.Context, Reference, uint64, *SnapshotIdentity) (Compute, error)
 	// GetCompute returns ErrNotFound only after the owning node verified that
 	// the exact incarnation no longer exists.
 	GetCompute(context.Context, Reference, Compute) (ComputeState, error)
-	RenewCompute(context.Context, Reference, Compute) (ComputeState, error)
 	Suspend(context.Context, SuspendRequest) (ComputeState, error)
 	Resume(context.Context, ResumeRequest) (ComputeState, error)
 	KillCompute(context.Context, Reference, Compute) error
-	DeleteRetained(context.Context, Reference, RetainedState) error
+	DeleteSnapshot(context.Context, Reference, SnapshotIdentity) error
 	RunCommandCompute(context.Context, Reference, Compute, Command) (CommandResult, error)
 	// ResumeCompute thaws only the same resident instance after an aborted pause.
 	ResumeCompute(context.Context, Reference, Compute) (ComputeState, error)
+	// RenewCompute extends the native lease of the exact running incarnation
+	// where the Provider has one, and otherwise observes exactly like
+	// GetCompute. It never revives stopped compute.
+	RenewCompute(context.Context, Reference, Compute) (ComputeState, error)
 
 	// The preparation cache keeps the Environment filesystem left by one finished
 	// preparation. Key is opaque and the adapter owns storage and lifetime. Both
@@ -143,20 +148,9 @@ type SandboxProvider interface {
 // requiredOperations are supported by every Provider.
 var requiredOperations = []string{"Create", "GetInfo", "Renew", "Kill", "RunCommand"}
 
-// suspensionOperations are all supported or all unsupported: partial cleanup or
+// checkpointOperations are all supported or all unsupported: partial cleanup or
 // restore support cannot safely own a compute incarnation.
-var suspensionOperations = []string{"Initial", "NewCompute", "GetCompute", "RenewCompute", "Suspend", "Resume", "KillCompute", "DeleteRetained", "RunCommandCompute", "ResumeCompute"}
-
-// ValidateRetained checks the shared envelope; only its adapter interprets Data.
-func ValidateRetained(s RetainedState) error {
-	if s.Compatibility != (CheckpointCompatibility{}) && s.Compatibility.Validate() != nil {
-		return ErrInvalid
-	}
-	if s.Reference == "" || s.ID == "" || s.OperationID == "" || s.SourceID == "" || s.SourceName == "" || len(s.Data) == 0 || len(s.Data) > 64*1024 {
-		return ErrInvalid
-	}
-	return nil
-}
+var checkpointOperations = []string{"Initial", "NewCompute", "GetCompute", "Suspend", "Resume", "KillCompute", "DeleteSnapshot", "RunCommandCompute", "ResumeCompute", "RenewCompute"}
 
 // preparationOperations are both supported or both unsupported.
 var preparationOperations = []string{"RestorePreparation", "SavePreparation"}
@@ -167,7 +161,7 @@ type Compute struct {
 	Generation   uint64
 	Name         string
 	ID           string
-	RestoredFrom *RetainedState
+	RestoredFrom *SnapshotIdentity
 }
 
 // CheckpointCompatibility identifies an adapter-verified private checkpoint domain
@@ -184,29 +178,47 @@ func (c CheckpointCompatibility) Validate() error {
 	return nil
 }
 
-// RetainedState is adapter-owned recoverable state; Data stays opaque to Core.
-// Optional Compatibility declares portable checkpoint qualification.
-type RetainedState struct {
-	Compatibility    CheckpointCompatibility `json:",omitzero"`
+// MaxSnapshotEvidenceBytes bounds SnapshotIdentity.Evidence.
+const MaxSnapshotEvidenceBytes = 4096
+
+// SnapshotIdentity is provider evidence from a verified full snapshot. Core
+// persists it unchanged and records consumption separately; it never invents
+// paths, checksums, native checkpoint fields, or source identity.
+// Evidence is the Provider's private verification evidence: Core and the node
+// proxy store and return it unchanged and never interpret it.
+type SnapshotIdentity struct {
+	Compatibility    CheckpointCompatibility
 	Reference        string
 	ID               string
-	Data             string
+	Evidence         string
 	OperationID      string
 	SourceGeneration uint64
 	SourceName       string
 	SourceID         string
 }
 
+// Validate checks the fields Core relies on.
+func (s SnapshotIdentity) Validate() error {
+	if len(s.Evidence) > MaxSnapshotEvidenceBytes {
+		return ErrInvalid
+	}
+	return s.Compatibility.Validate()
+}
+
 type ComputeState struct {
+	Compute Compute
+	// Status is the native state of Compute. "stopped" and "crashed" mean the
+	// adapter verified that the exact incarnation's process no longer exists;
+	// its record or disks can remain until KillCompute removes them.
+	Status            string
+	BootstrapComplete bool
+	Snapshot          *SnapshotIdentity
+	// SourceStopped proves the checkpoint is durable and all source-local compute
+	// and capture obligations have settled, so another node can own restoration.
+	SourceStopped bool
+	// RestoreAttemptClosed echoes the exact Resume OperationID only after a
+	// never-dispatched attempt is durably closed against late native execution.
 	RestoreAttemptClosed string
-	Compute              Compute
-	Status               string
-	BootstrapComplete    bool
-	Retained             *RetainedState
-	ResourcesReleased    bool
-	// SuspendSettled without Retained also durably fences every late dispatch
-	// of this exact source and operation; native absence alone is insufficient.
-	SuspendSettled bool
 }
 
 // Terminated reports a verified stopped or crashed incarnation.
@@ -215,68 +227,29 @@ func (s ComputeState) Terminated() bool { return s.Status == "stopped" || s.Stat
 // ClosesRestoreAttempt validates a never-executed closure against the exact
 // persisted request. Absence without this operation-bound evidence is unknown.
 func (s ComputeState) ClosesRestoreAttempt(q ResumeRequest) bool {
-	return q.ReconcileOnly && q.OperationID != "" && s.RestoreAttemptClosed == q.OperationID && s.Status == "absent" &&
-		s.Compute.ID == q.Target.ID && s.Compute.Name == q.Target.Name && s.Compute.Generation == q.Target.Generation &&
-		s.Compute.RestoredFrom != nil && q.Target.RestoredFrom != nil && *s.Compute.RestoredFrom == q.Retained && *q.Target.RestoredFrom == q.Retained &&
-		!s.BootstrapComplete && !s.ResourcesReleased && s.Retained == nil
+	return q.ObserveOnly && q.OperationID != "" && s.RestoreAttemptClosed == q.OperationID && s.Status == "absent" &&
+		s.Compute.ID == "" && q.Target.ID == "" && s.Compute.Name == q.Target.Name && s.Compute.Generation == q.Target.Generation &&
+		s.Compute.RestoredFrom != nil && q.Target.RestoredFrom != nil && *s.Compute.RestoredFrom == q.Snapshot && *q.Target.RestoredFrom == q.Snapshot &&
+		!s.BootstrapComplete && !s.SourceStopped && s.Snapshot == nil
 }
 
 type SuspendRequest struct {
 	Reference   Reference
 	OperationID string
 	Source      Compute
-	Retained    *RetainedState
-	// Recovery settles the previous attempt without another capture.
-	// Ownership-verified cleanup of a durable retained artifact may complete.
-	ReconcileOnly bool
+	Snapshot    *SnapshotIdentity
+	// Recovery observes the previous attempt and never starts a new capture.
+	ObserveOnly bool
 }
 type ResumeRequest struct {
 	Workspace   *workspacefs.Binding `json:",omitempty"`
 	Reference   Reference
 	OperationID string
-	Retained    RetainedState
+	Snapshot    SnapshotIdentity
 	Target      Compute
 	// Recovery observes the previous target and never starts a new restore.
-	ReconcileOnly bool
+	ObserveOnly bool
 }
-
-// ValidateComputeResult binds an observation to its precommitted incarnation.
-func ValidateComputeResult(want, got Compute) error {
-	if got.ID == "" || got.Name != want.Name || got.Generation != want.Generation || (want.ID != "" && got.ID != want.ID) || (want.RestoredFrom == nil) != (got.RestoredFrom == nil) {
-		return ErrOwnership
-	}
-	if want.RestoredFrom != nil && *want.RestoredFrom != *got.RestoredFrom {
-		return ErrOwnership
-	}
-	return nil
-}
-
-// ValidateSuspendResult distinguishes settled rollback from uncertain native work.
-func ValidateSuspendResult(q SuspendRequest, s ComputeState) error {
-	if ValidateComputeResult(q.Source, s.Compute) != nil {
-		return ErrOwnership
-	}
-	if s.Retained == nil {
-		if !s.SuspendSettled || !s.BootstrapComplete {
-			return ErrComputeUnconfirmed
-		}
-		if !q.ReconcileOnly || s.ResourcesReleased || (s.Status != "running" && s.Status != "paused") {
-			return ErrComputeUnconfirmed
-		}
-		return nil
-	}
-	v := s.Retained
-	if ValidateRetained(*v) != nil || v.OperationID != q.OperationID || v.SourceID != q.Source.ID || v.SourceName != q.Source.Name || v.SourceGeneration != q.Source.Generation || (q.Retained != nil && *q.Retained != *v) {
-		return ErrOwnership
-	}
-	if !s.SuspendSettled || !s.BootstrapComplete || !s.ResourcesReleased || s.Status != "suspended" {
-		return ErrComputeUnconfirmed
-	}
-	return nil
-}
-
-// SuspensionStateVersion fences incompatible durable lifecycle shapes.
-const SuspensionStateVersion = "1"
 
 // ValidateProvider checks a constructed Provider's declaration.
 func ValidateProvider(p SandboxProvider) error {
@@ -312,9 +285,9 @@ func ValidateOperations(operations providercontract.Operations) error {
 			return fmt.Errorf("%w: required operation %s", providercontract.ErrContract, name)
 		}
 	}
-	for _, name := range suspensionOperations {
-		if operations[name].State != operations["Initial"].State {
-			return fmt.Errorf("%w: incomplete suspension lifecycle", providercontract.ErrContract)
+	for _, name := range checkpointOperations {
+		if (operations[name].State == providercontract.Supported) != SupportsCheckpoint(operations) {
+			return fmt.Errorf("%w: incomplete checkpoint lifecycle", providercontract.ErrContract)
 		}
 	}
 	if operations[preparationOperations[0]].State != operations[preparationOperations[1]].State {
@@ -323,8 +296,10 @@ func ValidateOperations(operations providercontract.Operations) error {
 	return nil
 }
 
-func SupportsSuspension(p SandboxProvider) bool {
-	return providercontract.Require(p, "Initial") == nil
+// SupportsCheckpoint is the one predicate over a declaration: the checkpoint
+// operations are all supported or all unsupported, so Initial decides.
+func SupportsCheckpoint(operations providercontract.Operations) bool {
+	return operations["Initial"].State == providercontract.Supported
 }
 
 // ProcessPaths locates installed adapter helpers and their private state. The
@@ -352,6 +327,77 @@ type ConfigurationRequirements struct {
 	Discovery              providercontract.Support
 	SelectionDiscovery     providercontract.Support
 	CredentialVerification providercontract.Support
+}
+
+// Text is operator-facing copy in every supported locale.
+type Text struct {
+	EN   string `json:"en"`
+	ZHCN string `json:"zh-CN"`
+}
+
+func (t Text) valid() bool { return t.EN != "" && t.ZHCN != "" }
+
+// SetupField is one value an operator enters to connect the Provider. A Secret
+// field is submitted as the credential, any other as configuration. An Optional
+// field may stay empty and the Provider supplies its default. A Discovered field
+// takes its value from DiscoverConfiguration. Help may be empty in both locales.
+type SetupField struct {
+	Name       string `json:"name"`
+	Secret     bool   `json:"secret"`
+	Optional   bool   `json:"optional"`
+	Discovered bool   `json:"discovered"`
+	Label      Text   `json:"label"`
+	Help       Text   `json:"help"`
+}
+
+// SetupPreset is a named set of field values, such as one hosted service.
+// CredentialURL, when set, is where the operator creates the credential.
+type SetupPreset struct {
+	Label         string            `json:"label"`
+	Values        map[string]string `json:"values"`
+	CredentialURL string            `json:"credential_url,omitempty"`
+}
+
+// SetupDeclaration is everything the console needs to set up one Provider.
+// Label is the Provider's proper noun. Cautions are risks an operator confirms
+// before choosing it. Recommended marks the default among Providers of one
+// deployment mode, and at most one does.
+type SetupDeclaration struct {
+	Label       string        `json:"label"`
+	Summary     Text          `json:"summary"`
+	Cautions    []Text        `json:"cautions"`
+	Recommended bool          `json:"recommended"`
+	Fields      []SetupField  `json:"fields"`
+	Presets     []SetupPreset `json:"presets"`
+}
+
+// Validate checks the declaration against the Provider's configuration
+// requirements: secret fields exist exactly when a credential is required,
+// discovered fields exactly when discovery is supported, and every text has
+// both locales.
+func (d SetupDeclaration) Validate(r ConfigurationRequirements) error {
+	secret, discovered := false, false
+	ok := d.Label != "" && d.Summary.valid()
+	names := map[string]bool{}
+	for _, f := range d.Fields {
+		ok = ok && f.Name != "" && !names[f.Name] && f.Label.valid() && (f.Help == Text{} || f.Help.valid())
+		names[f.Name] = true
+		secret, discovered = secret || f.Secret, discovered || f.Discovered
+		ok = ok && !(f.Secret && (f.Optional || f.Discovered))
+	}
+	for _, c := range d.Cautions {
+		ok = ok && c.valid()
+	}
+	for _, p := range d.Presets {
+		ok = ok && p.Label != ""
+		for name := range p.Values {
+			ok = ok && names[name]
+		}
+	}
+	if !ok || secret != (r.Credential == Required) || discovered != (r.Discovery.State == providercontract.Supported) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 // DeploymentPolicy is the deployment declaration. Workspace, when present, means
@@ -441,12 +487,33 @@ type Built struct {
 	Quiescent func() bool
 }
 
-// ConfigurationDiscoveryInput is a transient read-only request. Query is typed
-// and validated by the adapter; it cannot select a compute mutation.
+// ConfigurationDiscoveryQuery selects the options of one Discovered field. Path
+// holds the values chosen at earlier levels, empty for the first level.
+type ConfigurationDiscoveryQuery struct {
+	Field string   `json:"field"`
+	Path  []string `json:"path"`
+}
+
+// ConfigurationDiscoveryInput is a transient read-only request. The adapter
+// validates Configuration and Credential; Query cannot select a compute mutation.
 type ConfigurationDiscoveryInput struct {
-	Configuration json.RawMessage `json:"configuration" swaggertype:"object"`
-	Credential    json.RawMessage `json:"credential" swaggertype:"object"`
-	Query         json.RawMessage `json:"query" swaggertype:"object"`
+	Configuration json.RawMessage             `json:"configuration" swaggertype:"object"`
+	Credential    json.RawMessage             `json:"credential" swaggertype:"object"`
+	Query         ConfigurationDiscoveryQuery `json:"query"`
+}
+
+// ConfigurationOption is one choice for a Discovered field. A Complete option's
+// Value is the field's value; any other is a Path element for the next level.
+type ConfigurationOption struct {
+	Value     string     `json:"value" binding:"required"`
+	Label     string     `json:"label" binding:"required"`
+	Resources *Resources `json:"resources,omitempty"`
+	Complete  bool       `json:"complete" binding:"required"`
+}
+
+// ConfigurationOptions is the result of one discovery level.
+type ConfigurationOptions struct {
+	Options []ConfigurationOption `json:"options" binding:"required"`
 }
 
 // ConfigurationAdapter owns all interpretation of provider configuration.
@@ -466,13 +533,11 @@ type ConfigurationAdapter interface {
 	ResolveChange(next, previous Selection) (Selection, error)
 	WithCredential(owner, candidate Configuration) (Configuration, error)
 	Equal(a, b Configuration) (bool, error)
-	// CredentialAccessEqual compares normalized credentials and all connection
-	// selectors that determine resource access, excluding templates and capacity.
-	// Callers must also preserve explicit credential-submission intent.
+	// CredentialAccessEqual excludes template and capacity changes from access verification.
 	CredentialAccessEqual(a, b Configuration) (bool, error)
 	// DiscoverConfiguration lists the native catalog a credential can use,
 	// without a saved deployment.
-	DiscoverConfiguration(context.Context, ConfigurationDiscoveryInput, ProcessPaths) (json.RawMessage, error)
+	DiscoverConfiguration(context.Context, ConfigurationDiscoveryInput, ProcessPaths) (ConfigurationOptions, error)
 	// DiscoverSelection resolves a candidate's omitted native values before
 	// commit. Loading retained ownership never calls it.
 	DiscoverSelection(context.Context, DirectConfig) (Selection, error)

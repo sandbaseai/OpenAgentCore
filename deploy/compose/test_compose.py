@@ -74,7 +74,6 @@ class ComposeTests(unittest.TestCase):
             self.assertNotIn('platform', service)
         self.assertEqual({v['target'] for v in services['web']['volumes']}, {'/run/oac', '/node-payload'})
         self.assertIsNone(services['core']['command'])
-        self.assertNotIn('OAC_WEB_INSTALLATION_SOCKET', services['web']['environment'])
         self.assertEqual(services['init']['command'], ['/usr/local/bin/oac', 'init'])
         # Each service reports its own health, so up --wait waits for Core directly.
         self.assertEqual(services['core']['healthcheck']['test'], ['CMD', '/usr/local/bin/oac-core', 'healthcheck'])
@@ -114,7 +113,7 @@ class ComposeTests(unittest.TestCase):
             return {name: [(port.get('host_ip'), port['published']) for port in service.get('ports', [])]
                     for name, service in config['services'].items() if service.get('ports')}
         self.assertEqual(ports(self.compose), {'web': [('127.0.0.1', '8080')]})
-        env = dict(os.environ, OAC_DATA_DIR='/tmp/oac-compose-fixture', OAC_HOST='0.0.0.0', OAC_WEB_PORT='9080')
+        env = dict(os.environ, OAC_HOST='0.0.0.0', OAC_WEB_PORT='9080')
         configured = json.loads(subprocess.check_output(
             ['docker', 'compose', '--env-file', os.devnull, '-f', str(self.compose_file),
              'config', '--format', 'json'], env=env))

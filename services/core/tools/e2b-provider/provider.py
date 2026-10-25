@@ -1,29 +1,43 @@
-"""Five bounded SDK operations for an already authorized Core allocation, plus
+"""Bounded SDK operations for an already authorized Core allocation, plus
 read-only deployment validation and observation."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+import sys
 import json
 import math
-import sys
 import time
 from datetime import datetime, timezone
 from uuid import UUID
 
-from e2b import FileType, Sandbox, SandboxQuery, SandboxState
+from e2b import Sandbox, SandboxQuery, SandboxState
 from e2b.api.client.models.sandbox_metric import SandboxMetric
 from e2b.exceptions import AuthenticationException, FileNotFoundException, SandboxNotFoundException
 
 from sdk import connection_material, definitely_rejected, list_builds, list_templates, read_metrics, restore, run, sdk_options, validate_deployment, verify_team_template
 from state import Failure, Receipt, private_root, read_receipt
 from helper_contract_generated import (PROTOCOL_VERSION, OPERATIONS, REQUEST_FIELDS, REFERENCE_FIELDS,
-    MAX_CREDENTIAL_REFERENCES, MANAGED_BOOTSTRAP_FIELDS, MANAGED_BOOTSTRAP_REQUIRED_FIELDS)
+    MAX_CREDENTIAL_REFERENCES, MANAGED_BOOTSTRAP_FIELDS, MANAGED_BOOTSTRAP_REQUIRED_FIELDS, RUNTIME_BOOTSTRAP_VERSION)
 
 PREFIX = 'oac_'
 FIELDS = ('InstallationID', *REFERENCE_FIELDS)
+PENDING_PAUSE_SETTLE_SECONDS = 600  # a pause request settles in seconds; one still unpaused after ten minutes is taken as not applied
 
-# Execute the existing protected entry point and return its durable receipt on
-# the same command stream. A read failure leaves successful startup recoverable
-# through Inspect, without replaying initialization.
+# Exits 78 unless the template carries the startup script and a contract for this Runtime bootstrap version.
+TEMPLATE_CHECK = """import importlib.util, os, sys
+root, version = sys.argv[1], int(sys.argv[2])
+script = os.path.join(root, 'managed_init.py')
+try:
+    spec = importlib.util.spec_from_file_location('template_contract', os.path.join(root, 'helper_contract_generated.py'))
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    current = getattr(contract, 'RUNTIME_BOOTSTRAP_VERSION', None)
+except Exception:
+    current = None
+sys.exit(78 if not os.path.isfile(script) or not os.access(script, os.R_OK) or current != version else 0)
+"""
+COMPUTE_OPERATIONS = ('compute', 'renew_compute', 'resume_compute', 'suspend', 'resume', 'kill_compute', 'delete_snapshot', 'command_compute')
+
+
 BOOTSTRAP_SCRIPT = """import runpy,sys
 runpy.run_path('/opt/oac-e2b/managed_init.py', run_name='__main__')
 try:
@@ -151,9 +165,6 @@ class Provider:
         bootstrap = request.get('Bootstrap')
         if bootstrap is not None and (not isinstance(bootstrap, dict) or bootstrap.get('Workspace') is not None):
             raise Failure('invalid')
-        resume = request.get('Resume')
-        if resume is not None and (not isinstance(resume, dict) or resume.get('Workspace') is not None):
-            raise Failure('invalid')
         deadline = datetime.fromisoformat(request['Deadline'].replace('Z', '+00:00'))
         self.deadline = time.monotonic() + (deadline - datetime.now(timezone.utc)).total_seconds()
         self.metadata = {PREFIX + field.lower(): value for field, value in
@@ -242,7 +253,7 @@ class Provider:
         self.check_domain(material['sandbox_domain'])
         return restore(material, self.options())
 
-    def inspect(self):
+    def inspect(self, qualify=True):
         if self.rejected_absence():
             return None
         found = self.discover()
@@ -253,7 +264,8 @@ class Provider:
         if len(found) != 1:
             raise Failure('unconfirmed')
         cloud = found[0]
-        self.qualified(cloud)
+        if qualify:
+            self.qualified(cloud)
         record = self.receipt.data or {}
         if (cloud.state == 'running' and not record.get('bootstrap_complete') and record.get('connection')
                 and record.get('status') not in ('configuration_rejected', 'bootstrap_failed', 'killed')):
@@ -263,7 +275,11 @@ class Provider:
             except FileNotFoundException:
                 receipt = None
             if receipt is not None:
-                self.accept_bootstrap_receipt(receipt)
+                expected = record.get('bootstrap_identity')
+                if (receipt.get('identity') != expected or receipt.get('status') != 'daemon_started' or
+                        type(receipt.get('daemon_pid')) is not int or receipt['daemon_pid'] <= 0):
+                    raise Failure('ownership')
+                self.receipt.save(settled=True, bootstrap_complete=True)
         return cloud
 
     def accept_bootstrap_receipt(self, receipt):
@@ -283,51 +299,38 @@ class Provider:
         identity = dict(self.reference, InstallationID=self.config['InstallationID'],
                         SessionID=bootstrap['SessionID'], DeviceID=bootstrap['DeviceID'])
         self.receipt.save(status='create_pending', bootstrap_identity=identity)
-        with create_stage('sandbox_create'):
-            try:
+        try:
+            with create_stage('sandbox_create'):
                 cloud = Sandbox.create(template=self.config['Template'], timeout=self.config['TimeoutSeconds'],
                                        metadata=self.metadata, lifecycle={'on_timeout': 'kill', 'auto_resume': False},
                                        **self.options())
-            except Exception as error:
-                if definitely_rejected(error):
-                    self.receipt.save(status='rejected', settled=True)
-                raise Failure('unconfirmed') from None
-        self.receipt.save(status='created', ids=[cloud.sandbox_id], connection=connection_material(cloud),
-                          compute={'Generation': 0, 'Name': self.reference['AllocationID'],
-                                   'ID': cloud.sandbox_id, 'RestoredFrom': None})
+        except Exception as error:
+            if definitely_rejected(error):
+                self.receipt.save(status='rejected', settled=True)
+            raise Failure('unconfirmed') from None
+        self.receipt.save(status='created', ids=[cloud.sandbox_id], connection=connection_material(cloud))
         # A create response must not steer envd traffic to an unrelated host.
         self.check_domain(cloud.sandbox_domain)
         # SDK Create returns connection material, but no metadata or resources.
         # Read its exact ID before writing credentials, even when Core adopts the
         # template's resources and does not supply explicit limits.
-        with create_stage('ownership_check'):
-            try:
+        try:
+            with create_stage('ownership_check'):
                 detail = self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options()))
                 self.qualified(detail)
-            except Failure:
-                self.receipt.save(status='configuration_rejected', settled=True)
-                raise
+        except Failure:
+            self.receipt.save(status='configuration_rejected', settled=True)
+            raise
         # Validate the current template entry point before writing any credential.
         with create_stage('template_check'):
-            try:
-                with create_stage('template_get_info'):
-                    entry = cloud.files.get_info('/opt/oac-e2b/managed_init.py',
-                                                 user='root', request_timeout=self.remaining())
-                if entry.type != FileType.FILE:
-                    self.receipt.save(status='bootstrap_failed', settled=True)
-                    raise Failure('template_invalid')
-                # A successful download can also refer to a special file. Check
-                # the type first, then verify readability without a probe process.
-                with create_stage('template_read_check'):
-                    with cloud.files.read('/opt/oac-e2b/managed_init.py', format='stream',
-                                          user='root', request_timeout=self.remaining()):
-                        pass
-            except FileNotFoundException:
+            check = run(cloud, {'Args': ['/usr/bin/python3', '-I', '-c', TEMPLATE_CHECK, '/opt/oac-e2b', str(RUNTIME_BOOTSTRAP_VERSION)]},
+                        self.remaining, user='root')
+            if check['ExitCode'] != 0:
                 self.receipt.save(status='bootstrap_failed', settled=True)
-                raise Failure('template_invalid') from None
+                raise Failure('template_invalid' if check['ExitCode'] == 78 else 'unconfirmed')
         payload = dict(bootstrap, InstallationID=self.config['InstallationID'],
                        RuntimeBootstrap=self.q['RuntimeBootstrap'])
-        del payload['CoreURL'], payload['Credential'], payload['Harness']
+        del payload['CoreURL'], payload['Credential'], payload['SuspendControl'], payload['Harness']
         if (set(payload) - set(MANAGED_BOOTSTRAP_FIELDS) or
                 not set(MANAGED_BOOTSTRAP_REQUIRED_FIELDS) <= set(payload)):
             raise Failure('invalid')
@@ -358,13 +361,10 @@ class Provider:
         Sandbox.set_timeout(cloud.sandbox_id, self.config['TimeoutSeconds'], **self.options())
         return self.qualified(self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options())))
 
-    def kill(self, expected_paused_id=None):
+    def kill(self):
         if self.rejected_absence():
             return
         found = self.discover()
-        if expected_paused_id is not None and (len(found) > 1 or any(
-                cloud.sandbox_id != expected_paused_id or cloud.state != 'paused' for cloud in found)):
-            raise Failure('unconfirmed')
         # The allocation flock excludes any still-running local Create helper.
         # A matching actual VM proves the original request reached allocation.
         known = bool((self.receipt.data or {}).get('ids'))
@@ -409,6 +409,171 @@ class Provider:
         if len(found) != 1 or found[0].sandbox_id != ids[0] or not isinstance(point, dict):
             return {'Status': 'unavailable'}
         return observed(found[0], point)
+
+    # One sandbox spans every generation. The receipt's generation says which
+    # incarnation owns it: pause leaves it as the snapshot and resume advances it.
+    def generation(self):
+        return (self.receipt.data or {}).get('generation', 0)
+
+    def current(self, compute):
+        """The sandbox of the exact current incarnation; any other generation is absent."""
+        if compute['Generation'] != self.generation():
+            raise Failure('not_found')
+        cloud = self.inspect()
+        if cloud is None:
+            raise Failure('not_found')
+        if compute.get('ID') and compute['ID'] != cloud.sandbox_id:
+            raise Failure('ownership')
+        return cloud
+
+    def state(self, compute, cloud, **extra):
+        status = getattr(cloud.state, 'value', cloud.state)
+        return dict(Compute=dict(compute, ID=cloud.sandbox_id), Status=status,
+                    BootstrapComplete=bool((self.receipt.data or {}).get('bootstrap_complete')), **extra)
+
+    def lease(self, cloud):
+        Sandbox.set_timeout(cloud.sandbox_id, self.config['TimeoutSeconds'], **self.options())
+        return self.qualified(self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options())))
+
+    def get_compute(self):
+        compute = self.q['Compute']
+        return self.state(compute, self.current(compute))
+
+    def renew_compute(self):
+        compute = self.q['Compute']
+        cloud = self.current(compute)
+        if cloud.state == 'running':
+            cloud = self.lease(cloud)
+        return self.state(compute, cloud)
+
+    def resume_compute(self):
+        """Thaw only a running source; a paused sandbox is a snapshot, not a source."""
+        compute = self.q['Compute']
+        cloud = self.current(compute)
+        if cloud.state != 'running':
+            raise Failure('unconfirmed')
+        return self.state(compute, self.lease(cloud))
+
+    def command_compute(self):
+        cloud = self.current(self.q['Compute'])
+        if cloud.state != 'running' or not self.receipt.data.get('bootstrap_complete'):
+            raise Failure('unconfirmed')
+        return run(self.client(cloud), self.q['Command'], self.remaining)
+
+    def snapshot(self, operation, source, cloud):
+        return {'Compatibility': self.config['Compatibility'], 'Reference': source['Name'] + ':s-' + operation,
+                'ID': cloud.sandbox_id, 'Evidence': '',
+                'OperationID': operation, 'SourceGeneration': source['Generation'], 'SourceName': source['Name'],
+                'SourceID': cloud.sandbox_id}
+
+    def suspend(self):
+        request = self.q['Suspend']
+        source, operation = request['Source'], request['OperationID']
+        cloud = self.current(source)
+        if cloud.state == 'running' and not request['ObserveOnly']:
+            # Record the attempt before the native call; pause of a paused sandbox is a no-op.
+            self.receipt.save(pause={'operation_id': operation, 'status': 'pending', 'at': time.time()})
+            Sandbox.pause(cloud.sandbox_id, **self.options())
+            cloud = self.qualified(self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options())))
+        pause = (self.receipt.data or {}).get('pause') or {}
+        if cloud.state != 'paused' or pause.get('operation_id') != operation:
+            # A dispatched pause may still take effect, so running is never reported for it.
+            pending = pause.get('operation_id') == operation and pause.get('status') == 'pending'
+            if pending and request['ObserveOnly'] and cloud.state == 'running' and time.time() - pause.get('at', time.time()) > PENDING_PAUSE_SETTLE_SECONDS:
+                # Observation proves the long-dispatched pause did not take effect; close it as not taken.
+                self.receipt.save(pause={'operation_id': operation, 'status': 'not_taken'})
+                return self.state(source, cloud)
+            if request['ObserveOnly'] and not pending:
+                return self.state(source, cloud)
+            raise Failure('unconfirmed')
+        self.receipt.save(pause={'operation_id': operation, 'status': 'paused'})
+        return self.state(source, cloud, Snapshot=self.snapshot(operation, source, cloud), SourceStopped=True)
+
+    def close_resume(self, operation, kind):
+        data = self.receipt.data or {}
+        closed = dict(data.get('closed', {}), **{operation: kind})
+        self.receipt.save(closed=dict(list(closed.items())[-32:]), resume=None)
+
+    def closed_state(self, target, operation):
+        return {'Compute': target, 'Status': 'absent', 'BootstrapComplete': False, 'RestoreAttemptClosed': operation}
+
+    def finish_resume(self, target, operation, cloud, material=None):
+        values = {'generation': target['Generation'], 'resume': {'operation_id': operation, 'status': 'resumed'}}
+        if material is not None:
+            values['connection'] = material
+        self.receipt.save(**values)
+        return self.state(target, cloud)
+
+    def resume(self):
+        request = self.q['Resume']
+        operation, snapshot, target = request['OperationID'], request['Snapshot'], request['Target']
+        data = self.receipt.data or {}
+        kind = data.get('closed', {}).get(operation)
+        if kind == 'unusable':
+            raise Failure('checkpoint_unusable')
+        if kind:
+            return self.closed_state(target, operation)
+        record = data.get('resume') or {}
+        if record.get('operation_id') == operation:
+            # Native restoration was dispatched: observe it, never dispatch again.
+            cloud = self.inspect()
+            if cloud is None:
+                raise Failure('not_found')
+            if cloud.state != 'running':
+                raise Failure('unconfirmed')
+            return self.finish_resume(target, operation, cloud)
+        if request['ObserveOnly']:
+            # No dispatch is recorded, so this attempt can still be closed durably.
+            self.close_resume(operation, 'attempt')
+            return self.closed_state(target, operation)
+        pause = data.get('pause') or {}
+        # Drift is judged below, before dispatch, as an unusable checkpoint.
+        cloud = self.inspect(qualify=False)
+        usable = (cloud is not None and cloud.state == 'paused' and pause.get('status') == 'paused' and
+                  pause.get('operation_id') == snapshot['OperationID'] and
+                  snapshot['SourceGeneration'] == self.generation() < target['Generation'] and
+                  snapshot['SourceID'] == cloud.sandbox_id)
+        if usable:
+            try:
+                self.qualified(cloud)
+            except Failure:
+                usable = False
+        if not usable:
+            self.close_resume(operation, 'unusable')
+            raise Failure('checkpoint_unusable')
+        self.receipt.save(resume={'operation_id': operation, 'target': target['Generation'], 'status': 'dispatched'})
+        try:
+            connected = Sandbox.connect(cloud.sandbox_id, timeout=self.config['TimeoutSeconds'], **self.options())
+            if connected.sandbox_id != cloud.sandbox_id:
+                raise Failure('ownership')
+            self.check_domain(connected.sandbox_domain)
+        except SandboxNotFoundException:
+            # Dispatched: the outcome is unknown and the attempt stays open.
+            raise Failure('unconfirmed') from None
+        cloud = self.qualified(self.owns(Sandbox.get_info(cloud.sandbox_id, **self.options())))
+        if cloud.state != 'running':
+            raise Failure('unconfirmed')
+        return self.finish_resume(target, operation, cloud, connection_material(connected))
+
+    def kill_compute(self):
+        """Kill only the sandbox's owning incarnation; a superseded one owns nothing."""
+        compute = self.q['Compute']
+        data = self.receipt.data or {}
+        record = data.get('resume') or {}
+        if compute['Generation'] == self.generation() or (record.get('status') == 'dispatched' and record.get('target') == compute['Generation']):
+            self.kill_owned(compute.get('ID'))
+
+    def delete_snapshot(self):
+        """A snapshot is the paused sandbox itself; one consumed by resume owns nothing."""
+        snapshot = self.q['Snapshot']
+        if snapshot['SourceGeneration'] == self.generation():
+            self.kill_owned(snapshot['SourceID'])
+
+    def kill_owned(self, sandbox_id):
+        ids = (self.receipt.data or {}).get('ids', [])
+        if sandbox_id and ids and sandbox_id not in ids:
+            raise Failure('ownership')
+        self.kill()
 
     def metadata_for(self, reference):
         return {PREFIX + field.lower(): value for field, value in
@@ -480,10 +645,6 @@ class Provider:
         with Receipt(self.q, self.remaining) as self.receipt:
             try:
                 operation = self.q['Operation']
-                if operation in ('compute_info', 'compute_renew', 'suspend', 'resume', 'compute_kill',
-                                 'delete_retained', 'compute_command', 'resume_compute'):
-                    from suspension import Suspension
-                    return Suspension(self, Sandbox, connection_material, run).execute()
                 if operation == 'kill':
                     self.kill()
                     return {'Version': PROTOCOL_VERSION, 'Info': self.info(absent=True), 'ErrorCode': ''}
@@ -493,12 +654,25 @@ class Provider:
                         raise Failure('unconfirmed')
                     result = run(self.client(cloud), self.q['Command'], self.remaining)
                     return {'Version': PROTOCOL_VERSION, 'Command': result, 'ErrorCode': ''}
+                if operation in ('compute', 'renew_compute', 'resume_compute', 'suspend', 'resume'):
+                    handler = {'compute': self.get_compute, 'renew_compute': self.renew_compute, 'resume_compute': self.resume_compute,
+                               'suspend': self.suspend, 'resume': self.resume}[operation]
+                    return {'Version': PROTOCOL_VERSION, 'State': handler(), 'ErrorCode': ''}
+                if operation == 'command_compute':
+                    return {'Version': PROTOCOL_VERSION, 'Command': self.command_compute(), 'ErrorCode': ''}
+                if operation in ('kill_compute', 'delete_snapshot'):
+                    {'kill_compute': self.kill_compute, 'delete_snapshot': self.delete_snapshot}[operation]()
+                    return {'Version': PROTOCOL_VERSION, 'ErrorCode': ''}
                 cloud = {'create': self.create, 'inspect': self.inspect, 'renew': self.renew}[operation]()
                 return {'Version': PROTOCOL_VERSION, 'Info': self.info(cloud, absent=cloud is None), 'ErrorCode': ''}
             except Failure as error:
+                if self.q['Operation'] in COMPUTE_OPERATIONS:
+                    return {'Version': PROTOCOL_VERSION, 'ErrorCode': error.code}
                 info = self.info()
                 if error.code == 'not_found':
                     info = dict(self.reference, ProviderID='', State='absent', BootstrapComplete=False, CreateSettled=False)
                 return {'Version': PROTOCOL_VERSION, 'Info': info, 'ErrorCode': error.code}
             except Exception:
+                if self.q['Operation'] in COMPUTE_OPERATIONS:
+                    return {'Version': PROTOCOL_VERSION, 'ErrorCode': 'unconfirmed'}
                 return {'Version': PROTOCOL_VERSION, 'Info': self.info(), 'ErrorCode': 'unconfirmed'}

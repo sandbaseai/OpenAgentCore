@@ -31,7 +31,7 @@ func TestWebSocketRequiresAuthorizationBearer(t *testing.T) {
 			handler := NewHandler(HandlerConfig{
 				Registry: registry,
 				Authenticator: NewAuthenticator(&stubRuntimeStore{ok: true, row: runtimedevice.Credential{
-					ID: "device", WorkspaceID: "tenant", Type: runtimedevice.RuntimeTypeAgentDaemon,
+					ID: "device", Type: runtimedevice.RuntimeTypeAgentDaemon,
 					CredentialHash: runtimedevice.HashCredential(credential),
 				}}),
 			})
@@ -78,7 +78,7 @@ func TestWebSocketNegotiatesEventCredit(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := NewRegistry()
-			handler := NewHandler(HandlerConfig{Registry: registry, Authenticator: NewAuthenticator(&stubRuntimeStore{ok: true, row: runtimedevice.Credential{ID: "device", WorkspaceID: "tenant", Type: runtimedevice.RuntimeTypeAgentDaemon, CredentialHash: runtimedevice.HashCredential(credential)}})})
+			handler := NewHandler(HandlerConfig{Registry: registry, Authenticator: NewAuthenticator(&stubRuntimeStore{ok: true, row: runtimedevice.Credential{ID: "device", Type: runtimedevice.RuntimeTypeAgentDaemon, CredentialHash: runtimedevice.HashCredential(credential)}})})
 			server := httptest.NewServer(http.HandlerFunc(handler.WS))
 			defer server.Close()
 			header := http.Header{"Authorization": {"Bearer " + credential}}

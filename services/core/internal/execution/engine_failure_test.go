@@ -16,7 +16,7 @@ func TestEngineClassificationSurvivesDrainWithoutChangingSettlement(t *testing.T
 		j := journal{writer: writer, next: 1}
 		events := make(chan proto.Envelope, 3)
 		failure, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: "raw native text", Code: "authentication_error"})
-		usage, _ := proto.NewEnvelope(proto.TypeUsage, "run", proto.Usage{InputTokens: 7})
+		usage, _ := proto.NewEnvelope(proto.TypeUsage, "run", proto.Usage{Tokens: &proto.TokenUsage{InputTokens: 7}})
 		done, _ := proto.NewEnvelope(proto.TypeDone, "run", map[string]any{"metadata": map[string]any{proto.DoneMetaAgentSessionID: "native"}})
 		events <- failure
 		events <- usage
@@ -25,14 +25,14 @@ func TestEngineClassificationSurvivesDrainWithoutChangingSettlement(t *testing.T
 		if err := j.drain(events, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.ErrorCode != prior || result.EngineErrorCode != "authentication_error" || result.Done.Usage.InputTokens != 7 || result.Done.Metadata[proto.DoneMetaAgentSessionID] != "native" {
+		if result.ErrorCode != prior || result.EngineErrorCode != "authentication_error" || result.Done.Usage.Tokens.InputTokens != 7 || result.Done.Metadata[proto.DoneMetaAgentSessionID] != "native" {
 			t.Fatal(result)
 		}
-		reply := cancellationResult{ack: proto.InteractionDecisionAckPayload{Applied: true, Outcome: &proto.DonePayload{Usage: proto.Usage{InputTokens: 9}, Metadata: map[string]any{proto.DoneMetaAgentSessionID: "native"}}}}
+		reply := cancellationResult{ack: proto.InteractionDecisionAckPayload{Applied: true, Outcome: &proto.DonePayload{Usage: proto.Usage{Tokens: &proto.TokenUsage{InputTokens: 9}}, Metadata: map[string]any{proto.DoneMetaAgentSessionID: "native"}}}}
 		if err := recordCancellation(context.Background(), &j, reply, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.ErrorCode != prior || result.Done.Usage.InputTokens != 9 {
+		if result.ErrorCode != prior || result.Done.Usage.Tokens.InputTokens != 9 {
 			t.Fatal(result)
 		}
 		raw, _ := json.Marshal(result)
@@ -44,7 +44,7 @@ func TestEngineClassificationSurvivesDrainWithoutChangingSettlement(t *testing.T
 		unknown := proto.Envelope{Type: proto.TypeError, Payload: json.RawMessage(`{"error":"new","code":{"arbitrary":"value"},"http_status":"secret"}`)}
 		settlement, _ := proto.NewEnvelope(proto.TypeError, "run", proto.ErrorPayload{Error: "executor Turn settlement failed"})
 		for _, later := range []proto.Envelope{unknown, settlement} {
-			if err := result.mergeObservation(later); err != nil || result.EngineErrorCode != "authentication_error" || result.ErrorCode != prior || result.Done.Usage.InputTokens != 9 {
+			if err := result.mergeObservation(later); err != nil || result.EngineErrorCode != "authentication_error" || result.ErrorCode != prior || result.Done.Usage.Tokens.InputTokens != 9 {
 				t.Fatal(err, result)
 			}
 		}
@@ -64,7 +64,7 @@ func TestClassifiedErrorCannotOverrideCancellationReceipt(t *testing.T) {
 		events <- failure
 		close(events)
 		ack := make(chan cancellationResult, 1)
-		ack <- cancellationResult{ack: proto.InteractionDecisionAckPayload{Applied: true, Outcome: &proto.DonePayload{Usage: proto.Usage{InputTokens: 9}, Metadata: map[string]any{proto.DoneMetaAgentSessionID: "native"}}}}
+		ack <- cancellationResult{ack: proto.InteractionDecisionAckPayload{Applied: true, Outcome: &proto.DonePayload{Usage: proto.Usage{Tokens: &proto.TokenUsage{InputTokens: 9}}, Metadata: map[string]any{proto.DoneMetaAgentSessionID: "native"}}}}
 		if drainFirst {
 			if err := j.drain(events, &result); err != nil {
 				t.Fatal(err)
@@ -76,7 +76,7 @@ func TestClassifiedErrorCannotOverrideCancellationReceipt(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if status != sessions.TurnCancelled || result.Done.Usage.InputTokens != 9 || result.Done.Metadata[proto.DoneMetaAgentSessionID] != "native" || result.EngineErrorCode != "rate_limit_exceeded" {
+		if status != sessions.TurnCancelled || result.Done.Usage.Tokens.InputTokens != 9 || result.Done.Metadata[proto.DoneMetaAgentSessionID] != "native" || result.EngineErrorCode != "rate_limit_exceeded" {
 			t.Fatalf("receipt lost authority: %s %+v", status, result)
 		}
 	}
@@ -101,7 +101,7 @@ func TestEngineClassificationSurvivesUnclassifiedSettlement(t *testing.T) {
 		result := Result{ErrorCode: "engine_failed"}
 		failure, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "claudesdk: execution_failed", Code: "resource_not_found"})
 		settlement, _ := proto.NewEnvelope(proto.TypeError, "turn", proto.ErrorPayload{Error: "executor Turn settlement failed"})
-		done, _ := proto.NewEnvelope(proto.TypeDone, "turn", proto.DonePayload{Usage: proto.Usage{InputTokens: 7}})
+		done, _ := proto.NewEnvelope(proto.TypeDone, "turn", proto.DonePayload{Usage: proto.Usage{Tokens: &proto.TokenUsage{InputTokens: 7}}})
 		events := []proto.Envelope{failure, settlement, done}
 		if drain {
 			queued := make(chan proto.Envelope, len(events))
@@ -120,7 +120,7 @@ func TestEngineClassificationSurvivesUnclassifiedSettlement(t *testing.T) {
 				}
 			}
 		}
-		if result.EngineErrorCode != "resource_not_found" || result.EngineHTTPStatus != nil || result.ErrorCode != "engine_failed" || result.Done.Usage.InputTokens != 7 {
+		if result.EngineErrorCode != "resource_not_found" || result.EngineHTTPStatus != nil || result.ErrorCode != "engine_failed" || result.Done.Usage.Tokens.InputTokens != 7 {
 			t.Fatalf("drain=%v: %+v", drain, result)
 		}
 		// Each delivery creates its own Result; generic errors in another Turn stay unknown.

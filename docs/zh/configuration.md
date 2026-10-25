@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: 00ca99dc2f53357520a0d23b4950ec4bfb63a3a6bb6ef8b57cb752781ca1e8e4
+source_hash: 7e6594fcab4b4fbf7d44d99e21745d106f200af902e2e7efacad5a7c19eea439
 ---
 
 Core 安装的每项设置、其归属位置以及修改方式。安装程序写入初始值；之后请使用本参考。每项设置都恰好只有一个归属位置，分属以下三类：
@@ -180,7 +180,7 @@ Compose 为 Web 设置这些变量。仅在不使用 Compose 运行控制台时�
 | `OAC_WEB_ADDR` | `:8080` | 监听地址。主机部分为空或未指定时，`oac-web healthcheck` 在 `127.0.0.1` 上探测其 `/healthz` |
 | `OAC_PUBLIC_URL` | 必填 | [公共 URL](#settings)：面向浏览器的准确源地址，可以使用 HTTP 或 HTTPS，且不得包含路径。Host 和源地址检查使用此值；HTTPS 会使 Session Cookie 具备 `Secure` 属性 |
 | `OAC_WEB_UPSTREAM` | `http://core:8091` | Core 的源地址，可以使用 HTTP 或 HTTPS，且不得包含凭据、查询参数或路径 |
-| `OAC_WEB_CORE_KEY_FILE` | 必填 | 常规文件的绝对路径，该文件没有组或其他用户权限，并保存 Core 密钥：至少 32 个字符、不含空白字符、最大 4 KiB |
+| `OAC_WEB_CORE_KEY_FILE` | 必填 | 常规文件的绝对路径，该文件没有组或其他用户权限，并保存 [Core 密钥](getting-started/operations.md#core-key)，最大 4 KiB |
 | `OAC_WEB_DIST` | `/www` | 已构建控制台的绝对目录；必须包含 `index.html` |
 | `OAC_WEB_NODE_PAYLOAD_DIR` | 未设置 | 所匹配发行版的节点载荷（即安装程序的 `node-payload/`）的绝对路径。未设置时，不提供 `/node-install/*`，且 **添加节点** 不可用 |
 

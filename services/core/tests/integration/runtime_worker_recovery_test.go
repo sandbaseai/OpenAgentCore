@@ -17,7 +17,7 @@ import (
 
 func insertWorkerRuntimeAllocation(t *testing.T, pool *pgxpool.Pool, h *dispatchHarness, phase string) {
 	t.Helper()
-	state, err := json.Marshal(map[string]any{"protocol_version": sandbox.SuspensionStateVersion, "current": sandbox.Compute{Name: h.device.EnvironmentID, ID: h.device.EnvironmentID}})
+	state, err := json.Marshal(map[string]any{"current": sandbox.Compute{Name: h.device.EnvironmentID, ID: h.device.EnvironmentID}})
 	if err != nil {
 		t.Fatal(err)
 	}

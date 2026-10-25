@@ -13,7 +13,7 @@ import (
 )
 
 func TestProcessWireRejectsUnknownAndTrailingOutput(t *testing.T) {
-	for _, output := range []string{`{"Version":1,"Secret":"private"}`, `{"Version":1} {"Version":1}`} {
+	for _, output := range []string{`{"Version":2,"Secret":"private"}`, `{"Version":2} {"Version":2}`} {
 		root := t.TempDir()
 		binary := filepath.Join(root, "helper")
 		if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' '"+output+"'\n"), 0700); err != nil {

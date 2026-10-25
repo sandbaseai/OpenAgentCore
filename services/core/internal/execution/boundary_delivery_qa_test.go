@@ -59,7 +59,7 @@ func TestQAActualDeliveryFourFlushTriggers(t *testing.T) {
 			receipt := f.start(t)
 			f.dispatcher.SessionsReader = sessionpg.New(pgunit.NewPool(f.pool), nil)
 			conn := &qaBoundaryConn{artifactWorkspaceConn: &artifactWorkspaceConn{executionTraceConn: &executionTraceConn{closed: make(chan struct{})}, replies: make(chan []byte, 100)}, trigger: trigger}
-			peer := runtimegateway.NewSession(conn, "device", f.tenant, "test", runtimegateway.NewRegistry(), func(string, ...any) {})
+			peer := runtimegateway.NewSession(conn, "device", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 			peer.Start()
 			defer peer.Close("test")
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

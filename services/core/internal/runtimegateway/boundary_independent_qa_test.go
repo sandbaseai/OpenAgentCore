@@ -16,7 +16,7 @@ func TestQAHeartbeatReconnectDuringOldStore(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(logger)
 	reg := NewRegistry()
-	old := newTestSession(newFakeConn(), "qa-device", "tenant", "fixture", reg, nil)
+	old := newTestSession(newFakeConn(), "qa-device", "fixture", reg, nil)
 	reg.Register(old)
 	blocked := &observationHeartbeatStore{entered: make(chan struct{}), release: make(chan struct{})}
 	old.heartbeat = blocked
@@ -25,7 +25,7 @@ func TestQAHeartbeatReconnectDuringOldStore(t *testing.T) {
 	go func() { old.handleHeartbeat(env); close(done) }()
 	<-blocked.entered
 	old.Close("replace")
-	next := newTestSession(newFakeConn(), "qa-device", "tenant", "fixture", reg, nil)
+	next := newTestSession(newFakeConn(), "qa-device", "fixture", reg, nil)
 	defer next.Close("test")
 	reg.Register(next)
 	next.handleHeartbeat(env)

@@ -47,7 +47,6 @@ type SamplerOptions struct {
 // SweepResult is deliberately low-cardinality. It reports collection coverage
 // without exposing tenant, Session, allocation, provider-native, or error text.
 type SweepResult struct {
-	StartedAt, CompletedAt   time.Time
 	Listed, Observed, Failed int
 	Complete                 bool
 }
@@ -57,7 +56,6 @@ type Sampler struct {
 	observer HistoryObserver
 	owner    OwnershipChecker
 	options  SamplerOptions
-	now      func() time.Time
 }
 
 func NewSampler(lister SessionLister, observer HistoryObserver, owner OwnershipChecker, options SamplerOptions) (*Sampler, error) {
@@ -82,14 +80,12 @@ func NewSampler(lister SessionLister, observer HistoryObserver, owner OwnershipC
 	if options.SourceTimeout < time.Millisecond || options.SourceTimeout > 30*time.Second {
 		return nil, errors.New("Runtime history sampler source timeout is out of range")
 	}
-	return &Sampler{lister: lister, observer: observer, owner: owner, options: options, now: time.Now}, nil
+	return &Sampler{lister: lister, observer: observer, owner: owner, options: options}, nil
 }
 
 // Sweep performs one full keyset sweep. A failed sweep is isolated from
 // execution; the caller repeats sweeps without overlap.
 func (s *Sampler) Sweep(ctx context.Context) (result SweepResult) {
-	result.StartedAt = s.now()
-	defer func() { result.CompletedAt = s.now() }()
 	sweepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := s.checkOwnership(sweepCtx); err != nil {

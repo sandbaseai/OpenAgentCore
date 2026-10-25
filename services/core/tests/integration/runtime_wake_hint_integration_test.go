@@ -16,7 +16,7 @@ import (
 )
 
 type wakeHintScanProvider struct {
-	*fakeSuspensionProvider
+	*fakeCheckpointProvider
 	sentinel string
 	release  chan struct{}
 	scans    chan int
@@ -35,7 +35,12 @@ func (p *wakeHintScanProvider) GetCompute(ctx context.Context, reference sandbox
 			}
 		}
 	}
-	return p.fakeSuspensionProvider.GetCompute(ctx, reference, compute)
+	return p.fakeCheckpointProvider.GetCompute(ctx, reference, compute)
+}
+
+// A running allocation with a connected Runtime is observed by RenewCompute.
+func (p *wakeHintScanProvider) RenewCompute(ctx context.Context, reference sandbox.Reference, compute sandbox.Compute) (sandbox.ComputeState, error) {
+	return p.GetCompute(ctx, reference, compute)
 }
 
 type wakeHintIntegrationTarget struct {
@@ -70,7 +75,7 @@ func newWakeHintIntegration(t *testing.T) *wakeHintIntegration {
 	target.owner = f.phase(target.tenant, target.environment.ID, "suspended")
 	f.stop()
 	provider := &wakeHintScanProvider{
-		fakeSuspensionProvider: f.provider, sentinel: sentinel.owner.ID,
+		fakeCheckpointProvider: f.provider, sentinel: sentinel.owner.ID,
 		release: make(chan struct{}), scans: make(chan int, 16),
 	}
 	worker := startWebWorker(t, f.store, f.provider.registry, f.key, provider, &f.policy)

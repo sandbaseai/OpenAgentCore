@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
+
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/google/uuid"
@@ -20,7 +22,7 @@ type restoreAttemptProvider struct {
 	stop     error
 }
 
-func (p *restoreAttemptProvider) NewCompute(_ context.Context, _ sandbox.Reference, generation uint64, snapshot *sandbox.RetainedState) (sandbox.Compute, error) {
+func (p *restoreAttemptProvider) NewCompute(_ context.Context, _ sandbox.Reference, generation uint64, snapshot *sandbox.SnapshotIdentity) (sandbox.Compute, error) {
 	p.derived++
 	return sandbox.Compute{Generation: generation, Name: "target", RestoredFrom: snapshot}, nil
 }
@@ -29,7 +31,7 @@ func (p *restoreAttemptProvider) Resume(_ context.Context, q sandbox.ResumeReque
 	if p.outcome == "unusable" {
 		return sandbox.ComputeState{}, sandbox.ErrCheckpointUnusable
 	}
-	if !q.ReconcileOnly {
+	if !q.ObserveOnly {
 		return sandbox.ComputeState{}, p.stop
 	}
 	if p.outcome == "unknown" {
@@ -57,8 +59,8 @@ func TestRestoreAttemptRecoveryUsesExactClosedEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot := &sandbox.RetainedState{ID: "snapshot", Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}
-			state := runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Retained: snapshot, RestoreID: uuid.NewString()}
+			snapshot := &sandbox.SnapshotIdentity{ID: "snapshot", Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}
+			state := runtimeCompute{Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Snapshot: snapshot, RestoreID: uuid.NewString()}
 			if outcome != "unsent_identity" {
 				state.Target = &sandbox.Compute{Name: "target", Generation: 2, RestoredFrom: snapshot}
 			}
@@ -84,11 +86,11 @@ func TestRestoreAttemptRecoveryUsesExactClosedEvidence(t *testing.T) {
 			}
 			switch outcome {
 			case "unsent_identity":
-				if !errors.Is(err, stop) || provider.derived != 1 || len(provider.requests) != 1 || provider.requests[0].ReconcileOnly || persisted.Target == nil || persisted.RestoreID != state.RestoreID {
+				if !errors.Is(err, stop) || provider.derived != 1 || len(provider.requests) != 1 || provider.requests[0].ObserveOnly || persisted.Target == nil || persisted.RestoreID != state.RestoreID {
 					t.Fatalf("unsent intent not safely derived: %v %#v", err, provider.requests)
 				}
 			case "closed":
-				if !errors.Is(err, stop) || len(provider.requests) != 2 || !provider.requests[0].ReconcileOnly || provider.requests[1].ReconcileOnly || persisted.RestoreID == state.RestoreID || provider.requests[1].OperationID != persisted.RestoreID {
+				if !errors.Is(err, stop) || len(provider.requests) != 2 || !provider.requests[0].ObserveOnly || provider.requests[1].ObserveOnly || persisted.RestoreID == state.RestoreID || provider.requests[1].OperationID != persisted.RestoreID {
 					t.Fatalf("closed attempt not replaced durably: %v %#v", err, provider.requests)
 				}
 			default:
@@ -112,8 +114,8 @@ func TestUnusableCheckpointEndsRetentionAndIsNeverRestoredAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := &sandbox.RetainedState{ID: "snapshot", Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}
-	state := runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Retained: snapshot, RestoreID: uuid.NewString(), Target: &sandbox.Compute{Name: "target", Generation: 2, RestoredFrom: snapshot}}
+	snapshot := &sandbox.SnapshotIdentity{ID: "snapshot", Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}
+	state := runtimeCompute{Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Snapshot: snapshot, RestoreID: uuid.NewString(), Target: &sandbox.Compute{Name: "target", Generation: 2, RestoredFrom: snapshot}}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +156,7 @@ func TestCheckpointTransferRoutesBeforeTargetIO(t *testing.T) {
 				t.Fatal(err)
 			}
 			targetNode := uuid.NewString()
-			node := deployment.Enrollment{NodeID: targetNode, Name: "checkpoint target", Credential: strings.Repeat("t", 64), Provider: view.Provider, BackendFingerprint: strings.Repeat("c", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest, CoreURL: fixturePublicURL}
+			node := machineapi.NodeEnrollment{NodeID: targetNode, Name: "checkpoint target", Credential: strings.Repeat("t", 64), Provider: view.Provider, BackendFingerprint: strings.Repeat("c", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest, CoreURL: fixturePublicURL}
 			if _, err = r.deployments.Enroll(t.Context(), token.Token, node); err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +168,7 @@ func TestCheckpointTransferRoutesBeforeTargetIO(t *testing.T) {
 			if err = r.deployments.Heartbeat(t.Context(), targetNode, connection, view.OwnerEpoch, deployment.NodeHealth{}, []sandbox.GenerationStatus{{Generation: view.Generation, SpecificationDigest: view.SpecificationDigest, State: "ready", Checkpoint: &compat}}); err != nil {
 				t.Fatal(err)
 			}
-			state := runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Retained: &sandbox.RetainedState{ID: "snapshot", Compatibility: compat}}
+			state := runtimeCompute{Current: sandbox.Compute{ID: "source", Name: "source", Generation: 1}, Snapshot: &sandbox.SnapshotIdentity{ID: "snapshot", Compatibility: compat}}
 			raw, _ := json.Marshal(state)
 			if _, err = f.pool.Exec(t.Context(), `UPDATE environments SET initialization='complete',status='disconnected' WHERE id=$1`, owner.EnvironmentID); err != nil {
 				t.Fatal(err)
@@ -214,7 +216,7 @@ func TestCheckpointTransferRoutesBeforeTargetIO(t *testing.T) {
 			r.nodeID = targetNode
 			err = r.observe(t.Context(), moved)
 			if operation == "wake" {
-				if !errors.Is(err, stop) || provider.derived != 1 || len(provider.requests) != 1 || provider.requests[0].ReconcileOnly {
+				if !errors.Is(err, stop) || provider.derived != 1 || len(provider.requests) != 1 || provider.requests[0].ObserveOnly {
 					t.Fatal("target failed to use committed unsent restore", err)
 				}
 			} else {
@@ -238,11 +240,11 @@ type cleanupReceiptProvider struct {
 }
 
 func (p *cleanupReceiptProvider) Suspend(_ context.Context, q sandbox.SuspendRequest) (sandbox.ComputeState, error) {
-	p.observed = q.ReconcileOnly
-	if !q.ReconcileOnly {
+	p.observed = q.ObserveOnly
+	if !q.ObserveOnly {
 		return sandbox.ComputeState{}, sandbox.ErrComputeUnconfirmed
 	}
-	return sandbox.ComputeState{Compute: q.Source, Status: "unknown", Retained: &sandbox.RetainedState{ID: "owned-corrupt-archive", OperationID: q.OperationID, Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}}, nil
+	return sandbox.ComputeState{Compute: q.Source, Status: "unknown", Snapshot: &sandbox.SnapshotIdentity{ID: "owned-corrupt-archive", OperationID: q.OperationID, Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}}}, nil
 }
 func TestLostCaptureReceiptCanStillBeDeleted(t *testing.T) {
 	p := &cleanupReceiptProvider{}
@@ -252,7 +254,7 @@ func TestLostCaptureReceiptCanStillBeDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: sandbox.Compute{ID: "source", Name: "source"}, SuspendID: uuid.NewString()}
+	state := runtimeCompute{Current: sandbox.Compute{ID: "source", Name: "source"}, SuspendID: uuid.NewString()}
 	raw, _ := json.Marshal(state)
 	if _, err = f.pool.Exec(t.Context(), `UPDATE runtime_allocations SET compute_phase='suspending',compute_state=$2,compute_revision=4,compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID, raw); err != nil {
 		t.Fatal(err)

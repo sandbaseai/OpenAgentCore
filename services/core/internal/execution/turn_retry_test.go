@@ -126,8 +126,12 @@ type fakeRetryHost struct {
 	err       error
 }
 
-func (f *fakeRetryHost) ListTurns(context.Context, string, string, string, int, bool) (sessions.TurnPage, error) {
-	return sessions.TurnPage{Turns: f.latest}, f.err
+func (f *fakeRetryHost) GetSession(context.Context, string, string) (sessions.Session, error) {
+	var latest *sessions.Turn
+	if len(f.latest) > 0 {
+		latest = &f.latest[0]
+	}
+	return sessions.Session{LastTurn: latest}, f.err
 }
 
 func (f *fakeRetryHost) ListTurnInputs(context.Context, string, string, string, int64, int) ([]sessions.TurnInput, error) {

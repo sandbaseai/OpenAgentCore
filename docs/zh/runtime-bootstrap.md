@@ -1,10 +1,10 @@
 ---
 title: "Runtime 引导"
 source: docs/runtime-bootstrap.md
-source_hash: ea492d111c289832559930079861c512fd518f85b0886f7b3d6a93f33f752773
+source_hash: 5aaf319c3838cddd1a67cb7cc4381cd9cc478843d5e94db0005ce6f46cf0c380
 ---
 
-Runtime 引导协议连接沙箱提供商与其启动的托管 Runtime。提供商向 Runtime 交付一个引导文件，该文件是此次启动中 Runtime 唯一的认证输入。
+Runtime 引导协议连接沙箱提供商与其启动的托管 Runtime。提供商向 Runtime 交付一个引导文件，该文件是此次启动中 Runtime 唯一的认证输入，也是其 Environment 绑定的唯一来源。
 
 | 属性 | 内容 |
 | --- | --- |
@@ -23,7 +23,7 @@ Runtime 引导协议连接沙箱提供商与其启动的托管 Runtime。提供�
 
 启动成功仅证明交付完成：经过认证的连接、已准备的能力和执行就绪是 [Core–Runtime 协议](runtime-protocol.md) 下的独立观测；[沙箱提供商协议](sandbox-provider.md#four-distinct-readiness-facts) 列出各自证明的事实。
 
-自托管执行器和运维人员供应的设备通过其他方式获取 daemon 身份；[机器连接 API](../../contracts/agents-api/zh/machine-api.md#credentials) 列出所有凭据来源。它们都进入同一 Runtime 执行循环。
+自托管执行器和运维人员供应的设备通过其他方式获取 daemon 身份，其 Environment 绑定来自注册以及 `oac-daemon connect --workspace` 或原生安装；[机器连接 API](../../contracts/agents-api/zh/machine-api.md#credentials) 列出所有凭据来源。它们都进入同一 Runtime 执行循环。
 
 ## 启动顺序 {#startup-order}
 
@@ -53,10 +53,18 @@ oac-daemon connect --bootstrap-file /home/runtime/runtime-bootstrap.json
 | `device_id` | Core 签发的 daemon 身份的规范非零 UUID |
 | `harness` | 会话固定选择的 Harness 标识；托管 Runtime 只探测并注册此 Harness |
 | `credential` | Core 签发的非空 daemon 凭据，不含空白或 NUL |
+| `environment_id` | Runtime 所服务 Environment 的规范非零 UUID |
+| `session_id` | Runtime 保存其原生历史的 Session 的规范非零 UUID |
+| `workspace` | 工作区的干净绝对目录；打包的 Runtime 布局中为 `runtimebootstrap.RuntimeWorkspace`。Runtime 将其作为 `runtimebootstrap.PublicWorkspace`（`/workspace`）提供，这是应用与 Core 使用的路径 |
+| `suspend_control` | 必填布尔值。当且仅当提供商声明[检查点支持](./sandbox-provider.md)时，Core 将其置为 true，提供商原样转交 |
 
 解码器拒绝未知、重复、缺失和大小写别名字段，拒绝其他版本及超过 `runtimebootstrap.MaxBytes`的文档。错误不包含提交的值。文件缺失或格式错误时，daemon 在连接前失败。
 
 该文件是此次启动唯一的认证输入：daemon 拒绝将其与自托管注册选项组合使用，并将凭据读入内存而不保存到存储的 profile。凭据不进入命令参数、环境变量或回执。提供商为进程重启保留该文件，仅在明确清理自己拥有的资源时删除。
+
+## 挂起控制 {#suspend-control}
+
+`suspend_control` 为 true 时，daemon 在 `runtimebootstrap.SuspendControlFile` 发布其挂起控制并为挂起而停放。Core 的唤醒命令 `oac-daemon resume --control-file` 读取该文件。声明检查点支持的提供商在启动 daemon 前准备该文件所在目录：仅 Runtime 账户可访问（权限 0700，属主 UID 1000）。`suspend_control` 为 true 而 `oac-daemon connect` 无法发布该控制时，连接失败；没有任何其他设置可以启用该控制。
 
 ## 超时与限制 {#timeouts-and-limits}
 
@@ -64,7 +72,7 @@ oac-daemon connect --bootstrap-file /home/runtime/runtime-bootstrap.json
 | --- | --- | --- |
 | 16 KiB（`runtimebootstrap.MaxBytes`） | 引导文档 | 解码器拒绝该文档，daemon 在连接前失败。 |
 
-Core 从分配所属会话派生 `harness`。组合镜像可以包含多个 Harness，但托管 Runtime 只探测所选 Harness；未知、缺失或不可用的选择会失败，不探测其他 Harness。启动协议版本为 2，Core、提供商辅助程序和 Runtime 镜像必须配套部署；安装不支持从另一发行版升级。自托管安装仍探测已安装的 Harness 集合。
+Core 从分配所属会话派生 `harness`。组合镜像可以包含多个 Harness，但托管 Runtime 只探测所选 Harness；未知、缺失或不可用的选择会失败，不探测其他 Harness。启动协议版本为 3，Core、提供商辅助程序和 Runtime 镜像必须配套部署；安装不支持从另一发行版升级。自托管安装仍探测已安装的 Harness 集合。
 
 Runtime 验证输入，并负责认证与连接。启动成功仅证明交付完成：经过认证的连接、已准备的能力和执行就绪是 [Core–Runtime 协议](runtime-protocol.md) 下的独立观测；[Sandbox Provider 指南](sandbox-provider.md#four-distinct-readiness-facts) 列出各自证明的事实。
 
@@ -75,9 +83,6 @@ Runtime 验证输入，并负责认证与连接。启动成功仅证明交付完
 | Docker | 将文件写入 Runtime 拥有的 home volume。 |
 | microsandbox、E2B | 在启动同一命令之前交付文件。 |
 
-## 托管暂停控制 {#hosted-suspension-control}
-
-私有托管暂停/唤醒控制文件的路径在 `internal/runtimebootstrap/bootstrap.go` 中以 `SuspendControlFile` 定义。Core 恢复逻辑和原生 Go adapter 读取该值；E2B helper 契约生成器将其投射到模板构建器。托管启动准备私有目录并提供 `OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE`，以启用 Runtime 暂停。这是随软件包发布的协议设置。共享 Sandbox Provider 注册负责空闲和保留默认值；adapter 负责自身原生租约超时。
 
 ## 验证 {#verification}
 

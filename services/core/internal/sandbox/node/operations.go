@@ -10,16 +10,16 @@ var operationMethods = map[string]string{
 	"initial":             "Initial",
 	"new_compute":         "NewCompute",
 	"compute":             "GetCompute",
-	"renew_compute":       "RenewCompute",
 	"suspend":             "Suspend",
 	"resume":              "Resume",
 	"kill_compute":        "KillCompute",
-	"delete_retained":     "DeleteRetained",
+	"delete_snapshot":     "DeleteSnapshot",
 	"command_compute":     "RunCommandCompute",
 	"resume_compute":      "ResumeCompute",
-	"observe":             "Observe",
+	"renew_compute":       "RenewCompute",
 	"restore_preparation": "RestorePreparation",
 	"save_preparation":    "SavePreparation",
+	"observe":             "Observe",
 }
 
 func operationMethod(wire string) string { return operationMethods[wire] }

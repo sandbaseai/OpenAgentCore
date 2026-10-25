@@ -314,7 +314,7 @@ func TestRetainedPreparationFailureYieldsToWaitingDemand(t *testing.T) {
 	}{
 		{`UPDATE environments SET initialization='complete',status='disconnected' WHERE id=$1`, owner.EnvironmentID},
 		{`UPDATE devices SET supported_agent_kinds='[{"kind":"codex","available":true,"capabilities":{"retained_native_history":true}}]' WHERE id=$1`, owner.DeviceID},
-		{`UPDATE runtime_allocations SET compute_phase='suspended',compute_state='{"protocol_version":"1","current":{"ID":"old-compute"},"retained":{"ID":"old-snapshot","Data":"native-state","Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"}}}',compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID},
+		{`UPDATE runtime_allocations SET compute_phase='suspended',compute_state='{"current":{"ID":"old-compute"},"snapshot":{"ID":"old-snapshot","Evidence":"native-state","Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"}}}',compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID},
 	} {
 		if _, err := f.pool.Exec(t.Context(), q.sql, q.id); err != nil {
 			t.Fatal(err)

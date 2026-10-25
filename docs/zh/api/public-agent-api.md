@@ -1,7 +1,7 @@
 ---
 title: "Agents API 指南"
 source: docs/api/public-agent-api.md
-source_hash: 847dce3a8a99582c558c2c33f6de52bd34a56c1d94bb199332522b628ae1b14d
+source_hash: 9498dab03fc10e0a159573307bf2bf453c802f1a85a802ef1c6fd47f02f901ea
 ---
 
 Core 在 `/v1` 提供 OpenAI Agents API。本指南用官方 OpenAI SDK 和普通 HTTP 两种方式演示每项常见任务，并说明 Core 与 OpenAI 的差异。如果尚未启动过 Session，请先阅读[运行第一个 Session](../getting-started/quickstart.md)。
@@ -577,13 +577,15 @@ HTTP 路径为 `/vaults`，需要 Beta 请求头。Session 从其 `vault_ids` �
 
 ## 诊断故障 {#diagnose-a-failure}
 
-1. 读取 Session 的 `status` 和 `error`，以及最新 Turn 的 `error`。失败的 Turn 只会报告通用的 `internal_error`。
-2. 检查 Environment 是否已连接，以及其 harness 是否可用。
-3. 在 [Harness capabilities](../../../contracts/agents-api/zh/harness-capabilities.md) 中检查 harness、模型和工具的组合。
-4. 读取 Session 的 [Project 诊断扩展](../../../contracts/agents-api/zh/session-diagnostics.md#project-diagnostics-extension) 获取安全故障分类，再请管理员查看[故障排除](../getting-started/troubleshooting.md)，了解服务日志、凭据和节点就绪状态。
+1. 读取 Session 的 `status` 和 `error`，以及最新 Turn 的 `error`。失败 Turn 的 `error.code` 给出模型失败类别、`sandbox_error` 或 `internal_error`。
+2. 检查 Environment 是否已连接，以及其 Harness 是否可用。
+3. 在 [Harness 能力](../../../contracts/agents-api/zh/harness-capabilities.md) 中检查 Harness、模型和工具的组合。
+4. 向管理员索取[Session 诊断](../../../contracts/agents-api/zh/session-diagnostics.md)，其中会指出故障类别；同时请查看[故障排查](../getting-started/troubleshooting.md)，了解服务日志、凭据和节点就绪状态。
 
 401 通常表示使用了其他命名空间中的密钥；请参阅 [API 命名空间和凭据](index.md)。
 
 ## 与 OpenAI 的差异 {#differences-from-openai}
 
 Core 在某些行为上与 OpenAI 服务不同，例如 Session 创建的幂等性和特定 Harness 的工具支持。[OpenAI 兼容性](../../../contracts/agents-api/zh/index.md#differences-from-openai) 列出了所有差异及各资源的状态；[公共 OpenAPI](../../../contracts/agents-api/openapi.yaml) 包含准确的模式定义。
+
+Session 的 [Project 诊断扩展](../../../contracts/agents-api/zh/session-diagnostics.md#project-diagnostics-extension) 提供安全的失败分类。

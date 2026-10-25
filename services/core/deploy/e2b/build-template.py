@@ -29,9 +29,6 @@ if image['Architecture'] != 'amd64' or image['Os'] != 'linux':
     parser.error('A qualified Linux amd64 image is required')
 environment = dict(value.split('=', 1) for value in image['Config']['Env']
                    if value.startswith(('HOME=', 'OAC_')))
-if environment.get('OAC_RUNTIME_WORKSPACE') != '/environment/workspace':
-    parser.error('Image does not use the colocated Runtime layout')
-environment['OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE'] = SUSPEND_CONTROL_FILE
 dev_home = Path(os.environ.get('OAC_DEV_HOME') or Path.home() / '.oac')
 if not dev_home.is_absolute():
     parser.error('OAC_DEV_HOME must be absolute')

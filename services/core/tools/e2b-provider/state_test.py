@@ -13,6 +13,7 @@ from unittest.mock import patch
 from provider import Provider
 from helper_contract_generated import PROTOCOL_VERSION
 from state import Failure, Receipt
+from helper_contract_generated import PROTOCOL_VERSION
 
 
 class StateTest(unittest.TestCase):

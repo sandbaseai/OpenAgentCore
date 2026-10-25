@@ -39,7 +39,6 @@ type Store struct {
 
 var (
 	_ modelconfiguration.Storage  = (*Store)(nil)
-	_ modelconfiguration.Reader   = (*Store)(nil)
 	_ modelconfiguration.Observer = (*Store)(nil)
 )
 
@@ -61,17 +60,20 @@ func (s *Store) List(ctx context.Context) ([]modelconfiguration.Configuration, e
 	return result, nil
 }
 
-// Replace seals the complete bundle to its Harness, upserts the record under a
+// Replace seals the provider key to its Harness, upserts the record under a
 // new revision, which clears the replaced revision's observations, and audits
 // the write in the same transaction.
 func (s *Store) Replace(ctx context.Context, record modelconfiguration.Record) (modelconfiguration.Configuration, error) {
-	raw, err := json.Marshal(record.Configuration)
-	if err != nil {
-		return modelconfiguration.Configuration{}, err
-	}
-	sealed, err := s.cipher.SealDeploymentModelProvider(raw, record.Harness)
+	sealed, err := s.cipher.SealDeploymentModelProvider([]byte(record.APIKey), record.Harness)
 	if err != nil {
 		return modelconfiguration.Configuration{}, errors.New("model provider encryption failed")
+	}
+	headers := []byte(`{}`)
+	if record.Headers != nil {
+		headers, err = json.Marshal(record.Headers)
+		if err != nil {
+			return modelconfiguration.Configuration{}, err
+		}
 	}
 	var result modelconfiguration.Configuration
 	err = s.pool.Transaction(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -79,7 +81,7 @@ func (s *Store) Replace(ctx context.Context, record modelconfiguration.Record) (
 		row, err := q.UpsertDeploymentModelProvider(ctx, sqlc.UpsertDeploymentModelProviderParams{
 			Harness: record.Harness, Protocol: string(record.Provider.Protocol), BaseUrl: record.Provider.BaseURL,
 			ContextWindow: record.Provider.ContextWindow, MaxOutputTokens: record.Provider.MaxOutputTokens,
-			Model: record.Model, HarnessConfig: record.HarnessConfig, EncryptedConfig: sealed,
+			Headers: headers, Model: record.Model, HarnessConfig: record.HarnessConfig, EncryptedApiKey: sealed,
 			Revision: pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		})
 		if err != nil {
@@ -106,8 +108,8 @@ func (s *Store) Delete(ctx context.Context, harness string) error {
 	}))
 }
 
-// LoadBundle reads the sealed bundle and its revision in one statement, so the
-// pair always belongs to the same replacement, and opens the bundle.
+// LoadBundle reads the columns, the sealed key and the revision in one
+// statement, so they always belong to the same replacement, and opens the key.
 func (s *Store) LoadBundle(ctx context.Context, harness string) (modelconfiguration.Bundle, error) {
 	row, err := s.pool.Queries().GetDeploymentModelProviderSecret(ctx, harness)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -116,15 +118,18 @@ func (s *Store) LoadBundle(ctx context.Context, harness string) (modelconfigurat
 	if err != nil {
 		return modelconfiguration.Bundle{}, translate(err)
 	}
-	raw, err := s.cipher.OpenDeploymentModelProvider(row.EncryptedConfig, harness)
+	key, err := s.cipher.OpenDeploymentModelProvider(row.EncryptedApiKey, harness)
 	if err != nil {
 		return modelconfiguration.Bundle{}, errors.New("deployment model configuration decryption failed")
 	}
-	var configuration v1.ModelConfigurationInput
-	if json.Unmarshal(raw, &configuration) != nil {
-		return modelconfiguration.Bundle{}, errors.New("invalid stored deployment model configuration")
+	provider := v1.ModelProviderInput{Protocol: modelprovider.Protocol(row.Protocol), BaseURL: row.BaseUrl, APIKey: string(key), ContextWindow: row.ContextWindow, MaxOutputTokens: row.MaxOutputTokens}
+	if err := json.Unmarshal(row.Headers, &provider.Headers); err != nil {
+		return modelconfiguration.Bundle{}, err
 	}
-	return modelconfiguration.Bundle{Configuration: configuration, Revision: uuid.UUID(row.Revision.Bytes)}, nil
+	if len(provider.Headers) == 0 {
+		provider.Headers = nil
+	}
+	return modelconfiguration.Bundle{Configuration: v1.ModelConfigurationInput{ModelProvider: provider, Model: row.Model, HarnessConfig: json.RawMessage(row.HarnessConfig)}, Revision: uuid.UUID(row.Revision.Bytes)}, nil
 }
 
 // ObserveDeploymentModelProvider runs one metadata UPDATE in its own pooled

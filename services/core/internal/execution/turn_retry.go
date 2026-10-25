@@ -171,7 +171,7 @@ func retryAttempt(inputs []sessions.TurnInput) int {
 
 // retryHost is what a retry needs from Core; Worker plus the Sessions reader provide it.
 type retryHost interface {
-	ListTurns(ctx context.Context, tenant, session, cursor string, limit int, ascending bool) (sessions.TurnPage, error)
+	GetSession(ctx context.Context, tenant, session string) (sessions.Session, error)
 	ListTurnInputs(ctx context.Context, tenant, session, turn string, after int64, limit int) ([]sessions.TurnInput, error)
 	SubmitInputs(ctx context.Context, tenant, session, key string, inputs []sessions.Input) ([]sessions.InputReceipt, error)
 }
@@ -230,12 +230,12 @@ func autoRetry(ctx context.Context, host retryHost, tenant string, turn sessions
 	}
 	submit, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	page, err := host.ListTurns(submit, tenant, turn.SessionID, "", 1, false)
-	if err != nil || len(page.Turns) != 1 || page.Turns[0].ID != turn.ID {
+	current, err := host.GetSession(submit, tenant, turn.SessionID)
+	if err != nil || current.LastTurn == nil || current.LastTurn.ID != turn.ID {
 		logger.Info("oac-core turn auto-retry skipped", append(fields, "decision", "skip:newer_turn_or_session_gone")...)
 		return
 	}
-	if !decideRetry(page.Turns[0], attempt, limit).Retry {
+	if !decideRetry(*current.LastTurn, attempt, limit).Retry {
 		logger.Info("oac-core turn auto-retry skipped", append(fields, "decision", "skip:cancel_requested")...)
 		return
 	}

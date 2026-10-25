@@ -52,16 +52,6 @@ SELECT EXISTS (
     WHERE e.session_id = $1 AND a.state <> 'released' AND a.node_id IS NOT NULL
 )::boolean;
 
--- name: HasIncompatibleRuntimeComputeState :one
-SELECT EXISTS (
- SELECT 1 FROM runtime_allocations
- WHERE state <> 'released'
- AND ((compute_state->>'protocol_version') IS DISTINCT FROM sqlc.arg(protocol_version)::text
-  OR compute_state ? 'snapshot'
-  OR (compute_state #> '{current,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot']
-  OR (compute_state #> '{target,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot'])
-)::boolean;
-
 -- name: CountRuntimeComputeReservations :one
 SELECT count(*) FROM runtime_allocations
 WHERE provider_key = $1 AND state <> 'released' AND compute_phase <> 'suspended';

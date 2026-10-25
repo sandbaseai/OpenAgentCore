@@ -7,11 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/runtimebootstrap"
 	"io"
 	"time"
 
-	"github.com/MiniMax-AI/OpenAgentCore/internal/runtimebootstrap"
+	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/providercontract"
+
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimeobs"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/sandbox"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/workspacefs"
@@ -51,35 +52,6 @@ type Health struct {
 	AvailableDiskBytes   *int64                     `json:"available_disk_bytes,omitempty"`
 }
 
-type EnrollmentRequest struct {
-	SpecificationDigest  string `json:"specification_digest"`
-	DeploymentGeneration uint64 `json:"deployment_generation"`
-	NodeID               string `json:"node_id"`
-	Credential           string `json:"credential"`
-	Name                 string `json:"name"`
-	Provider             string `json:"provider"`
-	BackendFingerprint   string `json:"backend_fingerprint"`
-	// The retained Core origin; Core refuses an enrollment whose address is not its public URL.
-	CoreURL string `json:"core_url"`
-	// The host measurements of Health. Core derives from them each limit the enrollment token leaves unset.
-	CPUCount           *int64   `json:"cpu_count,omitempty"`
-	EffectiveCPUCores  *float64 `json:"effective_cpu_cores,omitempty"`
-	TotalMemoryBytes   *int64   `json:"total_memory_bytes,omitempty"`
-	AvailableDiskBytes *int64   `json:"available_disk_bytes,omitempty"`
-}
-
-type EnrollmentResponse struct {
-	MaxActive            int    `json:"max_active"`
-	MaxRetained          int    `json:"max_retained"`
-	SpecificationDigest  string `json:"specification_digest"`
-	DeploymentGeneration uint64 `json:"deployment_generation"`
-	Connected            bool   `json:"connected,omitempty"`
-	ProviderReady        bool   `json:"provider_ready,omitempty"`
-	NodeID               string `json:"node_id"`
-	InstallationID       string `json:"installation_id"`
-	Provider             string `json:"provider"`
-}
-
 type request struct {
 	DeploymentGeneration uint64 `json:"deployment_generation,omitempty"`
 	ID                   string `json:"id"`
@@ -90,16 +62,16 @@ type request struct {
 	TimeoutMillis        int64  `json:"timeout_ms"`
 	// deadline is anchored to the receiving host and never crosses the wire.
 	deadline    time.Time
-	Reference   sandbox.Reference       `json:"reference"`
-	Bootstrap   *sandbox.Bootstrap      `json:"bootstrap,omitempty"`
-	Compute     *sandbox.Compute        `json:"compute,omitempty"`
-	Generation  uint64                  `json:"generation,omitempty"`
-	Command     *sandbox.Command        `json:"command,omitempty"`
-	Suspend     *sandbox.SuspendRequest `json:"suspend,omitempty"`
-	Resume      *sandbox.ResumeRequest  `json:"resume,omitempty"`
-	Retained    *sandbox.RetainedState  `json:"retained,omitempty"`
-	Observation *runtimeobs.Target      `json:"observation,omitempty"`
-	// Key is the opaque preparation cache key.
+	Reference   sandbox.Reference         `json:"reference"`
+	Bootstrap   *sandbox.Bootstrap        `json:"bootstrap,omitempty"`
+	Compute     *sandbox.Compute          `json:"compute,omitempty"`
+	Generation  uint64                    `json:"generation,omitempty"`
+	Command     *sandbox.Command          `json:"command,omitempty"`
+	Suspend     *sandbox.SuspendRequest   `json:"suspend,omitempty"`
+	Resume      *sandbox.ResumeRequest    `json:"resume,omitempty"`
+	Snapshot    *sandbox.SnapshotIdentity `json:"snapshot,omitempty"`
+	Observation *runtimeobs.Target        `json:"observation,omitempty"`
+	// Key is the opaque preparation cache key of the preparation operations.
 	Key string `json:"key,omitempty"`
 }
 
@@ -253,7 +225,7 @@ func (q request) validate() error {
 		return sandbox.ErrInvalid
 	}
 	count := 0
-	for _, ok := range []bool{q.Bootstrap != nil, q.Compute != nil, q.Command != nil, q.Suspend != nil, q.Resume != nil, q.Retained != nil, q.Observation != nil} {
+	for _, ok := range []bool{q.Bootstrap != nil, q.Compute != nil, q.Command != nil, q.Suspend != nil, q.Resume != nil, q.Snapshot != nil, q.Observation != nil} {
 		if ok {
 			count++
 		}
@@ -264,7 +236,7 @@ func (q request) validate() error {
 			return nil
 		}
 	case "create":
-		if count == 1 && q.Bootstrap != nil && q.Bootstrap.Reference == q.Reference && runtimebootstrap.ValidHarness(q.Bootstrap.Harness) && sandbox.ValidateWorkspaceBinding(q.Reference, q.Bootstrap.Workspace) == nil {
+		if count == 1 && q.Bootstrap != nil && runtimebootstrap.ValidHarness(q.Bootstrap.Harness) && q.Bootstrap.Reference == q.Reference && sandbox.ValidateWorkspaceBinding(q.Reference, q.Bootstrap.Workspace) == nil {
 			return nil
 		}
 	case "info", "renew", "kill", "initial":
@@ -276,10 +248,10 @@ func (q request) validate() error {
 			return nil
 		}
 	case "new_compute":
-		if count == 0 || count == 1 && q.Retained != nil {
+		if count == 0 || count == 1 && q.Snapshot != nil {
 			return nil
 		}
-	case "compute", "renew_compute", "kill_compute", "resume_compute":
+	case "compute", "kill_compute", "resume_compute", "renew_compute":
 		if count == 1 && q.Compute != nil {
 			return nil
 		}
@@ -299,8 +271,8 @@ func (q request) validate() error {
 		if count == 1 && q.Resume != nil && q.Resume.Reference == q.Reference && sandbox.ValidateWorkspaceBinding(q.Reference, q.Resume.Workspace) == nil {
 			return nil
 		}
-	case "delete_retained":
-		if count == 1 && q.Retained != nil {
+	case "delete_snapshot":
+		if count == 1 && q.Snapshot != nil {
 			return nil
 		}
 	}
@@ -356,13 +328,10 @@ func execute(ctx context.Context, p sandbox.SandboxProvider, q request) (respons
 			compute, err = p.Initial(ctx, q.Reference)
 			out.Compute = &compute
 		case "new_compute":
-			compute, err = p.NewCompute(ctx, q.Reference, q.Generation, q.Retained)
+			compute, err = p.NewCompute(ctx, q.Reference, q.Generation, q.Snapshot)
 			out.Compute = &compute
 		case "compute":
 			state, err = p.GetCompute(ctx, q.Reference, *q.Compute)
-			out.State = &state
-		case "renew_compute":
-			state, err = p.RenewCompute(ctx, q.Reference, *q.Compute)
 			out.State = &state
 		case "suspend":
 			state, err = p.Suspend(ctx, *q.Suspend)
@@ -372,10 +341,13 @@ func execute(ctx context.Context, p sandbox.SandboxProvider, q request) (respons
 			out.State = &state
 		case "kill_compute":
 			err = p.KillCompute(ctx, q.Reference, *q.Compute)
-		case "delete_retained":
-			err = p.DeleteRetained(ctx, q.Reference, *q.Retained)
+		case "delete_snapshot":
+			err = p.DeleteSnapshot(ctx, q.Reference, *q.Snapshot)
 		case "resume_compute":
 			state, err = p.ResumeCompute(ctx, q.Reference, *q.Compute)
+			out.State = &state
+		case "renew_compute":
+			state, err = p.RenewCompute(ctx, q.Reference, *q.Compute)
 			out.State = &state
 		case "command_compute":
 			command, err = p.RunCommandCompute(ctx, q.Reference, *q.Compute, *q.Command)
@@ -405,7 +377,7 @@ func execute(ctx context.Context, p sandbox.SandboxProvider, q request) (respons
 }
 
 func requiresReady(q request) bool {
-	return q.Operation == "create" || q.Operation == "resume" && q.Resume != nil && !q.Resume.ReconcileOnly
+	return q.Operation == "create" || q.Operation == "resume" && q.Resume != nil && !q.Resume.ObserveOnly
 }
 
 // setTimeout consumes sender queue time without comparing clocks across hosts.

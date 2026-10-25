@@ -575,13 +575,15 @@ The HTTP path is `/vaults`, with the Beta header. A Session selects credentials 
 
 ## Diagnose a failure
 
-1. Read the Session's `status` and `error`, and the latest Turn's `error`. A failed Turn reports only a generic `internal_error`.
-2. Check that the Environment is connected and its harness is available.
-3. Check the harness, model and tool combination in [Harness capabilities](../../contracts/agents-api/harness-capabilities.md).
-4. Read the Session's [Project diagnostics extension](../../contracts/agents-api/session-diagnostics.md#project-diagnostics-extension) for its safe failure category; ask the administrator to check [troubleshooting](../getting-started/troubleshooting.md) for service logs, credentials and node readiness.
+1. Read the Session's `status` and `error`, and the latest Turn's `error`. A failed Turn's `error.code` names the model failure category, `sandbox_error` or `internal_error`.
+2. Check that the Environment is connected and its Harness is available.
+3. Check the Harness, model and tool combination in [Harness capabilities](../../contracts/agents-api/harness-capabilities.md).
+4. Ask the administrator for the [Session diagnostics](../../contracts/agents-api/session-diagnostics.md), which name the failure category, and to check [Troubleshooting](../getting-started/troubleshooting.md) for service logs, credentials and node readiness.
 
 A 401 usually means a key from another namespace; see [API namespaces and credentials](./index.md).
 
 ## Differences from OpenAI
 
 Core differs from the OpenAI service in some behavior, such as Session creation idempotency and Harness-specific tool support. The [OpenAI compatibility](../../contracts/agents-api/index.md#differences-from-openai) lists every difference and the per-resource status; the [public OpenAPI](../../contracts/agents-api/openapi.yaml) has the exact schemas.
+
+The Session’s [Project diagnostics extension](../../contracts/agents-api/session-diagnostics.md#project-diagnostics-extension) exposes its safe failure category.

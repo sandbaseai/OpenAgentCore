@@ -111,7 +111,7 @@ func validatedRuntimeProvider(config *RuntimeProvider, registry *runtimegateway.
 	}
 	if config.Suspension != nil {
 		policy := *config.Suspension
-		if !sandbox.SupportsSuspension(config.Provider) || policy.Retention < time.Second || (copied.Mode == string(sandbox.DeploymentDirect) && (policy.MaxActive < 1 || policy.MaxRetained < policy.MaxActive)) {
+		if !sandbox.SupportsCheckpoint(config.Provider.ProviderOperations()) || policy.Retention < time.Second {
 			return RuntimeProvider{}, sandbox.ErrInvalid
 		}
 		copied.Suspension = &policy
@@ -307,6 +307,7 @@ func (r *runtimeLifecycle) provision(ctx context.Context, tenant, environment, p
 	info, err := provider.Create(ctx, sandbox.Bootstrap{
 		Reference: runtimeReference(owner), SessionID: owner.SessionID, DeviceID: owner.DeviceID,
 		Workspace: workspace, Harness: session.Engine, CoreURL: r.config.CoreURL, Credential: token,
+		SuspendControl: sandbox.SupportsCheckpoint(provider.ProviderOperations()),
 	})
 	observeExecutionStage(ctx, "provider_create", started, err, "allocation_id", owner.ID,
 		"session_id", owner.SessionID, "environment_id", environment, "device_id", owner.DeviceID, "node_id", r.nodeID)
@@ -517,7 +518,7 @@ func (r *runtimeLifecycle) observe(ctx context.Context, owner deployment.Allocat
 	if r.config.Suspension != nil && environment.Initialization == "complete" {
 		return r.enableCompute(ctx, owner)
 	}
-	if peer, err := r.registry.LookupDevice(owner.DeviceID); err != nil || peer.IsClosed() {
+	if !r.runtimeConnected(owner.DeviceID) {
 		return nil
 	}
 	renewed, err := provider.Renew(ctx, runtimeReference(owner))
@@ -529,6 +530,13 @@ func (r *runtimeLifecycle) observe(ctx context.Context, owner deployment.Allocat
 	}
 	_, err = r.deployment.CheckRunning(ctx, owner)
 	return err
+}
+
+// runtimeConnected is the renewal condition: running compute keeps its native
+// lease while the allocation's Runtime holds an open connection.
+func (r *runtimeLifecycle) runtimeConnected(device string) bool {
+	peer, err := r.registry.LookupDevice(device)
+	return err == nil && !peer.IsClosed()
 }
 
 // Environment identity owns connectivity; preparation has an independent owner.
