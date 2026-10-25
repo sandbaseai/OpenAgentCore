@@ -15,7 +15,7 @@ func TestWorkspaceExportTenMinuteBudgetAndEarlierParent(t *testing.T) {
 	for _, budget := range []time.Duration{10 * time.Minute, time.Minute} {
 		t.Run(budget.String(), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+				s := newTestSession(newFakeConn(), "device", "test", nil, nil)
 				defer s.Close("test")
 				ctx, cancel := context.WithTimeout(context.Background(), budget)
 				defer cancel()

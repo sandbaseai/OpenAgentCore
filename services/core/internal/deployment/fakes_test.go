@@ -341,7 +341,6 @@ func (f *fakeNodeTx) PromoteServingGeneration(nodeID string, generation uint64) 
 }
 
 type fakeDeploymentTx struct {
-	hasIncompatibleComputeState func(string) (bool, error)
 	t                           testing.TB
 	loadDeployment              func() (Record, error)
 	loadSnapshot                func() (Snapshot, error)
@@ -632,14 +631,6 @@ func (f *fakeSessionReader) GetSessionExecutionConfiguration(context.Context, st
 func (f *fakeSessionReader) GetManagedSessionArchive(context.Context, string, string) (sessions.ManagedArchive, error) {
 	unexpected(f.t, "GetManagedSessionArchive")
 	return sessions.ManagedArchive{}, nil
-}
-
-func (f *fakeDeploymentTx) HasIncompatibleComputeState(version string) (bool, error) {
-	if f.hasIncompatibleComputeState == nil {
-		f.t.Fatal("unexpected HasIncompatibleComputeState")
-		return false, nil
-	}
-	return f.hasIncompatibleComputeState(version)
 }
 
 func (f *fakeReader) CountComputeReservations(ctx context.Context, installationID string) (int64, error) {

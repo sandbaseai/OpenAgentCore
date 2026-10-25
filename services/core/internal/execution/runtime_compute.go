@@ -1,11 +1,9 @@
 package execution
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"time"
 
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
@@ -22,23 +20,20 @@ import (
 // RuntimeSuspensionPolicy supplies snapshot retention for a provider that
 // suspends sandboxes. Deployment storage owns the mutable idle timeout.
 type RuntimeSuspensionPolicy struct {
-	MaxActive   int
-	MaxRetained int
-	Retention   time.Duration
+	MaxActive, MaxRetained int
+	Retention              time.Duration
 }
 
 type runtimeCompute struct {
-	Version   string                 `json:"protocol_version"`
-	Current   sandbox.Compute        `json:"current"`
-	Target    *sandbox.Compute       `json:"target,omitempty"`
-	Retained  *sandbox.RetainedState `json:"retained,omitempty"`
-	SuspendID string                 `json:"suspend_id,omitempty"`
-	RestoreID string                 `json:"restore_id,omitempty"`
-	Rollback  bool                   `json:"rollback,omitempty"`
+	Current   sandbox.Compute           `json:"current"`
+	Target    *sandbox.Compute          `json:"target,omitempty"`
+	Snapshot  *sandbox.SnapshotIdentity `json:"snapshot,omitempty"`
+	SuspendID string                    `json:"suspend_id,omitempty"`
+	RestoreID string                    `json:"restore_id,omitempty"`
+	Rollback  bool                      `json:"rollback,omitempty"`
 }
 
 func (r *runtimeLifecycle) saveCompute(ctx context.Context, owner deployment.Allocation, phase string, state runtimeCompute, until *time.Time) (deployment.Allocation, error) {
-	state.Version = sandbox.SuspensionStateVersion
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return owner, err
@@ -66,8 +61,8 @@ func logComputeStep(ctx context.Context, owner deployment.Allocation, step strin
 func (r *runtimeLifecycle) enableCompute(ctx context.Context, owner deployment.Allocation) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	p := r.config.Provider
-	if err := providercontract.Require(p, "Initial"); err != nil {
-		return err
+	if !sandbox.SupportsCheckpoint(p.ProviderOperations()) {
+		return providercontract.Require(p, "Initial")
 	}
 	initial, err := p.Initial(ctx, runtimeReference(owner))
 	if err != nil {
@@ -87,11 +82,11 @@ func (r *runtimeLifecycle) enableCompute(ctx context.Context, owner deployment.A
 func (r *runtimeLifecycle) observeCompute(ctx context.Context, owner deployment.Allocation) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	p := r.config.Provider
-	if err := providercontract.Require(p, "Initial"); err != nil {
-		return err
+	if !sandbox.SupportsCheckpoint(p.ProviderOperations()) {
+		return providercontract.Require(p, "Initial")
 	}
 	var state runtimeCompute
-	if decodeRuntimeCompute(owner.ComputeState, &state) != nil || state.Current.ID == "" {
+	if json.Unmarshal(owner.ComputeState, &state) != nil || state.Current.ID == "" {
 		return sandbox.ErrOwnership
 	}
 	if owner.SessionDeleted || owner.Expired || owner.State == "cleanup_pending" {
@@ -127,7 +122,14 @@ func (r *runtimeLifecycle) observeCompute(ctx context.Context, owner deployment.
 
 func (r *runtimeLifecycle) idleCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
-	compute, err := p.GetCompute(ctx, runtimeReference(owner), state.Current)
+	// With an open Runtime connection the observation also extends the native
+	// lease, as the disabled path does; otherwise it only observes.
+	observe := p.GetCompute
+	if r.runtimeConnected(owner.DeviceID) {
+		observe = p.RenewCompute
+	}
+	peer, peerErr := authorizedRuntimePeer(ctx, r.sessions, r.registry, owner.DeviceID)
+	compute, err := observe(ctx, runtimeReference(owner), state.Current)
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return r.releaseLostCompute(ctx, p, owner, state, err)
 	}
@@ -143,16 +145,8 @@ func (r *runtimeLifecycle) idleCompute(ctx context.Context, p sandbox.SandboxPro
 	if compute.Status != "running" || !compute.BootstrapComplete {
 		return sandbox.ErrComputeUnconfirmed
 	}
-	renewed, err := p.RenewCompute(ctx, runtimeReference(owner), state.Current)
-	if err != nil {
-		return err
-	}
-	if sandbox.ValidateComputeResult(state.Current, renewed.Compute) != nil || renewed.Status != "running" || !renewed.BootstrapComplete {
-		return sandbox.ErrComputeUnconfirmed
-	}
-	peer, err := authorizedRuntimePeer(ctx, r.sessions, r.registry, owner.DeviceID)
-	if err != nil {
-		return err
+	if peerErr != nil {
+		return peerErr
 	}
 	if _, err := r.deployment.CheckRunning(ctx, owner); err != nil {
 		return err
@@ -219,7 +213,7 @@ func (r *runtimeLifecycle) idleCompute(ctx context.Context, p sandbox.SandboxPro
 // that can continue on new compute, releases ownership; every other case
 // returns the observation's error.
 func (r *runtimeLifecycle) releaseLostCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observed error) error {
-	if !owner.CreateSettled || owner.State != "running" || state.Current.ID == "" || state.Target != nil || state.Retained != nil || state.SuspendID != "" || state.RestoreID != "" || state.Rollback {
+	if !owner.CreateSettled || owner.State != "running" || state.Current.ID == "" || state.Target != nil || state.Snapshot != nil || state.SuspendID != "" || state.RestoreID != "" || state.Rollback {
 		return observed
 	}
 	if _, err := authorizedRuntimePeer(ctx, r.sessions, r.registry, owner.DeviceID); err == nil {
@@ -259,17 +253,16 @@ func (r *runtimeLifecycle) releaseLostCompute(ctx context.Context, p sandbox.San
 func (r *runtimeLifecycle) captureCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observeOnly bool) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
 	started := time.Now()
-	result, err := p.Suspend(ctx, sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, Retained: state.Retained, ReconcileOnly: observeOnly})
+	result, err := p.Suspend(ctx, sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, Snapshot: state.Snapshot, ObserveOnly: observeOnly})
 	logComputeStep(ctx, owner, "suspend", started, err)
 	if err != nil {
 		return err
 	}
-	validationErr := sandbox.ValidateSuspendResult(sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, Retained: state.Retained, ReconcileOnly: observeOnly}, result)
-	if validationErr != nil && (result.Retained == nil || !errors.Is(validationErr, sandbox.ErrComputeUnconfirmed)) {
-		return validationErr
+	if result.Compute.ID != state.Current.ID {
+		return sandbox.ErrOwnership
 	}
-	if result.Retained == nil {
-		if !observeOnly || !result.SuspendSettled || result.ResourcesReleased || (result.Status != "running" && result.Status != "paused") {
+	if result.Snapshot == nil {
+		if !observeOnly || result.SourceStopped || (result.Status != "running" && result.Status != "paused") {
 			return sandbox.ErrComputeUnconfirmed
 		}
 		state.Rollback = true
@@ -279,18 +272,18 @@ func (r *runtimeLifecycle) captureCompute(ctx context.Context, p sandbox.Sandbox
 		}
 		return r.wakeCompute(ctx, p, next, state)
 	}
-	if owner.NodeID != "" && result.Retained.Compatibility.Validate() != nil {
+	if result.Snapshot.Validate() != nil {
 		return sandbox.ErrOwnership
 	}
-	state.Retained = result.Retained
-	// Store the verified artifact before any recovery-path kill. Retained failure
+	state.Snapshot = result.Snapshot
+	// Store the verified artifact before any recovery-path kill. Snapshot failure
 	// or an unknown result cannot silently fall back to a cold Environment.
 	next, err := r.saveCompute(ctx, owner, "suspending", state, owner.ComputeRetainedUntil)
 	if err != nil {
 		return err
 	}
 	owner = next
-	if validationErr != nil {
+	if !result.SourceStopped {
 		// Native absence alone does not settle capture or publish the archive.
 		return sandbox.ErrComputeUnconfirmed
 	}
@@ -307,18 +300,18 @@ func (r *runtimeLifecycle) restoreIdleCompute(ctx context.Context, p sandbox.San
 	if !activity.Busy && !activity.WakeRequested {
 		return r.expireForDemand(ctx, owner)
 	}
+	if state.Snapshot == nil || state.Target != nil {
+		return sandbox.ErrOwnership
+	}
 	if err := r.computeCapacityForAllocation(ctx, owner); err != nil {
 		return err
-	}
-	if state.Retained == nil || state.Target != nil {
-		return sandbox.ErrOwnership
 	}
 	state.RestoreID = uuid.NewString()
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	next, err := r.deployment.BeginRestore(ctx, owner, state.Retained.Compatibility, raw)
+	next, err := r.deployment.BeginRestore(ctx, owner, state.Snapshot.Compatibility, raw)
 	if err != nil {
 		return err
 	}
@@ -356,18 +349,15 @@ func (r *runtimeLifecycle) expire(ctx context.Context, owner deployment.Allocati
 
 func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.SandboxProvider, owner deployment.Allocation, state runtimeCompute, observeOnly bool) (err error) {
 	defer func() { err = withObservationOwner(owner, err) }()
-	if state.Retained == nil || state.Rollback || state.RestoreID == "" {
+	if state.Snapshot == nil || state.Snapshot.Validate() != nil || state.Rollback || state.RestoreID == "" {
 		return sandbox.ErrOwnership
 	}
 	if state.Target == nil {
 		// NewCompute derives identity without starting native execution. A crash
 		// before this commit can safely repeat derivation on the reserved target.
-		target, err := p.NewCompute(ctx, runtimeReference(owner), state.Current.Generation+1, state.Retained)
+		target, err := p.NewCompute(ctx, runtimeReference(owner), state.Current.Generation+1, state.Snapshot)
 		if err != nil {
 			return err
-		}
-		if target.Name == "" || target.Generation != state.Current.Generation+1 || target.RestoredFrom == nil || *target.RestoredFrom != *state.Retained {
-			return sandbox.ErrOwnership
 		}
 		state.Target = &target
 		next, err := r.saveCompute(ctx, owner, "restoring", state, owner.ComputeRetainedUntil)
@@ -380,10 +370,10 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Sandbox
 	if err != nil {
 		return err
 	}
-	resumeAt := time.Now()
-	result, err := p.Resume(ctx, sandbox.ResumeRequest{Workspace: workspace, Reference: runtimeReference(owner), OperationID: state.RestoreID, Retained: *state.Retained, Target: *state.Target, ReconcileOnly: observeOnly})
-	observeExecutionStage(ctx, "provider_resume", resumeAt, err, "allocation_id", owner.ID, "session_id", owner.SessionID, "environment_id", owner.EnvironmentID, "node_id", r.nodeID, "reconcile_only", observeOnly)
-	logComputeStep(ctx, owner, "resume", resumeAt, err)
+	started := time.Now()
+	result, err := p.Resume(ctx, sandbox.ResumeRequest{Workspace: workspace, Reference: runtimeReference(owner), OperationID: state.RestoreID, Snapshot: *state.Snapshot, Target: *state.Target, ObserveOnly: observeOnly})
+	observeExecutionStage(ctx, "provider_resume", started, err, "allocation_id", owner.ID, "session_id", owner.SessionID, "environment_id", owner.EnvironmentID, "node_id", r.nodeID, "observe_only", observeOnly)
+	logComputeStep(ctx, owner, "resume", started, err)
 	if errors.Is(err, sandbox.ErrCheckpointUnusable) {
 		// The Provider closed this attempt before native dispatch. Never restore
 		// the snapshot again: expire it and continue by ordinary expiry cleanup.
@@ -393,7 +383,7 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Sandbox
 		return err
 	}
 	if result.RestoreAttemptClosed != "" {
-		if !result.ClosesRestoreAttempt(sandbox.ResumeRequest{OperationID: state.RestoreID, Retained: *state.Retained, Target: *state.Target, ReconcileOnly: observeOnly}) {
+		if !result.ClosesRestoreAttempt(sandbox.ResumeRequest{OperationID: state.RestoreID, Snapshot: *state.Snapshot, Target: *state.Target, ObserveOnly: observeOnly}) {
 			return sandbox.ErrOwnership
 		}
 		// Only an exact, durably closed attempt with no native dispatch can be replaced.
@@ -404,7 +394,7 @@ func (r *runtimeLifecycle) restoreCompute(ctx context.Context, p sandbox.Sandbox
 		}
 		return r.restoreCompute(ctx, p, next, state, false)
 	}
-	if result.Status != "running" || !result.BootstrapComplete || sandbox.ValidateComputeResult(*state.Target, result.Compute) != nil {
+	if result.Status != "running" || result.Compute.ID == "" {
 		return sandbox.ErrComputeUnconfirmed
 	}
 	state.Current, state.Target = result.Compute, nil
@@ -430,18 +420,6 @@ func (r *runtimeLifecycle) computeCapacityForAllocation(ctx context.Context, own
 		return nil
 	}
 	return r.computeCapacity(ctx, owner.ProviderKey)
-}
-
-func decodeRuntimeCompute(raw []byte, state *runtimeCompute) error {
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(state); err != nil {
-		return err
-	}
-	if d.Decode(new(any)) != io.EOF || state.Version != sandbox.SuspensionStateVersion {
-		return sandbox.ErrOwnership
-	}
-	return nil
 }
 
 func (r *runtimeLifecycle) computeCapacity(ctx context.Context, key string) error {

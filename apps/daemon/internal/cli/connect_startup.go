@@ -5,20 +5,20 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/transport"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
 )
 
 // prepareConnection overlaps independent preflight work after local credentials
 // and enrollment are resolved. Both workers are joined before returning, including
 // on failure. Their temporary context never owns the live connection or executor.
-func prepareConnection(parent context.Context, discover func(context.Context) (agentCLIDiscovery, error), bootstrap func(context.Context) (*transport.BootstrapResponse, error)) (*transport.BootstrapResponse, agentCLIDiscovery, error) {
+func prepareConnection(parent context.Context, discover func(context.Context) (agentCLIDiscovery, error), bootstrap func(context.Context) (*machineapi.BootstrapResponse, error)) (*machineapi.BootstrapResponse, agentCLIDiscovery, error) {
 	if err := parent.Err(); err != nil {
 		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	var agents agentCLIDiscovery
-	var boot *transport.BootstrapResponse
+	var boot *machineapi.BootstrapResponse
 	done := make(chan error, 2)
 	go func() {
 		var err error

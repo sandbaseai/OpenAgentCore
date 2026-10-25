@@ -10,11 +10,11 @@ package runtimegateway
 import (
 	"context"
 	"errors"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"sync"
 	"time"
 
 	obslog "github.com/MiniMax-AI/OpenAgentCore/internal/obs/log"
-	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimedevice"
 )
 
 // ErrDeviceNotRegistered is returned by Registry lookups when a caller
@@ -284,7 +284,7 @@ func (r *Registry) CapabilityHints() <-chan struct{} {
 	return r.capabilityHints
 }
 
-func (r *Registry) observeCapabilitySnapshot(sess *Session, kinds []runtimedevice.SupportedAgentKind) bool {
+func (r *Registry) observeCapabilitySnapshot(sess *Session, kinds []proto.SupportedAgentKind) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.byDevice[sess.DeviceID] != sess || sess.IsClosed() {

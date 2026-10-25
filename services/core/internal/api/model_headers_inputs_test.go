@@ -19,7 +19,7 @@ func TestModelHeadersDeploymentAndSavedAgentHTTP(t *testing.T) {
 		if valid && (out.Code != 200 || s.writes != 1) || !valid && (out.Code != 400 || s.writes != 0) {
 			t.Fatalf("deployment headers status=%d writes=%d", out.Code, s.writes)
 		}
-		if valid && headers != "null" && s.record.Configuration.ModelProvider.Headers["X-Activity"] != "private-header-canary" {
+		if valid && headers != "null" && s.record.Headers["X-Activity"] != "private-header-canary" {
 			t.Fatal("deployment store lost headers")
 		}
 		if strings.Contains(out.Body.String(), "private-header-canary") || strings.Contains(out.Body.String(), "X-Activity") {
@@ -55,7 +55,7 @@ func TestModelHeadersClaudeAcceptedAcrossProviderInputRoutes(t *testing.T) {
 	s := &coreProviderValidationStore{t: t}
 	h, _, _ := adminTestHandler(t, s.configure)
 	out := projectKeyHTTP(h, http.MethodPut, "/core/v1/harnesses/claude_sdk/model-configuration", "admin", `{"model":"fixture","model_provider":`+provider+`}`)
-	if out.Code != 200 || s.writes != 1 || s.record.Configuration.ModelProvider.Headers["X-Activity"] != "daily-free" {
+	if out.Code != 200 || s.writes != 1 || s.record.Headers["X-Activity"] != "daily-free" {
 		t.Fatalf("deployment Claude header status %d", out.Code)
 	}
 	if strings.Contains(out.Body.String(), "daily-free") {

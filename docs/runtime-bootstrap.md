@@ -2,7 +2,7 @@
 title: "Runtime bootstrap"
 ---
 
-The Runtime bootstrap protocol connects a Sandbox Provider to the managed Runtime it starts. The Provider hands the Runtime one bootstrap file, which is the Runtime's only authentication input for that launch.
+The Runtime bootstrap protocol connects a Sandbox Provider to the managed Runtime it starts. The Provider hands the Runtime one bootstrap file, which is the Runtime's only authentication input for that launch and the only source of its Environment binding.
 
 | Property | Value |
 | --- | --- |
@@ -21,7 +21,7 @@ The Runtime bootstrap protocol connects a Sandbox Provider to the managed Runtim
 
 A successful launch proves only the handoff: an authenticated connection, prepared capabilities and execution readiness are separate observations under the [Core–Runtime protocol](./runtime-protocol.md), and the [Sandbox Provider protocol](./sandbox-provider.md#four-distinct-readiness-facts) lists what each one proves.
 
-Self-hosted executors and operator-provisioned devices get their daemon identity in other ways; the [machine connection API](../contracts/agents-api/machine-api.md#credentials) lists every credential source. All of them enter the same Runtime execution loop.
+Self-hosted executors and operator-provisioned devices get their daemon identity in other ways, and their Environment binding from enrollment plus `oac-daemon connect --workspace` or the native installation; the [machine connection API](../contracts/agents-api/machine-api.md#credentials) lists every credential source. All of them enter the same Runtime execution loop.
 
 ## Startup order
 
@@ -51,10 +51,18 @@ oac-daemon connect --bootstrap-file /home/runtime/runtime-bootstrap.json
 | `device_id` | Canonical nonzero UUID of the daemon identity Core issued |
 | `harness` | The immutable Session Harness identifier; only this Harness is probed and registered by a managed Runtime |
 | `credential` | Nonempty daemon credential Core issued, without whitespace or NUL |
+| `environment_id` | Canonical nonzero UUID of the Environment the Runtime serves |
+| `session_id` | Canonical nonzero UUID of the Session whose native history the Runtime keeps |
+| `workspace` | Clean absolute directory of the workspace, `runtimebootstrap.RuntimeWorkspace` in the packaged Runtime layout. The Runtime serves it as `runtimebootstrap.PublicWorkspace` (`/workspace`), the path applications and Core use |
+| `suspend_control` | Required boolean. Core sets it exactly when the Provider declares [checkpoint support](./sandbox-provider.md), and the Provider forwards it unchanged |
 
 The decoder rejects unknown, duplicate, missing and case-aliased fields, other versions and documents larger than `runtimebootstrap.MaxBytes`. Errors never include submitted values. A missing or malformed file fails before the daemon connects.
 
 The file is the only authentication input for this launch: the daemon refuses to combine it with self-hosted enrollment options, and reads the credential into memory without saving it to a stored profile. Credentials never go in command arguments, environment variables or receipts. The provider keeps the file for process restarts and removes it only during explicit cleanup of the resources it owns.
+
+## Suspend control
+
+When `suspend_control` is true, the daemon publishes its suspend control at `runtimebootstrap.SuspendControlFile` and parks for suspension. Core's wake command, `oac-daemon resume --control-file`, reads that file. A Provider that declares checkpoint support prepares the file's directory before it starts the daemon: private to the Runtime account (mode 0700, owned by UID 1000). `oac-daemon connect` fails when `suspend_control` is true and it cannot publish the control, and the control is never enabled by any other setting.
 
 ## Timeouts and limits
 
@@ -62,7 +70,7 @@ The file is the only authentication input for this launch: the daemon refuses to
 | --- | --- | --- |
 | 16 KiB (`runtimebootstrap.MaxBytes`) | The bootstrap document | The decoder rejects it, and the daemon fails before it connects. |
 
-Core derives `harness` from the Session that owns the allocation. A combined image can contain several Harnesses, but its managed Runtime discovers only this selection; an unknown, missing or unavailable selection fails without probing another Harness. The bootstrap version is 2. Deploy matching Core, provider helpers and Runtime images; the installation does not support an upgrade from another release. Self-hosted installations continue to discover their installed Harness set.
+Core derives `harness` from the Session that owns the allocation. A combined image can contain several Harnesses, but its managed Runtime discovers only this selection; an unknown, missing or unavailable selection fails without probing another Harness. The bootstrap version is 3. Deploy matching Core, provider helpers and Runtime images; the installation does not support an upgrade from another release. Self-hosted installations continue to discover their installed Harness set.
 
 The Runtime validates the input and owns authentication and connection. A successful launch proves only the handoff: an authenticated connection, prepared capabilities and execution readiness are separate observations under the [Core–Runtime protocol](./runtime-protocol.md), and the [Sandbox Provider guide](./sandbox-provider.md#four-distinct-readiness-facts) lists what each one proves.
 
@@ -73,9 +81,6 @@ The Runtime validates the input and owns authentication and connection. A succes
 | Docker | Writes the file into the Runtime's owned home volume. |
 | microsandbox, E2B | Deliver the file before launching the same command. |
 
-## Hosted suspension control
-
-The private hosted park/wake control-file path is authored as `SuspendControlFile` in `internal/runtimebootstrap/bootstrap.go`. Core recovery and native Go adapters read that value; the E2B helper contract generator projects it into the template builder. Managed startup prepares its private directory and supplies `OAC_RUNTIME_DAEMON_SUSPEND_PID_FILE` to enable Runtime suspension. This is a packaged protocol setting. The shared Sandbox Provider registration owns idle and retention defaults; the adapter owns its native lease timeout.
 
 ## Verification
 

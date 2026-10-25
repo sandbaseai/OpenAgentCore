@@ -15,7 +15,7 @@ import (
 
 func TestPredecodeRealReadLoop(t *testing.T) {
 	c := newFakeConn()
-	s := newTestSession(c, "device", "tenant", "test", nil, nil)
+	s := newTestSession(c, "device", "test", nil, nil)
 	defer s.Close("test")
 	ctx := textobs.WithArtifact(t.Context(), "5889faac-763b-4a6b-bae6-e809fe65e0cd", "4fbfe7d7-cfdb-4b96-917f-79b3d251c8b5")
 	finish := s.ObserveArtifactTransport(ctx, "prepare")
@@ -83,7 +83,7 @@ func TestC2CoreProducerFixtures(t *testing.T) {
 			r.dispatched = time.Now()
 			r.observeRound(start, proto.WorkspaceExportPayload{Step: "begin"}, "completed")
 			r.observe(scope, nil)
-			s := newTestSession(newFakeConn(), "device", "tenant", "test", nil, nil)
+			s := newTestSession(newFakeConn(), "device", "test", nil, nil)
 			defer s.Close("test")
 			finish := s.ObserveArtifactTransport(ctx, "29117c12-a502-4d69-9ad5-27848a6b92ea")
 			s.observeArtifactExport(ctx, "378281c9-a535-412a-b217-45520991855e")
@@ -103,7 +103,7 @@ func TestReceiptCanPrecedeWriteReturn(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(old)
 	c := &artifactSlowConn{fakeConn: newFakeConn(), entered: make(chan struct{}), release: make(chan struct{})}
-	s := newTestSession(c, "device", "tenant", "test", nil, nil)
+	s := newTestSession(c, "device", "test", nil, nil)
 	defer s.Close("test")
 	s.Start()
 	ctx := textobs.WithArtifact(t.Context(), "5889faac-763b-4a6b-bae6-e809fe65e0cd", "4fbfe7d7-cfdb-4b96-917f-79b3d251c8b5")

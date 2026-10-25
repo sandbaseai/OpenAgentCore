@@ -30,7 +30,6 @@ type startRequest struct {
 	Subagents          *subagentOptions     `json:"subagents,omitempty"`
 	OutputFormat       *proto.OutputFormat  `json:"output_format,omitempty"`
 	Type               string               `json:"type"`
-	Input              proto.MessageInput   `json:"input,omitempty"`
 	Model              string               `json:"model"`
 	SystemPrompt       string               `json:"system_prompt"`
 	Cwd                string               `json:"cwd"`
@@ -41,20 +40,8 @@ type startRequest struct {
 	RequireHistory     bool                 `json:"require_history,omitempty"`
 }
 
-func prepare(config Config, req proto.PromptRequestPayload) (startRequest, []string, error) {
-	if req.RunID == "" || req.Input.Validate() != nil {
-		return startRequest{}, nil, fmt.Errorf("claudesdk: run id and prompt are required")
-	}
-	start, env, err := prepareConfiguration(config, req)
-	if err != nil {
-		return startRequest{}, nil, err
-	}
-	start.Input = req.Input
-	return start, env, nil
-}
-
 func prepareConfiguration(config Config, req proto.PromptRequestPayload) (startRequest, []string, error) {
-	start := startRequest{Type: "start", Resume: req.AgentSessionID, RequireHistory: req.RequireExistingNativeSession, Functions: req.FunctionTools}
+	start := startRequest{Resume: req.AgentSessionID, RequireHistory: req.RequireExistingNativeSession, Functions: req.FunctionTools}
 	fail := func(reason string) (startRequest, []string, error) {
 		return startRequest{}, nil, fmt.Errorf("claudesdk: %s", reason)
 	}

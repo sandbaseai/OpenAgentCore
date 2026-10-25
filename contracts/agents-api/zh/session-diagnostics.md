@@ -1,7 +1,7 @@
 ---
 title: "Session 诊断"
 source: contracts/agents-api/session-diagnostics.md
-source_hash: e51cae1d19d57fe9bec5d77fc7d07805dbfc76bfa751e133e48e66017a50684d
+source_hash: 49c984a3999ea3abf2816f54336a7a5c5ca9cd64c8b73f54a8076e0ea2dc65cb
 ---
 
 管理员通过两个需要 Core 密钥的路由读取 Session 或 Turn 失败的原因，它们报告失败类别和 Item 接收时间。
@@ -27,7 +27,7 @@ source_hash: e51cae1d19d57fe9bec5d77fc7d07805dbfc76bfa751e133e48e66017a50684d
 
 托管配置失败优先于输入活动，输入活动优先于最新根 Turn；公开 Session 响应使用相同优先级。不会包含私有结果文本、原生消息、提供商响应体、命令文本、路径或凭据。未知结果代码变为 `internal_error`；不使用前缀匹配或原因文本解析。
 
-配置参数来自已确认的结构化回执，在结算 Environment 及其输入并记录事件的失败事务中持久化。`step` 为 `setup`、`python`、`npm`、`system`、`file`、`skill` 或 null。`index` 仅对 setup 为 JSON 安全的非负整数，其他情况为 null。`exit_code` 对脚本步骤为 1 至 255，其他情况为 null。未记录的详情保持 null。这些私有字段不会改变公开失败原因或 SSE。
+配置参数来自已确认的结构化回执，在结算 Environment 及其输入并记录事件的失败事务中持久化。`step` 为 `setup`、`python`、`npm`、`file`、`skill`、`harness` 或 null。`index` 仅对 setup 为 JSON 安全的非负整数，其他情况为 null。`exit_code` 对脚本步骤为 1 至 255，其他情况为 null。未记录的详情保持 null。这些私有字段不会改变公开失败原因或 SSE。
 
 ## Turn 快照与 Item 回执时间 {#turn-snapshot-and-item-receipt-timing}
 

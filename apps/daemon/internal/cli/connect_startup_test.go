@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/transport"
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
 )
 
 func awaitStartup(t *testing.T, ch <-chan struct{}) {
@@ -32,13 +32,13 @@ func TestConnectionPreflightOverlapsAndJoins(t *testing.T) {
 			discoveryStarted, bootstrapStarted := make(chan struct{}), make(chan struct{})
 			releaseDiscovery, releaseBootstrap := make(chan struct{}), make(chan struct{})
 			done := make(chan error, 1)
-			boot := &transport.BootstrapResponse{DeviceID: "device"}
+			boot := &machineapi.BootstrapResponse{DeviceID: "device"}
 			go func() {
 				result, _, err := prepareConnection(t.Context(), func(context.Context) (agentCLIDiscovery, error) {
 					close(discoveryStarted)
 					<-releaseDiscovery
 					return agentCLIDiscovery{}, nil
-				}, func(context.Context) (*transport.BootstrapResponse, error) {
+				}, func(context.Context) (*machineapi.BootstrapResponse, error) {
 					close(bootstrapStarted)
 					<-releaseBootstrap
 					return boot, nil
@@ -97,7 +97,7 @@ func TestConnectionPreflightFailureCancelsAndJoinsSibling(t *testing.T) {
 						return nil, fail()
 					}
 					return nil, wait(ctx)
-				}, func(ctx context.Context) (*transport.BootstrapResponse, error) {
+				}, func(ctx context.Context) (*machineapi.BootstrapResponse, error) {
 					if failing == "bootstrap" {
 						return nil, fail()
 					}
@@ -136,7 +136,7 @@ func TestConnectionPreflightParentCancellation(t *testing.T) {
 			started <- struct{}{}
 			<-ctx.Done()
 			return nil, ctx.Err()
-		}, func(ctx context.Context) (*transport.BootstrapResponse, error) {
+		}, func(ctx context.Context) (*machineapi.BootstrapResponse, error) {
 			started <- struct{}{}
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -157,7 +157,7 @@ func TestConnectionPreflightParentCancellation(t *testing.T) {
 	_, _, err := prepareConnection(ctx, func(context.Context) (agentCLIDiscovery, error) {
 		t.Error("discovery started after cancellation")
 		return nil, nil
-	}, func(context.Context) (*transport.BootstrapResponse, error) {
+	}, func(context.Context) (*machineapi.BootstrapResponse, error) {
 		t.Error("bootstrap started after cancellation")
 		return nil, nil
 	})
@@ -179,9 +179,9 @@ func BenchmarkConnectionPreflight(b *testing.B) {
 				time.Sleep(5 * time.Millisecond)
 				return agentCLIDiscovery{}, nil
 			}
-			bootstrap := func(context.Context) (*transport.BootstrapResponse, error) {
+			bootstrap := func(context.Context) (*machineapi.BootstrapResponse, error) {
 				time.Sleep(5 * time.Millisecond)
-				return &transport.BootstrapResponse{}, nil
+				return &machineapi.BootstrapResponse{}, nil
 			}
 			for b.Loop() {
 				if parallel {
@@ -239,7 +239,7 @@ func TestMainLoopOverlapsPreflightWithoutEarlyRegistration(t *testing.T) {
 						http.Error(w, "rejected", http.StatusUnauthorized)
 						return
 					}
-					_ = json.NewEncoder(w).Encode(transport.BootstrapResponse{DeviceID: "device"})
+					_ = json.NewEncoder(w).Encode(machineapi.BootstrapResponse{DeviceID: "device"})
 				case "/agent-daemon/ws":
 					select {
 					case <-completed:
@@ -256,7 +256,7 @@ func TestMainLoopOverlapsPreflightWithoutEarlyRegistration(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
-			err := mainLoopRemote(ctx, &runContext{stdout: io.Discard, stderr: io.Discard}, "default", auth.Profile{ServerURL: server.URL, RuntimeID: "device", RunnerCredential: "fixture"}, "")
+			err := mainLoopRemote(ctx, &runContext{stdout: io.Discard, stderr: io.Discard}, "default", auth.Profile{ServerURL: server.URL, RuntimeID: "device", RunnerCredential: "fixture"}, "", false)
 			if err == nil || ctx.Err() != nil {
 				t.Fatalf("unexpected completion: %v, context %v", err, ctx.Err())
 			}

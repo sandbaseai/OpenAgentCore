@@ -30,17 +30,17 @@ func expectCapabilityHint(t *testing.T, reg *Registry, want bool) {
 
 func TestCapabilityHintsRequireCurrentAvailableSnapshot(t *testing.T) {
 	reg := NewRegistry()
-	old := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	old := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(old)
 	expectCapabilityHint(t, reg, false) // Transport alone is insufficient.
-	publishCapabilityHeartbeat(t, old, []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: false}})
+	publishCapabilityHeartbeat(t, old, []proto.SupportedAgentKind{{Kind: "fake", Available: false}})
 	expectCapabilityHint(t, reg, false)
-	kinds := []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: true}}
+	kinds := []proto.SupportedAgentKind{{Kind: "fake", Available: true}}
 	publishCapabilityHeartbeat(t, old, kinds)
 	expectCapabilityHint(t, reg, true)
 	publishCapabilityHeartbeat(t, old, kinds)
 	expectCapabilityHint(t, reg, false) // Ordinary heartbeats do not rescan.
-	newer := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	newer := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(newer)
 	kinds[0].Version = "changed"
 	publishCapabilityHeartbeat(t, old, kinds)
@@ -51,23 +51,23 @@ func TestCapabilityHintsRequireCurrentAvailableSnapshot(t *testing.T) {
 
 func TestCapabilityHintsCoalesceAndIgnoreDisconnectedPeers(t *testing.T) {
 	reg := NewRegistry()
-	s := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	s := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(s)
-	kinds := []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: true}}
+	kinds := []proto.SupportedAgentKind{{Kind: "fake", Available: true}}
 	publishCapabilityHeartbeat(t, s, kinds)
-	kinds[0].Capabilities.Streaming = true
+	kinds[0].Capabilities.Streaming = proto.CapabilitySupported
 	publishCapabilityHeartbeat(t, s, kinds)
 	expectCapabilityHint(t, reg, true)
 	expectCapabilityHint(t, reg, false)
 	reg.Deregister(s)
-	kinds[0].Capabilities.DurableTurns = true
+	kinds[0].Capabilities.DurableTurns = proto.CapabilitySupported
 	publishCapabilityHeartbeat(t, s, kinds)
 	expectCapabilityHint(t, reg, false)
 }
 
 func TestInvalidHeartbeatCannotWakeScheduler(t *testing.T) {
 	reg := NewRegistry()
-	s := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	s := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(s)
 	s.handleHeartbeat(proto.Envelope{Type: proto.TypeHeartbeat, Payload: json.RawMessage(`{"ts":1,"active_requests":0,"supported_agent_kinds":[{"kind":"fake","available":true,"capabilities":{"streaming":"invented"}}]}`)})
 	expectCapabilityHint(t, reg, false)
@@ -76,14 +76,14 @@ func TestInvalidHeartbeatCannotWakeScheduler(t *testing.T) {
 	}
 }
 
-func publishCapabilityHeartbeat(t *testing.T, s *Session, kinds []runtimedevice.SupportedAgentKind) {
+func publishCapabilityHeartbeat(t *testing.T, s *Session, kinds []proto.SupportedAgentKind) {
 	t.Helper()
 	advertised := make([]proto.SupportedAgentKind, len(kinds))
 	for i, k := range kinds {
 		advertised[i] = proto.SupportedAgentKind{Kind: k.Kind, Available: k.Available, Version: k.Version,
 			Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{
-				Streaming:    proto.CapabilityFromBool(k.Capabilities.Streaming),
-				DurableTurns: proto.CapabilityFromBool(k.Capabilities.DurableTurns),
+				Streaming:    k.Capabilities.Streaming,
+				DurableTurns: k.Capabilities.DurableTurns,
 			})}
 	}
 	env, err := proto.NewEnvelope(proto.TypeHeartbeat, "", proto.HeartbeatPayload{SupportedAgentKinds: advertised})
@@ -99,9 +99,9 @@ func TestCapabilityObservationsExcludeRejectedAndStalePeers(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	reg := NewRegistry()
-	old := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	old := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(old)
-	kinds := []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: true}}
+	kinds := []proto.SupportedAgentKind{{Kind: "fake", Available: true}}
 	publishCapabilityHeartbeat(t, old, kinds)
 	if !strings.Contains(logs.String(), "runtime capability snapshot observed") {
 		t.Fatal("valid declaration was not observed")
@@ -111,7 +111,7 @@ func TestCapabilityObservationsExcludeRejectedAndStalePeers(t *testing.T) {
 	if strings.Contains(logs.String(), "runtime capability snapshot observed") {
 		t.Fatal("invalid declaration logged as an accepted snapshot")
 	}
-	newer := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+	newer := newTestSession(newFakeConn(), "device", "version", reg, nil)
 	reg.Register(newer)
 	publishCapabilityHeartbeat(t, old, kinds)
 	if strings.Contains(logs.String(), "runtime capability snapshot observed") {
@@ -147,7 +147,7 @@ func TestCapabilityConfirmationRetriesWithoutObservingRejectedAuthority(t *testi
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(previous) })
 			reg := NewRegistry()
-			s := newTestSession(newFakeConn(), "device", "tenant", "version", reg, nil)
+			s := newTestSession(newFakeConn(), "device", "version", reg, nil)
 			reg.Register(s)
 			t.Cleanup(func() { s.Close("test finished") })
 			authority := &capabilityAuthorityStore{deleted: mode != "error"}
@@ -164,7 +164,7 @@ func TestCapabilityConfirmationRetriesWithoutObservingRejectedAuthority(t *testi
 				}
 				t.Cleanup(release)
 			}
-			kinds := []runtimedevice.SupportedAgentKind{{Kind: "fake", Available: true}}
+			kinds := []proto.SupportedAgentKind{{Kind: "fake", Available: true}}
 			publishCapabilityHeartbeat(t, s, kinds)
 			expectCapabilityHint(t, reg, false)
 			if strings.Contains(logs.String(), "runtime capability snapshot observed") {

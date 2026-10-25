@@ -17,7 +17,7 @@ import (
 
 func TestDefaultsAreEncryptedAuditedAndReplaced(t *testing.T) {
 	f := newFixture(t)
-	provider := v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://deployment.example/v1", APIKey: "deployment-key-canary"}
+	provider := v1.ModelProviderInput{Protocol: "responses", BaseURL: "https://deployment.example/v1", APIKey: "deployment-key-canary", Headers: map[string]string{"X-Activity": "daily-free"}}
 	saved := f.replace(t, provider)
 	if saved.Harness != "codex" || saved.Provider != *provider.SafeView() || saved.UpdatedAt.IsZero() {
 		t.Fatal("default not saved", saved)

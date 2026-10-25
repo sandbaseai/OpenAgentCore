@@ -48,7 +48,7 @@ func TestComputeProfilesPreserveDefaultSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = provider.UpTo(t.Context(), 3); err != nil {
+	if _, err = provider.UpTo(t.Context(), 8); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(t.Context(), `UPDATE runtime_deployment SET provider_kind='e2b', mode='direct', generation=7, provider_config='{"template":"fixture:build"}', specification='{"resources":{"cpus":2,"memory_mib":2048}}'`); err != nil {
@@ -81,7 +81,7 @@ func TestComputeProfilesPreserveDefaultSelection(t *testing.T) {
 		t.Fatal("existing Session was assigned a profile", count, err)
 	}
 	var version int
-	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM oac_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 4 {
+	if err = db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM oac_schema_version WHERE is_applied`).Scan(&version); err != nil || version != 10 {
 		t.Fatal(version, err)
 	}
 }

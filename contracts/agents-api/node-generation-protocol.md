@@ -25,8 +25,6 @@ Node-local storage, generation leases and recovery are not part of the wire prot
 
 Every frame is one JSON text message whose `version` equals `node.ProtocolVersion`; both peers reject any other version, and there is no fallback decoder. Member names are exact and unique: unknown members, case aliases, duplicates and unexpected nulls are rejected. Control frames (`hello`, `welcome`, `heartbeat`, `heartbeat_ack`, `retention`, `retention_ack`) are at most 32 KiB; `request` and `response` frames at most 72 MiB. An invalid frame closes the connection.
 
-The current node wire version is 9. Core and nodes require matching peers; no previous-version decoder is provided.
-
 ## Connection
 
 ```mermaid
@@ -79,23 +77,23 @@ Each operation carries its own arguments and returns the following result on suc
 | `command` | `RunCommand` | `command` | `command` |
 | `observe` | `Observe` | `observation` | `sample` |
 | `initial` | `Initial` | None | `compute` |
-| `new_compute` | `NewCompute` | Positive `generation` and optional `retained` | `compute` |
+| `new_compute` | `NewCompute` | Positive compute `generation` and optional `snapshot` | `compute` |
 | `compute` | `GetCompute` | `compute` | `state` |
-| `renew_compute` | `RenewCompute` | Exact current `compute` | `state` |
+| `renew_compute` | `RenewCompute` | `compute` | `state` |
 | `kill_compute` | `KillCompute` | `compute` | None |
 | `resume_compute` | `ResumeCompute` | `compute` | `state` |
 | `command_compute` | `RunCommandCompute` | `compute` and `command` | `command` |
 | `suspend` | `Suspend` | `suspend` | `state` |
 | `resume` | `Resume` | `resume` | `state` |
-| `delete_retained` | `DeleteRetained` | `retained` | None |
+| `delete_snapshot` | `DeleteSnapshot` | `snapshot` | None |
 | `restore_preparation` | `RestorePreparation` | `key` | `restored` |
 | `save_preparation` | `SavePreparation` | `key` | None |
 
-A request whose `connection_id`, `owner_epoch` or `sequence` does not match closes the connection. A malformed request gets an `invalid` response. The node runs the request on the provider of the named `deployment_generation` and answers `unconfirmed` when it cannot. Core sends `create` and a `resume` that is not reconciliation-only only to a generation that is ready on that node, and keeps at most 32 requests pending per connection.
+A request whose `connection_id`, `owner_epoch` or `sequence` does not match closes the connection. A malformed request gets an `invalid` response. The node runs the request on the provider of the named `deployment_generation` and answers `unconfirmed` when it cannot. Core sends `create` and a `resume` that is not observe-only only to a generation that is ready on that node, and keeps at most 32 requests pending per connection.
 
 The budget is relative: the node anchors `timeout_ms` to its own clock on receipt and consumes it while the request waits in its queue, so the hosts' clocks need not agree. Core still bounds its own wait. A full node queue closes the connection.
 
-The `response` frame carries `id` and `connection_id`. A successful response carries the result named in the operation table, with no result field for `kill`, `kill_compute`, `delete_retained` or `save_preparation`. A failed response carries an `error_code`:
+The `response` frame carries `id` and `connection_id`. A successful response carries the result named in the operation table, with no result field for `kill`, `kill_compute`, `delete_snapshot` or `save_preparation`. A failed response carries an `error_code`:
 
 | `error_code` | Meaning |
 | --- | --- |
@@ -106,11 +104,11 @@ The `response` frame carries `id` and `connection_id`. A successful response car
 | `unsupported` | The operation is declared unsupported; see below |
 | `unconfirmed`, or any other value | The outcome is unknown |
 
-A failed response carries no result except an exact-provenance Resume target for cleanup (as specified below), or an `info` that is an exact-reference `CreateSettled` receipt: a confirmed native Create that failed a later check can still prove that the attempt settled. A timeout, a lost response or a disconnect is unavailable or uncertain, never evidence of absence, and Core never replays a mutation after one; it observes the original operation instead. The [Sandbox Provider guide](../../docs/sandbox-provider.md#operation-outcomes-and-retries) defines each outcome.
+A failed response carries no result, except an `info` that is an exact-reference `CreateSettled` receipt: a confirmed native Create that failed a later check can still prove that the attempt settled. A timeout, a lost response or a disconnect is unavailable or uncertain, never evidence of absence, and Core never replays a mutation after one; it observes the original operation instead. The [Sandbox Provider protocol](../../docs/sandbox-provider.md#operation-outcomes-and-retries) defines each outcome.
 
 Node startup and generation loading validate complete Provider operation declarations before accepting work, and the Core proxy uses the same registered declaration, so an unsupported operation rejects before node resolution or native I/O. The [operation contract](../../docs/sandbox-provider.md#explicit-operation-contracts) owns the inventory. An `unsupported` response carries an `unsupported` object with the exact method `operation` and an authored safe `reason`; the proxy checks both against the request. Missing, malformed or mismatched evidence is an unconfirmed result, never proof that a mutation was rejected. Unsupported stays distinct from observation unavailability and unknown compute or command results, and it neither settles resource ownership nor authorizes a replay.
 
-Create bootstrap and Resume requests may carry an optional workspace filesystem binding. The node validates its tenant and Environment against the allocation reference, its immutable ObjectID, and its attachment configuration ID against the supplied configuration before forwarding it. The filesystem resolver validates adapter-native ownership. A Provider whose policy declares workspace storage rejects a missing binding; a Provider without it rejects a present one. Neither falls back. Error responses may retain a Resume target only when its nonempty native ID, name, generation and retained-state provenance match the requested target; this is cleanup evidence, never successful restore.
+Create bootstrap and Resume requests may carry an optional workspace filesystem binding. The node validates its tenant and Environment against the allocation reference, its immutable ObjectID, and its attachment configuration ID against the supplied configuration before forwarding it. The filesystem resolver validates adapter-native ownership. A Provider whose policy declares workspace storage rejects a missing binding; a Provider without it rejects a present one. Neither falls back. Error responses may retain a Resume target only when its nonempty native ID, name, generation and snapshot provenance match the requested target; this is cleanup evidence, never successful restore.
 
 ## Generation control
 

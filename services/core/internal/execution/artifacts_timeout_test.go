@@ -92,7 +92,7 @@ func TestReadOnlyReleaseAcceptsExpiredCleanupAfterLongExport(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				// No transport goroutines are needed: Send queues the release and the
 				// correlated typed terminal receipt is already available to the caller.
-				peer := runtimegateway.NewSession(nil, "device", "tenant", "test", nil, nil)
+				peer := runtimegateway.NewSession(nil, "device", "test", nil, nil)
 				replies := make(chan proto.Envelope, 1)
 				env, err := proto.NewEnvelope(proto.TypePreparationStatus, "prepare", proto.PreparationStatusPayload{Handle: test.handle, Revision: 3, State: test.state, RunID: test.run, ErrorCode: test.code})
 				if err != nil {
@@ -152,7 +152,7 @@ func TestPreparedWorkspaceRetainsConsumeResultAfterExpiredCleanup(t *testing.T) 
 		t.Run(fmt.Sprint(failed), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				conn := &expiredPreparationConn{inbound: make(chan []byte, 4), closed: make(chan struct{})}
-				peer := runtimegateway.NewSession(conn, "device", "tenant", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
+				peer := runtimegateway.NewSession(conn, "device", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 				peer.Start()
 				defer peer.Close("test")
 				sentinel := errors.New("capture failed")

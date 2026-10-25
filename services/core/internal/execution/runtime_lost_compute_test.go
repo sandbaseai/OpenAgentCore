@@ -33,8 +33,8 @@ type lostComputeProvider struct {
 func (p *lostComputeProvider) GetCompute(_ context.Context, _ sandbox.Reference, c sandbox.Compute) (sandbox.ComputeState, error) {
 	return p.observe(c)
 }
-func (p *lostComputeProvider) RenewCompute(_ context.Context, _ sandbox.Reference, c sandbox.Compute) (sandbox.ComputeState, error) {
-	return p.observe(c)
+func (p *lostComputeProvider) RenewCompute(ctx context.Context, r sandbox.Reference, c sandbox.Compute) (sandbox.ComputeState, error) {
+	return p.GetCompute(ctx, r, c)
 }
 func (p *lostComputeProvider) KillCompute(ctx context.Context, r sandbox.Reference, c sandbox.Compute) error {
 	p.killed = append(p.killed, c)
@@ -86,7 +86,7 @@ func newLostComputeFixture(t *testing.T, external bool, seed ...string) lostComp
 		t.Fatal(err)
 	}
 	f.bootstrap = <-provider.bootstraps
-	state, _ := json.Marshal(runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: lostCompute})
+	state, _ := json.Marshal(runtimeCompute{Current: lostCompute})
 	bind := strings.NewReplacer("$1", "'"+owner.EnvironmentID+"'", "$2", "'"+owner.DeviceID+"'", "$3", "'"+owner.ID+"'", "$4", "'"+string(state)+"'")
 	exec := func(statements []string) {
 		for _, statement := range statements {
@@ -254,8 +254,8 @@ func TestUnconfirmedLostComputeKeepsOwnership(t *testing.T) {
 	// a terminal status that cannot be released stays unconfirmed.
 	for _, guard := range []negative{
 		{name: "unknown_creation", seed: []string{`UPDATE runtime_allocations SET create_settled=false WHERE id=$3`}, want: sandbox.ErrNotFound},
-		{name: "no_compute_id", seed: []string{`UPDATE runtime_allocations SET compute_state='{"protocol_version":"1","current":{"Name":"old-compute"}}' WHERE id=$3`}, want: sandbox.ErrOwnership},
-		{name: "restore_intent", seed: []string{`UPDATE runtime_allocations SET compute_state='{"protocol_version":"1","current":{"Name":"old-compute","ID":"old-compute-id"},"target":{"Name":"next","Generation":1},"restore_id":"attempt"}' WHERE id=$3`}, want: sandbox.ErrNotFound},
+		{name: "no_compute_id", seed: []string{`UPDATE runtime_allocations SET compute_state='{"current":{"Name":"old-compute"}}' WHERE id=$3`}, want: sandbox.ErrOwnership},
+		{name: "restore_intent", seed: []string{`UPDATE runtime_allocations SET compute_state='{"current":{"Name":"old-compute","ID":"old-compute-id"},"target":{"Name":"next","Generation":1},"restore_id":"attempt"}' WHERE id=$3`}, want: sandbox.ErrNotFound},
 		{name: "owned_workspace", owned: true, want: sandbox.ErrNotFound},
 		{name: "initialization_incomplete", seed: []string{`UPDATE environments SET initialization='running' WHERE id=$1`}, want: sandbox.ErrNotFound, initial: "running"},
 		{name: "terminal_environment", seed: []string{`UPDATE environments SET status='failed' WHERE id=$1`}, want: sandbox.ErrNotFound, status: "failed"},

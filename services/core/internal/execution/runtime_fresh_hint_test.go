@@ -20,7 +20,7 @@ import (
 )
 
 type freshHintProvider struct {
-	sandbox.SandboxProvider
+	lifecycleOnlySandbox
 	creates atomic.Int32
 	created chan struct{}
 }

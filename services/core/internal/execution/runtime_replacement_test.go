@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
+
 	v1 "github.com/MiniMax-AI/OpenAgentCore/contracts/agents-api/v1"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto/prototest"
@@ -48,7 +50,7 @@ func (p *retentionProvider) KillCompute(context.Context, sandbox.Reference, sand
 	p.kills++
 	return p.killError
 }
-func (p *retentionProvider) DeleteRetained(context.Context, sandbox.Reference, sandbox.RetainedState) error {
+func (p *retentionProvider) DeleteSnapshot(context.Context, sandbox.Reference, sandbox.SnapshotIdentity) error {
 	p.snapshots++
 	return nil
 }
@@ -68,7 +70,7 @@ func TestCapacityPressureReleasesIdleSuspendedSnapshot(t *testing.T) {
 		{`UPDATE runtime_nodes SET max_active=1,max_retained=1 WHERE id=$1`, owner.NodeID},
 		{`UPDATE environments SET initialization='complete',status='disconnected' WHERE id=$1`, owner.EnvironmentID},
 		{`UPDATE devices SET supported_agent_kinds='[{"kind":"codex","available":true,"capabilities":{"retained_native_history":true}}]' WHERE id=$1`, owner.DeviceID},
-		{`UPDATE runtime_allocations SET state='running',compute_phase='suspended',compute_state='{"protocol_version":"1","current":{"ID":"old-compute"},"retained":{"ID":"old-snapshot","Data":"opaque","Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"}}}',compute_retained_until=clock_timestamp()+interval '24 hours' WHERE id=$1`, owner.ID},
+		{`UPDATE runtime_allocations SET state='running',compute_phase='suspended',compute_state='{"current":{"id":"old-compute"},"snapshot":{"Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"},"id":"old-snapshot"}}',compute_retained_until=clock_timestamp()+interval '24 hours' WHERE id=$1`, owner.ID},
 	} {
 		if _, err := fixture.pool.Exec(t.Context(), statement.sql, statement.arg); err != nil {
 			t.Fatal(err)
@@ -132,7 +134,7 @@ func TestExpiredRetainedComputePreservesSessionAndPendingInput(t *testing.T) {
 	if _, err = fixture.pool.Exec(t.Context(), `UPDATE session_devices SET native_session_id='retained-native-session' WHERE device_id=$1`, owner.DeviceID); err != nil {
 		t.Fatal(err)
 	}
-	compute := runtimeCompute{Version: sandbox.SuspensionStateVersion, Current: sandbox.Compute{ID: "old-compute"}, Retained: &sandbox.RetainedState{ID: "old-snapshot", Data: "native-state"}}
+	compute := runtimeCompute{Current: sandbox.Compute{ID: "old-compute"}, Snapshot: &sandbox.SnapshotIdentity{Compatibility: sandbox.CheckpointCompatibility{ArtifactDomain: "fixture-store", ExecutionClass: "fixture-runtime"}, ID: "old-snapshot"}}
 	raw, _ := json.Marshal(compute)
 	if _, err = fixture.pool.Exec(t.Context(), `UPDATE runtime_allocations SET compute_phase='suspending',compute_state=$2,compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID, raw); err != nil {
 		t.Fatal(err)
@@ -213,7 +215,7 @@ func TestRetainedEnvironmentDemandRecreatesCompute(t *testing.T) {
 				{`UPDATE environments SET initialization='complete',status='disconnected' WHERE id=$1`, owner.EnvironmentID},
 				{`UPDATE devices SET supported_agent_kinds='[{"kind":"codex","available":true,"capabilities":{"retained_native_history":true}}]' WHERE id=$1`, owner.DeviceID},
 				{`UPDATE session_devices SET native_session_id='retained-native-session' WHERE device_id=$1`, owner.DeviceID},
-				{`UPDATE runtime_allocations SET compute_phase='suspended',compute_state='{"protocol_version":"1","current":{"ID":"old-compute"},"retained":{"ID":"old-snapshot","Data":"native-state","Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"}}}',compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID},
+				{`UPDATE runtime_allocations SET compute_phase='suspended',compute_state='{"current":{"id":"old-compute"},"snapshot":{"id":"old-snapshot","Compatibility":{"artifact_domain":"fixture-store","execution_class":"fixture-runtime"}}}',compute_retained_until=clock_timestamp()-interval '1 second' WHERE id=$1`, owner.ID},
 			} {
 				if _, err = fixture.pool.Exec(t.Context(), statement.q, statement.arg); err != nil {
 					t.Fatal(err)
@@ -347,7 +349,7 @@ func workspaceNodeSetup(t *testing.T, external bool) func(Owner, *deployment.Ser
 		if err != nil {
 			t.Fatal(err)
 		}
-		node := deployment.Enrollment{NodeID: uuid.NewString(), Name: "replacement node", Credential: strings.Repeat("n", 64), Provider: view.Provider, BackendFingerprint: strings.Repeat("b", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest, CoreURL: fixturePublicURL}
+		node := machineapi.NodeEnrollment{NodeID: uuid.NewString(), Name: "replacement node", Credential: strings.Repeat("n", 64), Provider: view.Provider, BackendFingerprint: strings.Repeat("b", 64), DeploymentGeneration: view.Generation, SpecificationDigest: view.SpecificationDigest, CoreURL: fixturePublicURL}
 		if _, err = service.Enroll(t.Context(), token.Token, node); err != nil {
 			t.Fatal(err)
 		}
@@ -382,91 +384,5 @@ func TestProvisionRejectsRetainedBindingOnProviderWithoutStorage(t *testing.T) {
 	}
 	if _, err := r.reader.EnvironmentAllocation(t.Context(), deployment.AllocationKey{TenantID: s.TenantID, EnvironmentID: s.Environment.ID}); !errors.Is(err, deployment.ErrNotFound) {
 		t.Fatal("incompatible compute reserved", err)
-	}
-}
-
-// A deterministic provider stops after capturing Resume, before subsequent
-// wake operations. The allocation, generation and filesystem binding are real.
-type resumeStorageProvider struct {
-	retentionProvider
-	request *sandbox.ResumeRequest
-	stop    error
-}
-
-func (p *resumeStorageProvider) Resume(_ context.Context, request sandbox.ResumeRequest) (sandbox.ComputeState, error) {
-	p.request = &request
-	return sandbox.ComputeState{}, p.stop
-}
-
-func TestRestoreUsesAllocationGenerationStorageInsteadOfCachedLane(t *testing.T) {
-	for _, external := range []bool{false, true} {
-		t.Run(map[bool]string{false: "owned_allocation_external_lane", true: "external_allocation_owned_lane"}[external], func(t *testing.T) {
-			stop := errors.New("resume request captured")
-			provider := &resumeStorageProvider{stop: stop}
-			f := workspaceSettlementFixtureWithSetup(t, provider, workspaceNodeSetup(t, external))
-			r, s := f.lifecycle, f.session
-			owner, err := r.provision(t.Context(), s.TenantID, s.Environment.ID, r.config.InstallationID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			setup, err := r.deployments.Setup(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			target := setup.Specification
-			target.Workspace = &workspacefs.Declaration{Attachment: workspacefs.AttachmentHostDirectory, UserXAttr: true}
-			target.Resources.EnvironmentDiskMiB = 0
-			if external {
-				target.Workspace = nil
-				target.Resources.EnvironmentDiskMiB = 8192
-			}
-			// Simulate a stale cached lane; current provider policy no longer admits
-			// switching an existing provider between owned and external storage.
-			r.config.Workspace = target.Workspace
-			r.config.Resources = target.Resources
-			state := runtimeCompute{Target: &sandbox.Compute{ID: "replacement-compute", Generation: 2}, Retained: &sandbox.RetainedState{ID: "snapshot", Data: "native-state"}, RestoreID: uuid.NewString()}
-			if err = r.restoreCompute(t.Context(), provider, owner, state, false); !errors.Is(err, stop) {
-				t.Fatal(err)
-			}
-			if provider.request == nil || (provider.request.Workspace != nil) != external {
-				t.Fatal("Resume binding followed cached lane", external, provider.request)
-			}
-			if external {
-				stored, err := f.storage.Get(t.Context(), s.TenantID, s.Environment.ID)
-				if err != nil || provider.request.Workspace.Attachment.Reference != stored.Reference {
-					t.Fatal("Resume lost retained object identity", err)
-				}
-			}
-			provider.request = nil
-			stale := owner
-			stale.ID = uuid.NewString()
-			if err = r.restoreCompute(t.Context(), provider, stale, state, false); !errors.Is(err, sandbox.ErrOwnership) || provider.request != nil {
-				t.Fatal("stale owner reached native Resume", err)
-			}
-		})
-	}
-}
-
-func TestSuspendedAllocationDemandDoesNotColdReplaceWriter(t *testing.T) {
-	for _, external := range []bool{false, true} {
-		t.Run(map[bool]string{false: "owned", true: "external"}[external], func(t *testing.T) {
-			provider := &retentionProvider{}
-			f := workspaceSettlementFixtureWithSetup(t, provider, workspaceNodeSetup(t, external))
-			r, s := f.lifecycle, f.session
-			owner, err := r.provision(t.Context(), s.TenantID, s.Environment.ID, r.config.InstallationID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = f.pool.Exec(t.Context(), `UPDATE runtime_allocations SET compute_phase='suspended',compute_retained_until=clock_timestamp()+interval '1 hour' WHERE id=$1`, owner.ID); err != nil {
-				t.Fatal(err)
-			}
-			if _, err = f.sessions.ReserveEnvironmentInput(t.Context(), s.TenantID, s.ID, "owned-pause", []sessions.Input{{Kind: "message", Payload: json.RawMessage(`{"input":[{"role":"user","content":[{"type":"input_text","text":"resume"}]}]}`)}}); err != nil {
-				t.Fatal(err)
-			}
-			replay, err := r.provision(t.Context(), s.TenantID, s.Environment.ID, r.config.InstallationID)
-			if err != nil || replay.ID != owner.ID || replay.DeviceID != owner.DeviceID || !replay.Replayed || replay.ComputePhase != "suspended" || provider.creates != 1 || provider.kills != 0 {
-				t.Fatal("owned suspended writer was cold replaced", replay, err)
-			}
-		})
 	}
 }

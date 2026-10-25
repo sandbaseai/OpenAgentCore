@@ -135,12 +135,12 @@ func validateGenerationJSON(raw []byte, kind string) error {
 		}
 	}
 	if value := values["request"]; value != nil {
-		request, err := generationObject(value, "deployment_generation id sequence connection_id owner_epoch operation timeout_ms reference", "bootstrap compute generation command suspend resume retained observation key", "")
+		request, err := generationObject(value, "deployment_generation id sequence connection_id owner_epoch operation timeout_ms reference", "bootstrap compute generation command suspend resume snapshot observation key", "")
 		if err != nil {
 			return err
 		}
 		if bootstrap := request["bootstrap"]; bootstrap != nil {
-			if _, err := generationObject(bootstrap, "TenantID EnvironmentID AllocationID SessionID DeviceID CoreURL Credential Harness", "Workspace", "Workspace"); err != nil {
+			if _, err := generationObject(bootstrap, "TenantID EnvironmentID AllocationID SessionID DeviceID CoreURL Credential Harness SuspendControl", "Workspace", "Workspace"); err != nil {
 				return err
 			}
 		}

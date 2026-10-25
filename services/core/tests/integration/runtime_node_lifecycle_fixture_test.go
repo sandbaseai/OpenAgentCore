@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
+
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/deployment"
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/environmentconfig"
@@ -25,7 +27,7 @@ import (
 )
 
 type nodeIsolationProvider struct {
-	*fakeSuspensionProvider
+	*fakeCheckpointProvider
 	blockMu   sync.Mutex
 	blocked   map[string]bool
 	mode      string
@@ -49,7 +51,7 @@ func (p *nodeIsolationProvider) block(ctx context.Context, r sandbox.Reference, 
 	return ctx.Err()
 }
 func (p *nodeIsolationProvider) Create(ctx context.Context, b sandbox.Bootstrap) (sandbox.Info, error) {
-	info, err := p.fakeSuspensionProvider.Create(ctx, b)
+	info, err := p.fakeCheckpointProvider.Create(ctx, b)
 	if err == nil {
 		err = p.connect(ctx, b)
 	}
@@ -59,13 +61,13 @@ func (p *nodeIsolationProvider) GetInfo(ctx context.Context, r sandbox.Reference
 	if err := p.block(ctx, r, "observe"); err != nil {
 		return sandbox.Info{}, err
 	}
-	return p.fakeSuspensionProvider.GetInfo(ctx, r)
+	return p.fakeCheckpointProvider.GetInfo(ctx, r)
 }
 func (p *nodeIsolationProvider) GetCompute(ctx context.Context, r sandbox.Reference, c sandbox.Compute) (sandbox.ComputeState, error) {
 	if err := p.block(ctx, r, "observe"); err != nil {
 		return sandbox.ComputeState{}, err
 	}
-	return p.fakeSuspensionProvider.GetCompute(ctx, r, c)
+	return p.fakeCheckpointProvider.GetCompute(ctx, r, c)
 }
 func (p *nodeIsolationProvider) RunCommand(ctx context.Context, r sandbox.Reference, c sandbox.Command) (sandbox.CommandResult, error) {
 	return p.preparation.RunCommand(ctx, r, c)
@@ -91,8 +93,8 @@ func newNodeIsolationFixture(t *testing.T, mode string) *nodeIsolationFixture {
 	t.Helper()
 	s, pool := newManagedTestStore(t)
 	registry := runtimegateway.NewRegistry()
-	cp := &fakeSuspensionProvider{lifecycleProvider: lifecycleProvider{resources: map[string]sandbox.Info{}}, computes: map[string]sandbox.ComputeState{}, snapshots: map[string]sandbox.RetainedState{}, bootstraps: map[string]sandbox.Bootstrap{}, peers: map[string]*websocket.Conn{}, registry: registry}
-	p := &nodeIsolationProvider{fakeSuspensionProvider: cp, blocked: map[string]bool{}, mode: mode, entered: make(chan struct{})}
+	cp := &fakeCheckpointProvider{lifecycleProvider: lifecycleProvider{resources: map[string]sandbox.Info{}}, computes: map[string]sandbox.ComputeState{}, snapshots: map[string]sandbox.SnapshotIdentity{}, bootstraps: map[string]sandbox.Bootstrap{}, peers: map[string]*websocket.Conn{}, registry: registry}
+	p := &nodeIsolationProvider{fakeCheckpointProvider: cp, blocked: map[string]bool{}, mode: mode, entered: make(chan struct{})}
 	preparationContext, cancelPreparation := context.WithCancel(t.Context())
 	t.Cleanup(cancelPreparation)
 	cp.preparation = &initializationPeer{t: t, apply: func(request proto.RuntimePreparePayload, data []byte) proto.RuntimePrepareResultPayload {
@@ -138,7 +140,7 @@ func (f *nodeIsolationFixture) enroll(id string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	_, err = f.nodes.Enroll(f.t.Context(), token, deployment.Enrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("microsandbox").Digest("microsandbox"), NodeID: id, Credential: strings.Repeat("x", 64), Name: id, Provider: "microsandbox", BackendFingerprint: strings.Repeat("b", 64), CoreURL: f.store.placement.PublicURL()})
+	_, err = f.nodes.Enroll(f.t.Context(), token, machineapi.NodeEnrollment{DeploymentGeneration: 1, SpecificationDigest: SandboxDeploymentTestSpec("microsandbox").Digest("microsandbox"), NodeID: id, Credential: strings.Repeat("x", 64), Name: id, Provider: "microsandbox", BackendFingerprint: strings.Repeat("b", 64), CoreURL: f.store.placement.PublicURL()})
 	if err != nil {
 		f.t.Fatal(err)
 	}

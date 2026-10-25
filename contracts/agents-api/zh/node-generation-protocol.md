@@ -1,7 +1,7 @@
 ---
 title: "沙箱节点协议"
 source: contracts/agents-api/node-generation-protocol.md
-source_hash: 699959e60936faf4e3b999fbe5606bcdd1044d7a2edf64b339d8e1354ce90134
+source_hash: 3648a80013f1ae90031430c5bdf28d6ee5b59f55dda4b168dfeb99ab5bcec3e2
 ---
 
 沙箱节点协议连接 Core 与 Docker 或 microsandbox 主机：主机针对其本地提供商执行提供商操作，并报告就绪状态、主机测量值及其持有的部署代次。
@@ -26,8 +26,6 @@ source_hash: 699959e60936faf4e3b999fbe5606bcdd1044d7a2edf64b339d8e1354ce90134
 ## 帧与版本 {#frames-and-version}
 
 每个帧都是一个 JSON 文本消息，其 `version` 等于 `node.ProtocolVersion`；两端都会拒绝任何其他版本，并且没有回退解码器。成员名必须精确且唯一：未知成员、大小写别名、重复项和意外的空值都会被拒绝。控制帧（`hello`、`welcome`、`heartbeat`、`heartbeat_ack`、`retention`、`retention_ack`）最多为 32 KiB；`request` 和 `response` 帧最多为 72 MiB。无效帧会关闭连接。
-
-当前 node wire version 为 9。Core 与 node 必须使用匹配的协议，不提供旧版本解码器。
 
 ## 连接 {#connection}
 
@@ -81,23 +79,23 @@ Core 发送包含以下内容的 `request` 帧：
 | `command` | `RunCommand` | `command` | `command` |
 | `observe` | `Observe` | `observation` | `sample` |
 | `initial` | `Initial` | 无 | `compute` |
-| `new_compute` | `NewCompute` | 大于零的计算 `generation` 和可选的 `retained` | `compute` |
+| `new_compute` | `NewCompute` | 大于零的计算 `generation` 和可选的 `snapshot` | `compute` |
 | `compute` | `GetCompute` | `compute` | `state` |
-| `renew_compute` | `RenewCompute` | 精确的当前 `compute` | `state` |
+| `renew_compute` | `RenewCompute` | `compute` | `state` |
 | `kill_compute` | `KillCompute` | `compute` | 无 |
 | `resume_compute` | `ResumeCompute` | `compute` | `state` |
 | `command_compute` | `RunCommandCompute` | `compute` 和 `command` | `command` |
 | `suspend` | `Suspend` | `suspend` | `state` |
 | `resume` | `Resume` | `resume` | `state` |
-| `delete_retained` | `DeleteRetained` | `retained` | 无 |
+| `delete_snapshot` | `DeleteSnapshot` | `snapshot` | 无 |
 | `restore_preparation` | `RestorePreparation` | `key` | `restored` |
 | `save_preparation` | `SavePreparation` | `key` | 无 |
 
-只要 `connection_id`、`owner_epoch` 或 `sequence` 中任一值不匹配，请求就会关闭连接。格式错误的请求会得到 `invalid` 响应。节点在所指 `deployment_generation` 的提供商上运行请求，无法运行时回复 `unconfirmed`。Core 仅向节点上已就绪的代次发送 `create` 和非 reconciliation-only 的 `resume`，并且每条连接最多保留 32 个待处理请求。
+只要 `connection_id`、`owner_epoch` 或 `sequence` 中任一值不匹配，请求就会关闭连接。格式错误的请求会得到 `invalid` 响应。节点在所指 `deployment_generation` 的提供商上运行请求，无法运行时回复 `unconfirmed`。Core 仅向节点上已就绪的代次发送 `create` 和非 observe-only 的 `resume`，并且每条连接最多保留 32 个待处理请求。
 
 预算采用相对计时：节点收到请求时以自己的时钟为基准锚定 `timeout_ms`，并在请求排队等待期间持续消耗该预算，因此各主机的时钟无需保持一致。Core 仍会限制自身等待时长。节点队列已满时会关闭连接。
 
-`response` 帧包含 `id` 和 `connection_id`。成功响应携带操作表中指定的结果；对于 `kill`、`kill_compute`、`delete_retained` 或 `save_preparation`，响应不含结果字段。失败响应携带一个 `error_code`：
+`response` 帧包含 `id` 和 `connection_id`。成功响应携带操作表中指定的结果；对于 `kill`、`kill_compute`、`delete_snapshot` 或 `save_preparation`，响应不含结果字段。失败响应携带一个 `error_code`：
 
 | `error_code` | 含义 |
 | --- | --- |
@@ -108,7 +106,7 @@ Core 发送包含以下内容的 `request` 帧：
 | `unsupported` | 该操作被声明为不支持；见下文 |
 | `unconfirmed` 或任何其他值 | 结果未知 |
 
-失败响应不携带结果；例外包括下文规定的精确来源 Resume 目标清理证据，以及作为精确引用 `CreateSettled` 回执的 `info` 结果：即便已确认的原生 Create 在后续检查中失败，仍可证明该尝试已有确定结果。超时、响应丢失或断连属于不可用或不确定情况，绝不能证明资源不存在；发生这些情况后，Core 绝不重放变更操作，而是改为观察原始操作。[Sandbox Provider 指南](../../../docs/zh/sandbox-provider.md#operation-outcomes-and-retries) 定义了每种结果。
+失败响应不携带结果，唯一的例外是作为精确引用 `CreateSettled` 回执的 `info` 结果：即便已确认的原生 Create 在后续检查中失败，仍可证明该尝试已有确定结果。超时、响应丢失或断连属于不可用或不确定情况，绝不能证明资源不存在；发生这些情况后，Core 绝不重放变更操作，而是改为观察原始操作。[沙箱提供商协议](../../../docs/zh/sandbox-provider.md#operation-outcomes-and-retries) 定义了每种结果。
 
 节点启动和代次加载会在接受工作前验证完整的提供商操作声明，Core 代理使用同一份已注册声明，因此不支持的操作会在节点解析或原生 I/O 之前被拒绝。操作清单由[操作契约](../../../docs/zh/sandbox-provider.md#explicit-operation-contracts)维护。`unsupported` 响应包含一个 `unsupported` 对象，其中有精确的方法 `operation` 和经作者编写且安全的 `reason`；代理会将两者与请求进行核对。证据缺失、格式错误或不匹配会得到 `unconfirmed` 结果，而绝不会证明变更操作被拒绝。`unsupported` 始终不同于观察不可用，也不同于计算或命令结果未知；它既不确定资源所有权，也不授权重放。
 

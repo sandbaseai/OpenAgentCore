@@ -35,7 +35,7 @@ func TestWorkspaceProviderHeadersReachNativeOptions(t *testing.T) {
 	config.Env = append(config.Env, "ANTHROPIC_CUSTOM_HEADERS=X-Stale: config")
 	req := workspaceRequest()
 	req.AgentOptions["model_provider"] = map[string]any{"protocol": "anthropic", "base_url": "https://example.test", "api_key": "fixture", "headers": map[string]string{"X-Activity": "daily-free"}}
-	start, env, err := prepare(config, req)
+	start, env, err := prepareConfiguration(config, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestWorkspaceProviderHeadersReachNativeOptions(t *testing.T) {
 		}
 	}
 	delete(req.AgentOptions["model_provider"].(map[string]any), "headers")
-	_, env, err = prepare(config, req)
+	_, env, err = prepareConfiguration(config, req)
 	if err != nil || !slices.Contains(env, "ANTHROPIC_CUSTOM_HEADERS=") {
 		t.Fatal("headerless provider did not clear ambient headers", err)
 	}

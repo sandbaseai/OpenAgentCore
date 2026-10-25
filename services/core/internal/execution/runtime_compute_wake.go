@@ -67,10 +67,10 @@ func (r *runtimeLifecycle) wakeCompute(ctx context.Context, p sandbox.SandboxPro
 	}
 	// The artifact has been consumed. Never restore it after this generation
 	// admits work, even if garbage collection or the final database commit fails.
-	if state.Retained != nil {
+	if state.Snapshot != nil {
 		started = time.Now()
-		err := ignoreComputeAbsent(p.DeleteRetained(ctx, runtimeReference(owner), *state.Retained))
-		logComputeStep(ctx, owner, "delete_retained", started, err)
+		err := ignoreComputeAbsent(p.DeleteSnapshot(ctx, runtimeReference(owner), *state.Snapshot))
+		logComputeStep(ctx, owner, "delete_snapshot", started, err)
 		if err != nil {
 			return err
 		}
@@ -91,8 +91,8 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Sandbox
 	if err := r.lease.CheckOwnership(ctx); err != nil {
 		return err
 	}
-	if owner.ComputePhase == "suspended" && state.Retained != nil && owner.NodeID != "" {
-		next, err := r.deployment.RelocateCleanup(ctx, owner, state.Retained.Compatibility)
+	if owner.ComputePhase == "suspended" && state.Snapshot != nil && owner.NodeID != "" {
+		next, err := r.deployment.RelocateCleanup(ctx, owner, state.Snapshot.Compatibility)
 		if err != nil {
 			return err
 		}
@@ -106,13 +106,13 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Sandbox
 	}
 	// An uncommitted artifact is found by its persisted attempt, never a directory
 	// glob. The helper's allocation lock also waits for an earlier unknown call.
-	if owner.ComputePhase == "suspending" && state.Retained == nil {
-		result, err := p.Suspend(ctx, sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, ReconcileOnly: true})
+	if owner.ComputePhase == "suspending" && state.Snapshot == nil {
+		result, err := p.Suspend(ctx, sandbox.SuspendRequest{Reference: runtimeReference(owner), OperationID: state.SuspendID, Source: state.Current, ObserveOnly: true})
 		if err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 			return err
 		}
 		if err == nil {
-			state.Retained = result.Retained
+			state.Snapshot = result.Snapshot
 		}
 	}
 	if state.Target != nil {
@@ -125,8 +125,8 @@ func (r *runtimeLifecycle) cleanupCompute(ctx context.Context, p sandbox.Sandbox
 			return err
 		}
 	}
-	if state.Retained != nil {
-		if err := ignoreComputeAbsent(p.DeleteRetained(ctx, runtimeReference(owner), *state.Retained)); err != nil {
+	if state.Snapshot != nil {
+		if err := ignoreComputeAbsent(p.DeleteSnapshot(ctx, runtimeReference(owner), *state.Snapshot)); err != nil {
 			return err
 		}
 	}

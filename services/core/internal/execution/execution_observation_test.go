@@ -120,7 +120,7 @@ func (c *executionTraceConn) Close() error                              { c.once
 func TestExecutionSendPreservesPayloadAndCarriesTrace(t *testing.T) {
 	for _, traced := range []bool{false, true} {
 		conn := &executionTraceConn{writes: make(chan []byte, 2), closed: make(chan struct{})}
-		peer := runtimegateway.NewSession(conn, "device-one", "workspace-one", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
+		peer := runtimegateway.NewSession(conn, "device-one", "test", runtimegateway.NewRegistry(), func(string, ...any) {})
 		peer.Start()
 		ctx := t.Context()
 		if traced {

@@ -33,7 +33,11 @@ func hostHistoryNode(t *testing.T) (fixture, string, string, uint64) {
 
 func TestNodeHostHistorySamplingAndDetail(t *testing.T) {
 	f, node, connection, epoch := hostHistoryNode(t)
-	now := time.Now().UTC()
+	// Use the database clock: the database may run in a VM with clock skew.
+	var now time.Time
+	if err := f.pool.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&now); err != nil {
+		t.Fatal(err)
+	}
 	host := &deployment.NodeHost{EffectiveCPUCores: hostHistoryPtr(2.0), CPUUtilization: hostHistoryPtr(0.35), TotalMemoryBytes: hostHistoryPtr(int64(4096)), AvailableMemoryBytes: hostHistoryPtr(int64(1024)), AvailableDiskBytes: hostHistoryPtr(int64(8192)), ObservedAt: &now}
 	health := deployment.NodeHealth{Host: host}
 	if err := f.heartbeat(t.Context(), node, connection, epoch, health, true); err != nil {
@@ -143,7 +147,11 @@ func TestNodeHostHistoryFencingAndUnknown(t *testing.T) {
 			t.Fatal(n, err)
 		}
 	}
-	now := time.Now().UTC()
+	// Use the database clock: the database may run in a VM with clock skew.
+	var now time.Time
+	if err := f.pool.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&now); err != nil {
+		t.Fatal(err)
+	}
 	health := deployment.NodeHealth{Host: &deployment.NodeHost{ObservedAt: &now}}
 	if err := f.heartbeat(t.Context(), node, uuid.NewString(), epoch, health, true); !errors.Is(err, deployment.ErrNodeCredential) {
 		t.Fatal(err)

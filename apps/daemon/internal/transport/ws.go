@@ -21,7 +21,7 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/internal/agentdaemon/proto"
 )
 
-// DialOptions is the input to Dial. HTTPHeader is optional.
+// DialOptions is the input to Dial.
 type DialOptions struct {
 	// WSURL is the absolute ws://... or wss://... URL.
 	WSURL string
@@ -40,9 +40,6 @@ type DialOptions struct {
 
 	// HandshakeTimeout caps WS upgrade wait. Zero → 10s.
 	HandshakeTimeout time.Duration
-
-	// HTTPHeader is appended to the upgrade request. Useful in tests.
-	HTTPHeader http.Header
 }
 
 // Conn is the daemon-side WebSocket. One read goroutine + one write
@@ -105,10 +102,7 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 
 	dialCtx, cancel := context.WithTimeout(ctx, opts.HandshakeTimeout)
 	defer cancel()
-	headers := opts.HTTPHeader.Clone()
-	if headers == nil {
-		headers = make(http.Header)
-	}
+	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+opts.Credential)
 	headers.Set(proto.ExecutionFlowHeader, proto.ExecutionFlowCreditV1)
 	wsConn, resp, err := dialer.DialContext(dialCtx, dialURL, headers)
@@ -250,7 +244,7 @@ func (c *Conn) Close() error {
 // StartHeartbeats kicks off a ticker that calls payloadFn every
 // interval and Sends the resulting HeartbeatPayload. Returns
 // immediately. Caller-controlled because the heartbeat carries fields
-// (active_requests, supported_agent_kinds) only the agent layer knows.
+// (supported_agent_kinds) only the agent layer knows.
 // Nil logger falls back to log.Bg().
 func (c *Conn) StartHeartbeats(parentCtx context.Context, interval time.Duration, payloadFn func() proto.HeartbeatPayload, logger *slog.Logger) {
 	if interval <= 0 || payloadFn == nil {

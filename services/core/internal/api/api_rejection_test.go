@@ -129,7 +129,7 @@ func TestRejectionDiagnosticsPreserveResponseWriter(t *testing.T) {
 		output.Reset()
 		out := &detailDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
 		var observed []string
-		handler := responseHeadersWithErrors(coreErrorResponses(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := responseHeadersWithLog(coreErrorResponses(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			environmentFileDiagnostic(w, r.Context(), rejectionUnknown)
 			deadline := time.Unix(1234, 0)
 			if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
@@ -146,7 +146,7 @@ func TestRejectionDiagnosticsPreserveResponseWriter(t *testing.T) {
 			} else {
 				writeJSON(w, 201, map[string]string{"result": "safe"})
 			}
-		})), func(code string) { observed = append(observed, code) })
+		})), func(code string) { observed = append(observed, code) }, nil)
 		handler.ServeHTTP(out, httptest.NewRequest("POST", "/fixture", nil))
 		if !out.deadline.Equal(time.Unix(1234, 0)) || out.Header().Get("Openai-Processing-Ms") == "" || len(observed) != 0 || len(rejectionRecords(t, output)) != 0 {
 			t.Fatal("success/stream behavior changed")
@@ -157,12 +157,12 @@ func TestRejectionDiagnosticsPreserveResponseWriter(t *testing.T) {
 	}
 	output.Reset()
 	var observed []string
-	handler := responseHeadersWithErrors(coreErrorResponses(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := responseHeadersWithLog(coreErrorResponses(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		environmentFileDiagnostic(w, r.Context(), apiRejectionReason(255))
 		writeError(w, 400, "secret-code-canary", "secret-message-canary", "secret-param-canary")
 		reportAPIError(w, "late-code")
 		w.WriteHeader(500)
-	})), func(code string) { observed = append(observed, code) })
+	})), func(code string) { observed = append(observed, code) }, nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest("POST", "/secret-path-canary", nil))
 	records := rejectionRecords(t, output)

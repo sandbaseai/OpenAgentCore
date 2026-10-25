@@ -11,7 +11,7 @@ import (
 )
 
 func TestDurableSubscriptionOverflowIsExplicitAndIsolated(t *testing.T) {
-	s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 	s.eventCredit = true
 	defer s.Close("test finished")
 	sub, err := s.SubscribeDurable("slow")
@@ -38,7 +38,7 @@ func TestDurableSubscriptionOverflowIsExplicitAndIsolated(t *testing.T) {
 
 func TestSubscriptionCloseAndDispatchAreSerialized(t *testing.T) {
 	for range 100 {
-		s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+		s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 		s.eventCredit = true
 		sub, _ := s.SubscribeDurable("run")
 		var wg sync.WaitGroup
@@ -58,7 +58,7 @@ func TestSubscriptionCloseAndDispatchAreSerialized(t *testing.T) {
 }
 
 func TestSubscriptionCreditPreservesBurstAndTail(t *testing.T) {
-	s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 	s.eventCredit = true
 	defer s.Close("test finished")
 	sub, err := s.SubscribeDurable("run")
@@ -101,7 +101,7 @@ func TestSubscriptionCreditPreservesBurstAndTail(t *testing.T) {
 }
 
 func TestSubscriptionRejectsByteWindowViolation(t *testing.T) {
-	s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 	s.eventCredit = true
 	defer s.Close("test")
 	sub, _ := s.SubscribeDurable("run")
@@ -127,7 +127,7 @@ func TestConnectionCloseReasonDoesNotExposeProse(t *testing.T) {
 }
 
 func TestReceivedDoneDoesNotRequireLiveCreditTransport(t *testing.T) {
-	s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+	s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 	s.eventCredit = true
 	sub, _ := s.SubscribeDurable("run")
 	s.dispatchToSubscriber(proto.Envelope{Type: proto.TypeDelta, ID: "run"})
@@ -146,7 +146,7 @@ func TestReceivedDoneDoesNotRequireLiveCreditTransport(t *testing.T) {
 }
 
 func TestBaseProtocolConsumerNeverSendsCredit(t *testing.T) {
-	s := newTestSession(newFakeConn(), "old-runtime", "tenant", "0.16.0", NewRegistry(), nil)
+	s := newTestSession(newFakeConn(), "old-runtime", "0.16.0", NewRegistry(), nil)
 	defer s.Close("test")
 	sub, err := s.SubscribeDurable("run")
 	if err != nil {
@@ -182,7 +182,7 @@ func TestBaseProtocolConsumerNeverSendsCredit(t *testing.T) {
 func TestFunctionWithdrawalDispatchesWithAndWithoutCredit(t *testing.T) {
 	for _, credit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "base", true: "credit"}[credit], func(t *testing.T) {
-			s := newTestSession(newFakeConn(), "device", "tenant", proto.Version, NewRegistry(), nil)
+			s := newTestSession(newFakeConn(), "device", proto.Version, NewRegistry(), nil)
 			s.eventCredit = credit
 			defer s.Close("test")
 			sub, err := s.SubscribeDurable("run")

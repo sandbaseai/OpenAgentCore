@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/MiniMax-AI/OpenAgentCore/internal/machineapi"
+
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/agent"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/auth"
 	"github.com/MiniMax-AI/OpenAgentCore/apps/daemon/internal/daemonize"
@@ -34,7 +36,7 @@ const (
 //
 // The daemon credential comes from a Provider bootstrap file
 // (--bootstrap-file), self-hosted Environment enrollment
-// (--remote/--environment-id/--credential-file) or the saved profile
+// (--remote/--environment-id/--credential-file/--workspace) or the saved profile
 // written by oac-core-device.
 //
 // -b re-execs the binary in the background with stdio redirected to
@@ -48,6 +50,7 @@ func runConnect(ctx *runContext, args []string) error {
 		remote         = fs.String("remote", "", "self-hosted Environment remote_url, unchanged")
 		environment    = fs.String("environment-id", "", "self-hosted Environment ID")
 		bootstrapFile  = fs.String("bootstrap-file", "", "absolute path to Provider-to-Runtime connection JSON")
+		workspace      = fs.String("workspace", "", "existing absolute workspace directory of a self-hosted Environment")
 		credentialFile = fs.String("credential-file", "", "absolute path to protected executor credential JSON")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -66,22 +69,23 @@ func runConnect(ctx *runContext, args []string) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	var bootstrapped *auth.Profile
+	var suspendEnabled bool
 	if *bootstrapFile != "" {
-		if *remote != "" || *environment != "" || *credentialFile != "" || fs.NArg() != 0 {
+		if *remote != "" || *environment != "" || *credentialFile != "" || *workspace != "" || fs.NArg() != 0 {
 			return errors.New("connect: bootstrap input cannot be combined with enrollment options")
 		}
-		bootstrapped, err = bootstrapProfile(*bootstrapFile, ctx)
+		bootstrapped, suspendEnabled, err = bootstrapProfile(*bootstrapFile, ctx)
 		if err != nil {
 			return err
 		}
 	}
-	if *remote != "" || *environment != "" || *credentialFile != "" {
+	if *remote != "" || *environment != "" || *credentialFile != "" || *workspace != "" {
 		if fs.NArg() != 0 {
 			return errors.New("connect: Environment enrollment cannot use positional arguments")
 		}
 		connectCtx, stop := daemonize.NotifyContext(context.Background())
 		defer stop()
-		return runEnvironmentConnect(connectCtx, ctx, *profile, *background, false, *remote, *environment, *credentialFile)
+		return runEnvironmentConnect(connectCtx, ctx, *profile, *background, false, *remote, *environment, *credentialFile, *workspace, localworkspace.CapabilityDirectory)
 	}
 
 	// -b mode: parent forks, child re-enters with sentinel env set
@@ -109,7 +113,7 @@ func runConnect(ctx *runContext, args []string) error {
 		}
 	}
 
-	return mainLoop(ctx, *profile, prof)
+	return mainLoop(ctx, *profile, prof, suspendEnabled)
 }
 
 // spawnBackground forks the daemon into the background. Parent
@@ -180,16 +184,16 @@ func spawnBackground(ctx context.Context, rc *runContext, profile string, argv [
 // background process. SIGINT / SIGTERM cancels the root context, which
 // unblocks the read pump and any in-flight Send so the daemon exits
 // without orphaning agent subprocesses.
-func mainLoop(rc *runContext, profile string, prof auth.Profile) error {
-	return mainLoopRemote(context.Background(), rc, profile, prof, "")
+func mainLoop(rc *runContext, profile string, prof auth.Profile, suspend bool) error {
+	return mainLoopRemote(context.Background(), rc, profile, prof, "", suspend)
 }
 
-func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof auth.Profile, remote string) error {
-	return mainLoopRemoteWithDiscovery(parent, rc, profile, prof, remote, func(ctx context.Context) (agentCLIDiscovery, error) {
+func mainLoopRemote(parent context.Context, rc *runContext, profile string, prof auth.Profile, remote string, suspend bool) error {
+	return mainLoopRemoteWithDiscovery(parent, rc, profile, prof, remote, suspend, func(ctx context.Context) (agentCLIDiscovery, error) {
 		return preflightAgentCLIs(ctx, rc, profile)
 	})
 }
-func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile string, prof auth.Profile, remote string, discover func(context.Context) (agentCLIDiscovery, error)) error {
+func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile string, prof auth.Profile, remote string, suspend bool, discover func(context.Context) (agentCLIDiscovery, error)) error {
 	// Route through obs/log so daemon log lines pick up the same
 	// trace_id / span_id auto-injection as the server side — when the
 	// daemon adopts an envelope's trace, every log call under that ctx
@@ -204,7 +208,7 @@ func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile
 	rootCtx, cancel := daemonize.NotifyContext(parent)
 	defer cancel()
 
-	boot, agentCLIs, err := prepareConnection(rootCtx, discover, func(ctx context.Context) (boot *transport.BootstrapResponse, err error) {
+	boot, agentCLIs, err := prepareConnection(rootCtx, discover, func(ctx context.Context) (boot *machineapi.BootstrapResponse, err error) {
 		started := time.Now()
 		defer func() { observeRuntimeStartup(ctx, "bootstrap", started, err) }()
 		bootCtx, stop := context.WithTimeout(ctx, bootstrapTimeout)
@@ -227,7 +231,7 @@ func mainLoopRemoteWithDiscovery(parent context.Context, rc *runContext, profile
 	registry := agent.NewRegistry()
 	registerAgentKinds(registry, agentCLIs)
 
-	control, err := newSuspendControl()
+	control, err := newSuspendControl(suspend)
 	if err != nil {
 		return err
 	}
@@ -326,11 +330,8 @@ func advertisedKinds(registry *agent.Registry, canExport bool) []proto.Supported
 	return kinds
 }
 
-func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.Registry, boot *transport.BootstrapResponse, agentCLIs agentCLIDiscovery) error {
-	local, err := localworkspace.Load()
-	if err != nil {
-		return err
-	}
+func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.Registry, boot *machineapi.BootstrapResponse, agentCLIs agentCLIDiscovery) error {
+	local := localworkspace.Current()
 	router, err := dispatch.New(dispatch.Config{
 		Registry:       registry,
 		Sender:         conn,
@@ -348,9 +349,6 @@ func pumpConn(parentCtx context.Context, conn *transport.Conn, registry *agent.R
 	conn.StartHeartbeats(parentCtx, boot.HeartbeatInterval(), func() proto.HeartbeatPayload {
 		kinds := advertisedKinds(registry, local.CanExport())
 		return proto.HeartbeatPayload{
-			Timestamp:           time.Now().Unix(),
-			ActiveRequests:      router.ActiveRuns(),
-			DaemonVersion:       Version,
 			SupportedAgentKinds: kinds,
 		}
 	}, obslog.Bg().With("component", "heartbeat"))

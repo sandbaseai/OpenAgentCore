@@ -83,24 +83,6 @@ func (q *Queries) GetRuntimeActivity(ctx context.Context, id pgtype.UUID) (GetRu
 	return i, err
 }
 
-const hasIncompatibleRuntimeComputeState = `-- name: HasIncompatibleRuntimeComputeState :one
-SELECT EXISTS (
- SELECT 1 FROM runtime_allocations
- WHERE state <> 'released'
- AND ((compute_state->>'protocol_version') IS DISTINCT FROM $1::text
-  OR compute_state ? 'snapshot'
-  OR (compute_state #> '{current,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot']
-  OR (compute_state #> '{target,RestoredFrom}') ?| ARRAY['Digest', 'CheckpointID', 'CheckpointRoot'])
-)::boolean
-`
-
-func (q *Queries) HasIncompatibleRuntimeComputeState(ctx context.Context, protocolVersion string) (bool, error) {
-	row := q.db.QueryRow(ctx, hasIncompatibleRuntimeComputeState, protocolVersion)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const moveSuspendedRuntimeCompute = `-- name: MoveSuspendedRuntimeCompute :one
 WITH moved AS (
     UPDATE runtime_placements p SET node_id=$1::uuid
