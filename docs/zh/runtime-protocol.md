@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 14bba94dc1617430e0fa049591645e2d1084b4ce2d976bb9bebe54c1d338fb6c
+source_hash: 89038da4d9b924fe2bd0e28dd2420515e8d9cf38988dd53e1fd9370d66655a75
 ---
 
 Core–Runtime 协议连接 Core 与 Runtime daemon，定义 daemon 连接上消息的含义和顺序。托管和自托管 Runtime 使用同一协议。
@@ -34,6 +34,7 @@ wire 版本为 [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCore/blo
 - 两个请求都通过 Bearer header 提供凭据。凭据不得出现在 URL、payload 日志或 trace 中。
 - 立即发送第一个 heartbeat，之后按 bootstrap 返回的间隔发送。每个 heartbeat 声明 `supported_agent_kinds`、其可用性和[能力](#capability-declarations)。第一个 heartbeat 之前能力未知；heartbeat 中缺失的 kind 视为未声明。两者都不允许推断。
 - Heartbeat 仅证明存活，不证明执行进度，也不充当此前消息的回执。
+- Runtime 每 15 秒发送标准 WebSocket Ping，并要求在 60 秒内收到入站消息或 Pong。仅本地写入成功不足以证明经过代理仍能到达 Core。读取截止时间到期会关闭连接并进入常规断连清理；它不是 Turn 总时长限制，也不授权重放执行。Core 记录传输故障类别及 WebSocket 关闭码，不记录对端提供的关闭文本或帧内容。
 
 每条物理连接拥有新的路由、admission handle 和传输状态。同一设备的新连接替代旧连接：Core 移除旧 Run 路由，新连接不继承这些状态。有效凭据和连接不授权选择其他 Session 或 Environment 绑定。
 

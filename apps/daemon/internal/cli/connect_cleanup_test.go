@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -68,13 +69,40 @@ func TestReconnectWaitsForConfirmedRouterCleanup(t *testing.T) {
 }
 
 type cleanupExecutor struct {
-	closes  atomic.Int32
-	retry   chan struct{}
-	confirm chan struct{}
+	started   chan struct{}
+	cancelled chan struct{}
+	closes    atomic.Int32
+	retry     chan struct{}
+	confirm   chan struct{}
 }
 
-func (e *cleanupExecutor) StartTurn(context.Context, string, proto.MessageInput, chan<- proto.Envelope) (agent.Turn, error) {
-	return nil, errors.New("unexpected Turn")
+func (e *cleanupExecutor) StartTurn(_ context.Context, _ string, _ proto.MessageInput, out chan<- proto.Envelope) (agent.Turn, error) {
+	if e.started == nil {
+		return nil, errors.New("unexpected Turn")
+	}
+	close(e.started)
+	return &cleanupActiveTurn{out: out, cancelled: e.cancelled}, nil
+}
+
+type cleanupActiveTurn struct {
+	agent.Turn
+	out       chan<- proto.Envelope
+	cancelled chan struct{}
+	once      sync.Once
+}
+
+func (t *cleanupActiveTurn) Cancel(context.Context) error {
+	t.once.Do(func() { close(t.cancelled); close(t.out) })
+	return nil
+}
+func (t *cleanupActiveTurn) CancellationOutcome() proto.DonePayload { return proto.DonePayload{} }
+func (t *cleanupActiveTurn) AwaitSettlement(ctx context.Context) (agent.TurnSettlement, error) {
+	select {
+	case <-t.cancelled:
+		return agent.TurnSettlement{Reusable: true}, nil
+	case <-ctx.Done():
+		return agent.TurnSettlement{}, ctx.Err()
+	}
 }
 func (e *cleanupExecutor) Close(context.Context) error {
 	if e.closes.Add(1) == 1 {
@@ -91,11 +119,15 @@ func TestDisconnectedPumpRetainsExactExecutorUntilCleanup(t *testing.T) {
 		if suspend {
 			name = "suspension-enabled"
 		}
-		t.Run(name, func(t *testing.T) { testDisconnectedPumpCleanup(t, suspend) })
+		t.Run(name, func(t *testing.T) { testDisconnectedPumpCleanup(t, suspend, false) })
 	}
 }
 
-func testDisconnectedPumpCleanup(t *testing.T, suspend bool) {
+func TestSilentConnectionStopsOwnerBeforeReconnect(t *testing.T) {
+	testDisconnectedPumpCleanup(t, true, true)
+}
+
+func testDisconnectedPumpCleanup(t *testing.T, suspend, silent bool) {
 	peers := make(chan *websocket.Conn, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -113,6 +145,10 @@ func testDisconnectedPumpCleanup(t *testing.T, suspend bool) {
 		})
 	}
 	owner := &cleanupExecutor{retry: make(chan struct{}), confirm: make(chan struct{})}
+	if silent {
+		owner.started = make(chan struct{})
+		owner.cancelled = make(chan struct{})
+	}
 	registry := agent.NewRegistry()
 	registry.RegisterKind(proto.SupportedAgentKind{Kind: "cleanup", Available: true, Capabilities: prototest.Capabilities(proto.AgentKindCapabilities{EnvironmentNone: proto.CapabilitySupported})}, harnessconfig.Configuration{})
 	var factories atomic.Int32
@@ -165,16 +201,39 @@ func testDisconnectedPumpCleanup(t *testing.T, suspend bool) {
 			t.Fatal(err)
 		}
 		if status.State == "ready" {
+			if silent {
+				start, _ := proto.NewEnvelope(proto.TypeExecutionStart, "prepare", proto.ExecutionStartPayload{Handle: status.Handle, ExecutorID: status.ExecutorID, RunID: "active-run", Input: proto.TextInput("controlled fixture")})
+				if err := peer.WriteJSON(start); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-owner.started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("active Turn did not start")
+				}
+			}
 			break
 		}
 		if status.State == "failed" {
 			t.Fatalf("preparation failed: %+v", status)
 		}
 	}
-	_ = peer.Close()
+	wait := 3 * time.Second
+	if silent {
+		wait = 70 * time.Second
+	} else {
+		_ = peer.Close()
+	}
 	select {
 	case <-owner.retry:
-	case <-time.After(3 * time.Second):
+		if silent {
+			select {
+			case <-owner.cancelled:
+			default:
+				t.Fatal("owner cleanup did not cancel active Turn")
+			}
+		}
+	case <-time.After(wait):
 		t.Fatal("original executor cleanup was not retried")
 	}
 	select {

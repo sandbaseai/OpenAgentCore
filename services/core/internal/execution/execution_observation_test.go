@@ -17,9 +17,59 @@ import (
 	"github.com/MiniMax-AI/OpenAgentCore/services/core/internal/runtimegateway"
 )
 
-func captureExecutionLogs(t *testing.T) *bytes.Buffer {
+// Gateway connections can finish asynchronously after their owning test exits.
+// Their lifecycle logs are verified in runtimegateway, not by execution's
+// single-record observation assertions.
+type executionLogBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *executionLogBuffer) Write(p []byte) (int, error) {
+	var row struct {
+		Message string `json:"msg"`
+	}
+	if json.Unmarshal(p, &row) == nil && (row.Message == "runtime transport failed" || row.Message == "runtime connection closed") {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+func (b *executionLogBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.data.Bytes())
+}
+func (b *executionLogBuffer) String() string { return string(b.Bytes()) }
+func (b *executionLogBuffer) Len() int       { b.mu.Lock(); defer b.mu.Unlock(); return b.data.Len() }
+func (b *executionLogBuffer) Reset()         { b.mu.Lock(); defer b.mu.Unlock(); b.data.Reset() }
+
+func TestExecutionLogCaptureExcludesConcurrentGatewayLifecycle(t *testing.T) {
+	out := captureExecutionLogs(t)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			obslog.Bg().Warn("runtime transport failed", "operation", "read")
+			obslog.Bg().Info("runtime connection closed")
+		}
+	}()
+	recordInitialInputOrigin(t.Context(), "capture-fixture")
+	wg.Wait()
+	var row map[string]any
+	if err := json.Unmarshal(out.Bytes(), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["session_id"] != "capture-fixture" {
+		t.Fatal(row)
+	}
+}
+
+func captureExecutionLogs(t *testing.T) *executionLogBuffer {
 	t.Helper()
-	var out bytes.Buffer
+	var out executionLogBuffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(obslog.NewContextHandler(slog.NewJSONHandler(&out, nil))))
 	t.Cleanup(func() { slog.SetDefault(previous) })
