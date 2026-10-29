@@ -388,7 +388,9 @@ func (s *Session) writeLoop() {
 			o.end(artifactWrite, writeStarted, writeErr)
 			o.frame(-1)
 			if err := writeErr; err != nil {
-				s.log("agentdaemon gateway: write %s frame: %v", env.Type, err)
+				if !s.IsClosed() {
+					s.logTransportFailure("write", err)
+				}
 				s.Close("write error: " + err.Error())
 				return
 			}
@@ -409,7 +411,9 @@ func (s *Session) readLoop() {
 		_ = s.conn.SetReadDeadline(time.Now().Add(HeartbeatTimeout))
 		_, raw, err := s.conn.ReadMessage()
 		if err != nil {
-			s.log("agentdaemon gateway: read frame: %v", err)
+			if !s.IsClosed() {
+				s.logTransportFailure("read", err)
+			}
 			return
 		}
 		readReturned := time.Now()

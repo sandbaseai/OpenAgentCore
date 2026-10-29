@@ -32,6 +32,7 @@ The wire version is [`proto.Version`](https://github.com/MiniMax-AI/OpenAgentCor
 - Both requests carry the credential as a Bearer header. A credential never appears in a URL, a payload log or a trace.
 - The first heartbeat is sent at once, then at the interval that bootstrap returned. Each heartbeat declares `supported_agent_kinds`, their availability and their [capabilities](#capability-declarations). Before the first heartbeat, capabilities are unknown; a kind missing from a heartbeat is not advertised. Neither permits inference.
 - Heartbeats establish liveness only, never execution progress or a receipt for an earlier message.
+- The Runtime probes the WebSocket with a standard Ping every 15 seconds and requires an inbound message or Pong within 60 seconds. Local write success alone does not prove that Core remains reachable through a proxy. An expired read deadline closes the connection and enters ordinary disconnect cleanup; it is not a Turn duration limit or permission to replay execution. Core records transport failure classes and WebSocket close codes without peer-controlled close text or frame contents.
 
 Each physical connection has fresh routing, admission handles and transfer state. A newer connection for the same device replaces the previous one: Core evicts the old Run routes, and the new connection inherits none of them. A valid credential and connection are never authority to choose another Session or Environment binding.
 

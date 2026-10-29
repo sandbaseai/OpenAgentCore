@@ -65,6 +65,9 @@ type Conn struct {
 	hbCancel       context.CancelFunc
 	firstHeartbeat heartbeatObservation
 
+	probeInterval time.Duration
+	peerTimeout   time.Duration // Immutable once the reader starts.
+
 	eventCredit bool // Immutable selection confirmed by the upgrade response.
 	flowMu      sync.Mutex
 	flows       map[string]*eventFlow
@@ -84,6 +87,10 @@ type envelopeWithAck struct {
 // Dial opens the reverse WebSocket. Read/write goroutines are live
 // on return; caller MUST eventually Close to avoid goroutine leaks.
 func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
+	return dial(ctx, opts, peerProbeInterval, peerIdleTimeout)
+}
+
+func dial(ctx context.Context, opts DialOptions, probeInterval, idleTimeout time.Duration) (*Conn, error) {
 	if opts.WSURL == "" || opts.DeviceID == "" || opts.Credential == "" || opts.DaemonVersion == "" {
 		return nil, fmt.Errorf("transport.Dial: WSURL, DeviceID, Credential, DaemonVersion are all required")
 	}
@@ -144,6 +151,8 @@ func Dial(ctx context.Context, opts DialOptions) (*Conn, error) {
 		sendCh:       make(chan envelopeWithAck, 64),
 		closed:       make(chan struct{}),
 	}
+	c.probeInterval = probeInterval
+	c.configureLiveness(idleTimeout)
 	go c.writeLoop()
 	go c.readLoop()
 	return c, nil
@@ -320,6 +329,8 @@ func (c *Conn) StartHeartbeats(parentCtx context.Context, interval time.Duration
 // from the defer rather than from Conn.Close() so gorilla/websocket's
 // internal write state isn't raced.
 func (c *Conn) writeLoop() {
+	probe := time.NewTicker(c.probeInterval)
+	defer probe.Stop()
 	defer func() {
 		// Best-effort close frame so the peer sees code 1000 rather
 		// than EOF.
@@ -332,6 +343,12 @@ func (c *Conn) writeLoop() {
 		select {
 		case <-c.closed:
 			return
+		case <-probe.C:
+			if err := c.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				c.fail(fmt.Errorf("transport: liveness probe: %w", err))
+				_ = c.Close()
+				return
+			}
 		case msg := <-c.sendCh:
 			msg.stamp.Received(msg.observation, workspaceobs.OutboundQueue)
 			started := msg.observation.Begin(workspaceobs.OutboundEncode)
@@ -392,6 +409,9 @@ func (c *Conn) readLoop() {
 			return
 		}
 		readReturned := time.Now()
+		if c.peerTimeout > 0 {
+			_ = c.ws.SetReadDeadline(readReturned.Add(c.peerTimeout))
+		}
 		log.Bg().Debug("transport: received WS frame", "bytes", len(raw))
 		decodeStarted := time.Now()
 		var env proto.Envelope
@@ -411,9 +431,15 @@ func (c *Conn) readLoop() {
 		}
 		received := ReceivedEnvelope{Envelope: env, decoded: time.Now(), readReturned: readReturned, decodeStarted: decodeStarted, connectionID: c.connectionID}
 		log.Bg().Info("transport: dispatching envelope", "type", env.Type, "id", env.ID)
+		delivery := time.NewTimer(c.peerTimeout)
 		select {
 		case c.recvCh <- received:
+			delivery.Stop()
 		case <-c.closed:
+			delivery.Stop()
+			return
+		case <-delivery.C:
+			c.fail(errors.New("transport: inbound dispatch timeout"))
 			return
 		}
 	}
