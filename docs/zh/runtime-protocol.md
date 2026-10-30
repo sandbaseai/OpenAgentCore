@@ -1,7 +1,7 @@
 ---
 title: "Core–Runtime 协议"
 source: docs/runtime-protocol.md
-source_hash: 89038da4d9b924fe2bd0e28dd2420515e8d9cf38988dd53e1fd9370d66655a75
+source_hash: f1c9e5c733e490c58a93080a0cca96904d43b38b897acbbabac04e701f6d6126
 ---
 
 Core–Runtime 协议连接 Core 与 Runtime daemon，定义 daemon 连接上消息的含义和顺序。托管和自托管 Runtime 使用同一协议。
@@ -308,9 +308,11 @@ transport 与 execution 结果分开。Core 唯一 Run 订阅入口是 `Subscrib
 
 adapter 可以给 Run 的 `error` frame 添加 `code` 和 `http_status`。它们是可选的中性元数据，不是终结事件；frame 文本、Usage、`done`、原生 Session 身份和取消回执保持原顺序与含义。
 
-接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy`、`provider_billing_unavailable` 和 `connection_failed`（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。`connection_failed` 保留 100 到 599 的整数 `http_status`；402 归一为 `provider_billing_unavailable`，此分类仅保留状态 402。它表示模型端点的计费拒绝，不代表应用用户余额不足，也不授权自动重试。其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
+接受的 code 为 `authentication_error`、`rate_limit_exceeded`、`usage_limit_exceeded`、`server_overloaded`、`server_error`、`invalid_request`、`resource_not_found`、`request_timeout`、`context_length_exceeded`、`cyber_policy`、`provider_billing_unavailable`、`incomplete_response` 和 `connection_failed`（[`engine_failure.go`](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/internal/agentdaemon/proto/engine_failure.go)）。`connection_failed` 保留 100 到 599 的整数 `http_status`；402 归一为 `provider_billing_unavailable`，此分类仅保留状态 402。它表示模型端点的计费拒绝，不代表应用用户余额不足，也不授权自动重试。其他 status 都丢弃。值缺失、格式错误或未知时保持未分类错误，不丢弃 Usage 或 `done`。
 
 Core 在 Turn outcome 中将接受的值保存为 `engine_error_code` 和 `engine_http_status`。同一 Turn 内，后续有效分类会替换此前分类及其状态码；未分类的 error frame 不会清空它们。分类不会沿用到其他 Turn。可选 `upstream_request_id` 仅接受 UUID，并私有保存为 `engine_request_id`；不得进入 Project 诊断、公开 Session/Turn 响应或 SSE。分类从属于终结状态和 Core 的 `error_code`：不能将已完成或已取消 Turn 变成失败、隐藏不完整事件流，或覆盖持久化或取消回执失败。正常 delivery 和 terminal journal draining 使用同一提取逻辑。[Session 诊断](../../contracts/agents-api/zh/session-diagnostics.md)仅为 Core error 为 `engine_failed` 的失败 Turn 暴露类别。[Codex](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/codex/README.md) 和 [Claude Code](https://github.com/MiniMax-AI/OpenAgentCore/blob/main/services/core/deploy/claude/README.md) adapter 指南给出各 Harness 的映射；adapter 根据结构化 Harness 错误及模型提供商 JSON 错误体中受支持的 `error.code` 或 `error.type` 分类，不依据任意错误文字。仅 Codex 在结构化信息缺失或为 `other` 时识别准确的终态 HTTP 402 封装；严格边界见该适配器指南。
+
+`incomplete_response` 表示适配器观察到原生终止序列缺少预期响应或后续动作，不代表业务交付验收。Core 保留此分类，并在配置的 Turn 重试预算内最多自动续跑一次；取消与最新 Turn 检查仍然生效。续跑要求 Harness 先检查已有结果，避免重复已完成的副作用；外部操作仍需应用自行实现幂等。Codex 检测状态为 completed、最后一个去重后的已完成根条目为 reasoning、且没有非空 `final_answer` 或未标注 phase 的助手消息 的 Turn；早期 commentary 不能满足该检查。隐藏的 reasoning 仍被观察。未知末尾类型、仅工具完成和普通空完成不会触发此规则。
 
 ## 工作区操作 {#workspace-operations}
 

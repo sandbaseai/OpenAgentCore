@@ -77,3 +77,7 @@ Codex `0.153.4` reports a provider HTTP 400 as `other` and puts the provider's e
 The build fails unless `codex --version` reports the pinned version. The image holds no credentials, workspace data or product software. The distribution copies the Codex executable and resources into the combined Runtime image; see the [maintainer guide](../../../../docs/maintainers.md#runtime-images-and-helpers).
 
 The [Docker adapter](../../../../docs/sandbox-provider.md#docker-adapter) owns the shared container lifecycle and isolation settings.
+
+### Completion evidence
+
+The adapter observes root completed item types independently of reasoning visibility. A native `completed` Turn ending with a unique reasoning item and no nonempty `final_answer` or unphased assistant message emits `incomplete_response` before `done`, rather than accepting earlier commentary as completion. This is a bounded-failure override for unattended execution; it does not validate business deliverables. Duplicate item completions do not change the tail, and child or stale Turn items do not contribute. Tool-only and empty completions retain native semantics. The turn/completed log records `decision_source`, `decision_reason`, `last_completed_item_type` and `has_final_answer` without item bodies. Core logs the received Runtime terminal source and any preceding failure, then separately logs the confirmed persisted status. See [the Runtime protocol](../../../../docs/runtime-protocol.md#native-failure-classification) for classification and bounded continuation.

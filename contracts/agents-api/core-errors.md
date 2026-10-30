@@ -122,6 +122,7 @@ The [Session diagnostics](./session-diagnostics.md) routes return these categori
 | `request_timeout` | Native provider timeout classification |
 | `context_length_exceeded` | Native context limit classification |
 | `cyber_policy` | Native cyber policy rejection |
+| `incomplete_response` | The executor terminated without the expected response; params are empty and the public Turn error maps to `internal_error` |
 | `connection_failed` | Native connection failure; params contain `http_status`, an integer in 100–599 or null |
 | `model_provider_required` | Missing frozen model provider |
 | `runtime_unavailable` | `execution_device_unavailable`, `execution_unavailable` |

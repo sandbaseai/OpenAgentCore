@@ -207,3 +207,23 @@ func TestAutoRetrySkips(t *testing.T) {
 		t.Fatal("disabled switch still retried")
 	}
 }
+
+func TestIncompleteResponseRetryBound(t *testing.T) {
+	turn := failedTurn(t, engineFailure("incomplete_response", "private native text"))
+	for _, tc := range []struct {
+		attempt, limit int
+		retry          bool
+	}{{0, 0, false}, {0, 3, true}, {1, 3, false}, {2, 5, false}} {
+		d := decideRetry(turn, tc.attempt, tc.limit)
+		if d.Retry != tc.retry {
+			t.Fatalf("%+v: %+v", tc, d)
+		}
+		if d.Retry && (!strings.Contains(d.Hint, "Do not repeat completed side effects") || strings.Contains(retryMessage(1, 3, d), "private native text")) {
+			t.Fatal("unsafe recovery hint")
+		}
+	}
+	turn.CancelRequestedAt = time.Now()
+	if decideRetry(turn, 0, 3).Retry {
+		t.Fatal("cancelled turn retried")
+	}
+}

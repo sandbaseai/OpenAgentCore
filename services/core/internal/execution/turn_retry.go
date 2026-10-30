@@ -80,6 +80,11 @@ func decideRetry(turn sessions.Turn, attempt, limit int) retryDecision {
 		return retryDecision{Retry: true, Fingerprint: "runtime_disconnected"}
 	case result.ErrorCode != "engine_failed":
 		return skip("error_code_not_retryable")
+	case result.EngineErrorCode == "incomplete_response":
+		if attempt >= 1 {
+			return skip("incomplete_response_attempts_exhausted")
+		}
+		return retryDecision{Retry: true, Fingerprint: "incomplete_response", Hint: "Inspect the existing results first. Continue only missing work and provide a final response. Do not repeat completed side effects; verify uncertain submissions before retrying them."}
 	case !retryableEngineCodes[result.EngineErrorCode]:
 		return skip("engine_code_not_retryable")
 	case permanentHTTPStatus(result.EngineHTTPStatus):

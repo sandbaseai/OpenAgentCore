@@ -19,7 +19,7 @@ func NormalizeProviderRequestID(id string) string {
 // metadata from newer or malformed peers never changes terminal/usage decoding.
 func NormalizeEngineFailure(code string, status *int) (string, *int) {
 	switch code {
-	case "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy":
+	case "incomplete_response", "authentication_error", "rate_limit_exceeded", "usage_limit_exceeded", "server_overloaded", "server_error", "invalid_request", "resource_not_found", "request_timeout", "context_length_exceeded", "cyber_policy":
 		return code, nil
 	case "connection_failed":
 		if status != nil && *status >= 100 && *status <= 599 {
