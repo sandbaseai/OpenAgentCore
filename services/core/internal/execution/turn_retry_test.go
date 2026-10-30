@@ -43,6 +43,9 @@ func TestDecideRetryClasses(t *testing.T) {
 		{"context length", engineFailure("context_length_exceeded", ""), false, ""},
 		{"cancelled", Result{ErrorCode: "cancelled"}, false, ""},
 		{"disconnected", Result{ErrorCode: "device_disconnected"}, false, ""},
+		{"runtime connection closed", Result{ErrorCode: "event_stream_incomplete", EventStreamError: "connection_closed"}, true, "runtime_disconnected"},
+		{"event window exceeded", Result{ErrorCode: "event_stream_incomplete", EventStreamError: "event_window_exceeded"}, false, ""},
+		{"subscription failed", Result{ErrorCode: "event_stream_incomplete", EventStreamError: "subscription_failed"}, false, ""},
 		{"A", engineFailure("invalid_request", "400: Field messages is required"), true, "missing_messages"},
 		{"E", engineFailure("invalid_request", "Requests ending with a model turn are not supported"), true, "ends_with_model_turn"},
 		{"tool args", engineFailure("invalid_request", "tool_use ids were found without tool_result"), true, "tool_args"},
@@ -202,5 +205,25 @@ func TestAutoRetrySkips(t *testing.T) {
 	autoRetry(t.Context(), host, "t", turn, 0, noWait)
 	if len(host.keys) != 0 {
 		t.Fatal("disabled switch still retried")
+	}
+}
+
+func TestIncompleteResponseRetryBound(t *testing.T) {
+	turn := failedTurn(t, engineFailure("incomplete_response", "private native text"))
+	for _, tc := range []struct {
+		attempt, limit int
+		retry          bool
+	}{{0, 0, false}, {0, 3, true}, {1, 3, false}, {2, 5, false}} {
+		d := decideRetry(turn, tc.attempt, tc.limit)
+		if d.Retry != tc.retry {
+			t.Fatalf("%+v: %+v", tc, d)
+		}
+		if d.Retry && (!strings.Contains(d.Hint, "Do not repeat completed side effects") || strings.Contains(retryMessage(1, 3, d), "private native text")) {
+			t.Fatal("unsafe recovery hint")
+		}
+	}
+	turn.CancelRequestedAt = time.Now()
+	if decideRetry(turn, 0, 3).Retry {
+		t.Fatal("cancelled turn retried")
 	}
 }

@@ -1,7 +1,7 @@
 ---
 title: "配置参考"
 source: docs/configuration.md
-source_hash: 7e6594fcab4b4fbf7d44d99e21745d106f200af902e2e7efacad5a7c19eea439
+source_hash: 900d0f3b1586911057c69291c8f17c951712297db26182a38d1b96a5563b5e12
 ---
 
 Core 安装的每项设置、其归属位置以及修改方式。安装程序写入初始值；之后请使用本参考。每项设置都恰好只有一个归属位置，分属以下三类：
@@ -39,7 +39,7 @@ Core 安装的每项设置、其归属位置以及修改方式。安装程序写
 | `OAC_EXECUTION_CONCURRENCY` | `4` | Concurrent execution work, from 1 to 1024 |
 | `OAC_SANDBOX_MAX_ACTIVE` | `100` | 启用暂停能力的直接 Provider 的活跃沙箱上限，范围 1–100000；独立于执行并发度和节点容量 |
 | `OAC_SANDBOX_MAX_RETAINED` | `400` | 直接 Provider 的保留沙箱上限，范围 1–100000，包括活跃、已暂停以及尚未确认清理完成的分配；必须不小于活跃上限 |
-| `OAC_TURN_AUTO_RETRIES` | `3` | Turn 因可恢复的模型或工具错误失败后的自动重试次数，0 到 5。设为 `0` 关闭 |
+| `OAC_TURN_AUTO_RETRIES` | `3` | Turn 因可恢复的模型或工具错误、或因 Runtime 连接关闭而失败后的自动重试次数，0 到 5。设为 `0` 关闭 |
 | `OAC_DEFAULT_HARNESS` | `codex` | Harness used when a request does not name one |
 | `OAC_HARNESSES` | Every registered Harness | Comma-separated Harnesses to enable besides the default one. Unknown names stop startup |
 | `OAC_WRITE_AUDIT_RETENTION` | `2160h` | Minimum `1h` |

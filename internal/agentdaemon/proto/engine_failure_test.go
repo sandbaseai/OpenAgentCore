@@ -12,6 +12,7 @@ func TestErrorClassificationCompatibility(t *testing.T) {
 	}{
 		{`{"error":"old"}`, "", 0},
 		{`{"error":"old","code":"authentication_error","http_status":401}`, "authentication_error", 0},
+		{`{"error":"old","code":"incomplete_response","http_status":503}`, "incomplete_response", 0},
 		{`{"error":"old","code":"connection_failed","http_status":503}`, "connection_failed", 503},
 		{`{"error":"old","code":"connection_failed","http_status":"secret"}`, "connection_failed", 0},
 		{`{"error":"old","code":"connection_failed","http_status":99}`, "connection_failed", 0},

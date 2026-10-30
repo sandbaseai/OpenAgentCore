@@ -102,6 +102,7 @@ type Session struct {
 	// reasoningSummary reports that the Agent requested reasoning summaries.
 	reasoningSummary bool
 
+	completion  completionEvidence
 	finalTextMu sync.Mutex
 	finalText   string
 	lastErrText string
@@ -226,6 +227,14 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 	}
 
 	status := strings.ToLower(p.Turn.Status)
+	lastItem, hasFinal := s.completion.snapshot()
+	reason := "native_terminal"
+	incomplete := status == "completed" && lastItem == "reasoning" && !hasFinal
+	if incomplete {
+		reason = "reasoning_only_tail"
+	} else if status == "failed" {
+		reason = "native_failed"
+	}
 	finalText := s.takeFinalText()
 	errText := s.takeLastErrText()
 	// Always log the turn outcome — operators need this when a prompt
@@ -237,9 +246,18 @@ func (s *Session) onTurnCompleted(raw json.RawMessage) {
 		"run_id", s.runID,
 		"turn_id", p.Turn.ID,
 		"status", p.Turn.Status,
+		"decision_source", "codex_adapter",
+		"decision_reason", reason,
+		"last_completed_item_type", lastItem,
+		"has_final_answer", hasFinal,
 		"final_text_len", len(finalText),
 		"buffered_err_text_len", len(errText),
 		"has_error", p.Turn.Error != nil)
+	if incomplete {
+		s.emitTerminalFailure("Native execution ended with reasoning but no final response or subsequent action.", true, proto.ErrorPayload{Code: "incomplete_response"})
+		s.finishAfterTerminal()
+		return
+	}
 	if status == "failed" {
 		// Body precedence on failure:
 		//   1. agent's final text (rare on hard failures but exists for

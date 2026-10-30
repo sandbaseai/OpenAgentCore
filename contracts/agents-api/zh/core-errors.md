@@ -1,7 +1,7 @@
 ---
 title: "Core 管理错误"
 source: contracts/agents-api/core-errors.md
-source_hash: eeaba03a33dd1f82943139292035873d8139a5dd862d82e1f9cf1267f1ad10c6
+source_hash: 320fe54d2db2fb022f2d6069daf74c5b189c87db3575a36c58242bf98d7fea61
 ---
 
 `/core/v1` 上的错误使用此封装结构。`message` 是安全的英文文本；`code` 和 `param` 可以为 null。客户端依据稳定的 `code` 和可选的 `param` 进行处理，对未知代码显示 `message`，绝不解析消息，也绝不自动重试被拒绝的写操作。
@@ -124,6 +124,7 @@ Web 的控制台服务器在 `/core` 路径上发生自身故障时使用此封�
 | `request_timeout` | 原生提供商超时分类 |
 | `context_length_exceeded` | 原生上下文限制分类 |
 | `cyber_policy` | 原生网络安全策略拒绝 |
+| `incomplete_response` | 执行器已终止但缺少预期响应；params 为空，公共 Turn 错误映射为 `internal_error` |
 | `connection_failed` | 原生连接故障；params 包含 `http_status`，其值为 100–599 范围内的整数或 null |
 | `model_provider_required` | 缺少已冻结的模型提供商 |
 | `runtime_unavailable` | `execution_device_unavailable`、`execution_unavailable` |

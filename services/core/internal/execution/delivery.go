@@ -222,7 +222,7 @@ func (d *Dispatcher) deliver(ctx context.Context, tenantID, sessionID string, pe
 			nativeObserved = true
 			if env.Type == proto.TypeDone && doneReceived.IsZero() {
 				doneReceived = time.Now()
-				obslog.Ctx(ctx).Info("executor done received", "session_id", sessionID, "turn_id", runID)
+				obslog.Ctx(ctx).Info("executor done received", "session_id", sessionID, "turn_id", runID, "decision_source", "runtime_done", "prior_error_code", result.ErrorCode, "engine_error_code", result.EngineErrorCode, "business_delivery_verified", false)
 			}
 			if !firstTextObserved && hasText(env) {
 				firstTextObserved = true

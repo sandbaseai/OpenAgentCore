@@ -59,6 +59,7 @@ func (s *Session) onItemCompleted(raw json.RawMessage) {
 		return
 	}
 	if p.Item.Type == "reasoning" {
+		s.completion.observe(p.Item)
 		s.completeReasoning(p.Item)
 		return
 	}
@@ -72,6 +73,9 @@ func (s *Session) onItemCompleted(raw json.RawMessage) {
 	if messageText == "" {
 		messageText = text
 	}
+	completedItem := p.Item
+	completedItem.Text = messageText
+	s.completion.observe(completedItem)
 	first := false
 	if p.Item.Type == "agentMessage" && messageText != "" {
 		first = s.boundary.text(received, p.TurnID)

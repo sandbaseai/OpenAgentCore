@@ -73,8 +73,18 @@ func decideRetry(turn sessions.Turn, attempt, limit int) retryDecision {
 		return skip("cancel_requested")
 	case json.Unmarshal(turn.Outcome, &result) != nil:
 		return skip("outcome_unreadable")
+	case runtimeDisconnected(result):
+		// The Runtime connection closed mid-Turn. The daemon stops the orphaned
+		// Turn before it reconnects, and the native history stays in the
+		// Environment, so a new Turn can continue from the last persisted step.
+		return retryDecision{Retry: true, Fingerprint: "runtime_disconnected"}
 	case result.ErrorCode != "engine_failed":
 		return skip("error_code_not_retryable")
+	case result.EngineErrorCode == "incomplete_response":
+		if attempt >= 1 {
+			return skip("incomplete_response_attempts_exhausted")
+		}
+		return retryDecision{Retry: true, Fingerprint: "incomplete_response", Hint: "Inspect the existing results first. Continue only missing work and provide a final response. Do not repeat completed side effects; verify uncertain submissions before retrying them."}
 	case !retryableEngineCodes[result.EngineErrorCode]:
 		return skip("engine_code_not_retryable")
 	case permanentHTTPStatus(result.EngineHTTPStatus):
@@ -98,6 +108,12 @@ func decideRetry(turn sessions.Turn, attempt, limit int) retryDecision {
 		break
 	}
 	return retryDecision{Retry: true, Fingerprint: name, Hint: retryHint(attempt+1, adjust)}
+}
+
+// runtimeDisconnected reports a Turn lost only because its Runtime connection
+// closed. Event window overflow and other stream failures are not retried.
+func runtimeDisconnected(result Result) bool {
+	return result.ErrorCode == "event_stream_incomplete" && result.EventStreamError == "connection_closed"
 }
 
 // permanentHTTPStatus reports upstream statuses a new attempt cannot fix, which beta
